@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "gost-manager",
+  "outputfilename": "gost-manager",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "GostManager",
+    "email": "gost@example.com"
+  },
+  "info": {
+    "companyName": "GostManager",
+    "productName": "Gost管理器",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright.........",
+    "comments": "Gost转发规则管理工具"
+  }
+}
