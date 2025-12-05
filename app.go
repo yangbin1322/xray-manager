@@ -286,6 +286,96 @@ func (a *App) log(message string) {
 	runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("[系统] %s", message))
 }
 
+// ExportConfig 导出配置
+func (a *App) ExportConfig() (string, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// 选择保存路径
+	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "导出配置",
+		DefaultFilename: "xray-config-export.json",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
+			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
+		},
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("选择文件失败: %v", err)
+	}
+
+	if filePath == "" {
+		return "", fmt.Errorf("用户取消操作")
+	}
+
+	// 导出配置到文件
+	if err := a.configManager.SaveTo(a.config, filePath); err != nil {
+		return "", fmt.Errorf("导出配置失败: %v", err)
+	}
+
+	a.log(fmt.Sprintf("配置已导出到: %s", filePath))
+	return filePath, nil
+}
+
+// ImportConfig 导入配置
+func (a *App) ImportConfig() error {
+	// 选择导入文件
+	filePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "导入配置",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
+			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("选择文件失败: %v", err)
+	}
+
+	if filePath == "" {
+		return fmt.Errorf("用户取消操作")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 加载配置文件
+	importedConfig, err := a.configManager.LoadFrom(filePath)
+	if err != nil {
+		return fmt.Errorf("导入配置失败: %v", err)
+	}
+
+	// 合并规则（追加到现有规则）
+	existingPortMap := make(map[int]bool)
+	for _, rule := range a.config.Rules {
+		existingPortMap[rule.LocalPort] = true
+	}
+
+	importedCount := 0
+	skippedCount := 0
+
+	for _, rule := range importedConfig.Rules {
+		// 生成新的 ID
+		rule.ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+		rule.Enabled = false
+		rule.ProcessID = 0
+		rule.RealIP = ""
+
+		a.config.Rules = append(a.config.Rules, rule)
+		existingPortMap[rule.LocalPort] = true
+		importedCount++
+	}
+
+	// 保存合并后的配置
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log(fmt.Sprintf("导入完成: 成功 %d 条，跳过 %d 条", importedCount, skippedCount))
+	return nil
+}
+
 // logError 输出错误日志
 func (a *App) logError(message string, err error) {
 	runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("[错误] %s: %v", message, err))

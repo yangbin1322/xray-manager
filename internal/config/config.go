@@ -66,6 +66,35 @@ func (m *Manager) Save(config *models.Config) error {
 	return os.WriteFile(m.configPath, data, 0644)
 }
 
+// SaveTo 保存配置到指定文件
+func (m *Manager) SaveTo(config *models.Config, filePath string) error {
+	// 序列化配置
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// 写入配置文件
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// LoadFrom 从指定文件加载配置
+func (m *Manager) LoadFrom(filePath string) (*models.Config, error) {
+	// 读取配置文件
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// 解析配置
+	var config models.Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
 // GetConfigPath 获取配置文件路径
 func (m *Manager) GetConfigPath() string {
 	return m.configPath

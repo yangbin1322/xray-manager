@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xray-manager/internal/assets"
 	"xray-manager/internal/models"
 	"xray-manager/internal/xray"
 )
@@ -87,8 +88,14 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	m.log(fmt.Sprintf("[启动] %s - 端口:%d - 协议:%s", rule.Alias, rule.LocalPort, rule.Protocol))
 	m.log(fmt.Sprintf("[配置] 配置文件: %s", configPath))
 
-	// 创建命令 - 使用 xray 命令和配置文件
-	cmd := exec.Command("./xray.exe", "run", "-c", configPath)
+	// 提取 xray 二进制文件
+	xrayBinary, err := assets.ExtractXrayBinary()
+	if err != nil {
+		return fmt.Errorf("提取 xray 二进制文件失败: %v", err)
+	}
+
+	// 创建命令 - 使用提取的 xray 二进制文件
+	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
 
 	// 获取标准输出和标准错误
 	stdout, err := cmd.StdoutPipe()

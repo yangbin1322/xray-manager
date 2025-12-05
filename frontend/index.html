@@ -54,6 +54,8 @@
                 <button id="deleteSelectedBtn" class="btn-action btn-danger">删除选中</button>
             </div>
             <div class="control-right">
+                <button id="importConfigBtn" class="btn-action">导入规则</button>
+                <button id="exportConfigBtn" class="btn-action">导出规则</button>
                 <button id="addRuleBtn" class="btn-primary">添加规则</button>
             </div>
         </div>
@@ -100,6 +102,8 @@
                                 <option value="vmess">VMess</option>
                                 <option value="vless">VLESS</option>
                                 <option value="trojan">Trojan</option>
+                                <option value="http">HTTP</option>
+                                <option value="socks">SOCKS</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -185,6 +189,43 @@
                         <div class="form-group">
                             <label>密码：</label>
                             <input type="text" id="trojanPassword" placeholder="Trojan 密码">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HTTP 配置 -->
+                <div id="httpSettings" class="form-section protocol-settings" style="display:none;">
+                    <h4>HTTP 代理配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>用户名（可选）：</label>
+                            <input type="text" id="httpUsername" placeholder="如果需要认证请填写">
+                        </div>
+                        <div class="form-group">
+                            <label>密码（可选）：</label>
+                            <input type="text" id="httpPassword" placeholder="如果需要认证请填写">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SOCKS 配置 -->
+                <div id="socksSettings" class="form-section protocol-settings" style="display:none;">
+                    <h4>SOCKS 代理配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>SOCKS 版本：</label>
+                            <select id="socksVersion">
+                                <option value="socks5">SOCKS5</option>
+                                <option value="socks4">SOCKS4</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>用户名（可选）：</label>
+                            <input type="text" id="socksUsername" placeholder="如果需要认证请填写">
+                        </div>
+                        <div class="form-group">
+                            <label>密码（可选）：</label>
+                            <input type="text" id="socksPassword" placeholder="如果需要认证请填写">
                         </div>
                     </div>
                 </div>

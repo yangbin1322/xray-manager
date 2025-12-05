@@ -29,29 +29,29 @@ type InboundConfig struct {
 
 // OutboundConfig 出站配置
 type OutboundConfig struct {
-	Protocol      string                 `json:"protocol"`
-	Settings      map[string]interface{} `json:"settings,omitempty"`
+	Protocol       string                 `json:"protocol"`
+	Settings       map[string]interface{} `json:"settings,omitempty"`
 	StreamSettings *StreamSettings        `json:"streamSettings,omitempty"`
-	Tag           string                 `json:"tag"`
+	Tag            string                 `json:"tag"`
 }
 
 // StreamSettings 传输层配置
 type StreamSettings struct {
-	Network     string                 `json:"network,omitempty"`
-	Security    string                 `json:"security,omitempty"`
-	TLSSettings *TLSConfig             `json:"tlsSettings,omitempty"`
-	WSSettings  *WebSocketConfig       `json:"wsSettings,omitempty"`
-	GRPCSettings *GRPCConfig           `json:"grpcSettings,omitempty"`
-	HTTPSettings *HTTPConfig           `json:"httpSettings,omitempty"`
+	Network      string                 `json:"network,omitempty"`
+	Security     string                 `json:"security,omitempty"`
+	TLSSettings  *TLSConfig             `json:"tlsSettings,omitempty"`
+	WSSettings   *WebSocketConfig       `json:"wsSettings,omitempty"`
+	GRPCSettings *GRPCConfig            `json:"grpcSettings,omitempty"`
+	HTTPSettings *HTTPConfig            `json:"httpSettings,omitempty"`
 	TCPSettings  map[string]interface{} `json:"tcpSettings,omitempty"`
 }
 
 // TLSConfig TLS配置
 type TLSConfig struct {
-	ServerName         string   `json:"serverName,omitempty"`
-	AllowInsecure      bool     `json:"allowInsecure,omitempty"`
-	ALPN               []string `json:"alpn,omitempty"`
-	DisableSystemRoot  bool     `json:"disableSystemRoot,omitempty"`
+	ServerName        string   `json:"serverName,omitempty"`
+	AllowInsecure     bool     `json:"allowInsecure,omitempty"`
+	ALPN              []string `json:"alpn,omitempty"`
+	DisableSystemRoot bool     `json:"disableSystemRoot,omitempty"`
 }
 
 // WebSocketConfig WebSocket配置
@@ -129,6 +129,10 @@ func buildOutbounds(rule *models.ProxyRule) []OutboundConfig {
 		mainOutbound.Settings = buildVLessSettings(rule)
 	case "trojan":
 		mainOutbound.Settings = buildTrojanSettings(rule)
+	case "http":
+		mainOutbound.Settings = buildHTTPSettings(rule)
+	case "socks":
+		mainOutbound.Settings = buildSOCKSSettings(rule)
 	default:
 		mainOutbound.Settings = map[string]interface{}{}
 	}
@@ -292,6 +296,62 @@ func buildStreamSettings(rule *models.ProxyRule) *StreamSettings {
 	}
 
 	return stream
+}
+
+// buildHTTPSettings 构建 HTTP 代理设置
+func buildHTTPSettings(rule *models.ProxyRule) map[string]interface{} {
+	server := map[string]interface{}{
+		"address": rule.ServerAddr,
+		"port":    rule.ServerPort,
+	}
+
+	// 如果提供了用户名和密码，添加认证
+	if rule.Settings.HTTPUsername != "" && rule.Settings.HTTPPassword != "" {
+		users := []map[string]interface{}{
+			{
+				"user": rule.Settings.HTTPUsername,
+				"pass": rule.Settings.HTTPPassword,
+			},
+		}
+		server["users"] = users
+	}
+
+	return map[string]interface{}{
+		"servers": []map[string]interface{}{server},
+	}
+}
+
+// buildSOCKSSettings 构建 SOCKS 代理设置
+func buildSOCKSSettings(rule *models.ProxyRule) map[string]interface{} {
+	// 确定 SOCKS 版本，默认为 socks5
+	version := rule.Settings.SOCKSVersion
+	if version == "" {
+		version = "5"
+	} else if version == "socks5" {
+		version = "5"
+	} else if version == "socks4" {
+		version = "4"
+	}
+
+	server := map[string]interface{}{
+		"address": rule.ServerAddr,
+		"port":    rule.ServerPort,
+	}
+
+	// 如果提供了用户名和密码，添加认证（仅 SOCKS5 支持）
+	if version == "5" && rule.Settings.SOCKSUsername != "" && rule.Settings.SOCKSPassword != "" {
+		users := []map[string]interface{}{
+			{
+				"user": rule.Settings.SOCKSUsername,
+				"pass": rule.Settings.SOCKSPassword,
+			},
+		}
+		server["users"] = users
+	}
+
+	return map[string]interface{}{
+		"servers": []map[string]interface{}{server},
+	}
 }
 
 // ToJSON 将配置转换为 JSON 字符串

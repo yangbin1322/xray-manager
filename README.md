@@ -4,16 +4,18 @@
 
 ## 功能特性
 
-- ✅ **多协议支持**：支持 Shadowsocks、VMess、VLESS、Trojan 协议
+- ✅ **多协议支持**：支持 Shadowsocks、VMess、VLESS、Trojan、HTTP、SOCKS 协议
 - ✅ **传输层配置**：支持 TCP、WebSocket、gRPC、HTTP/2 传输协议
 - ✅ **TLS 加密**：支持 TLS 传输层安全配置
 - ✅ **规则管理**：添加、编辑、删除代理规则
+- ✅ **规则导入/导出**：支持导出规则为 JSON 文件，以及从 JSON 文件导入规则
 - ✅ **一键启停**：快速启动/停止代理规则
 - ✅ **批量操作**：支持多选规则进行批量启动/停止/删除
 - ✅ **实时日志**：查看 Xray 进程的实时运行日志
 - ✅ **IP 显示**：自动获取并显示代理的真实 IP
 - ✅ **配置持久化**：自动保存规则配置到本地文件
 - ✅ **开机自启**：支持设置程序开机自动启动
+- ✅ **嵌入式二进制**：使用 go:embed 打包 Xray 核心，无需额外安装
 - ✅ **多平台支持**：支持 Windows、Linux、macOS
 
 ## 界面预览
@@ -39,7 +41,18 @@
    go install github.com/wailsapp/wails/v2/cmd/wails@latest
    ```
 
-3. **Xray-core 程序**
+3. **Xray-core 程序**（可选 - 推荐使用嵌入式）
+
+   **方式一：使用嵌入式 Xray 核心（推荐）**
+
+   从 [Xray-core Releases](https://github.com/XTLS/Xray-core/releases) 下载对应平台的二进制文件，并放置到：
+   - Windows: `internal/assets/xray/windows/xray.exe`
+   - Linux: `internal/assets/xray/linux/xray`
+   - macOS: `internal/assets/xray/darwin/xray`
+
+   编译时会自动将 Xray 核心嵌入到程序中。
+
+   **方式二：使用系统 Xray 命令**
    ```bash
    # 下载 Xray-core：https://github.com/XTLS/Xray-core/releases
    # 确保 xray 命令在系统 PATH 中可用
@@ -112,6 +125,8 @@ wails build
      - **VMess**：用户ID (UUID)、额外ID、加密方式
      - **VLESS**：用户ID (UUID)、Flow（流控）、加密方式
      - **Trojan**：密码
+     - **HTTP**：用户名（可选）、密码（可选）
+     - **SOCKS**：SOCKS 版本、用户名（可选）、密码（可选）
 
    - **传输层配置**：
      - **传输协议**：TCP、WebSocket、gRPC、HTTP/2
@@ -192,6 +207,18 @@ wails build
 1. 勾选要删除的规则
 2. 点击底部的 **"删除选中"** 按钮
 
+### 导入/导出规则
+
+**导出规则**：
+1. 点击 **"导出规则"** 按钮
+2. 选择保存位置和文件名
+3. 规则将以 JSON 格式导出
+
+**导入规则**：
+1. 点击 **"导入规则"** 按钮
+2. 选择之前导出的 JSON 配置文件
+3. 规则将自动追加到现有规则列表（跳过端口冲突的规则）
+
 ### 查看日志
 
 - 日志区域实时显示所有操作信息和 Xray 进程输出
@@ -246,8 +273,14 @@ gost-Forward/
 │   │   └── autostart.go         # 开机自启管理
 │   ├── process/                  # 进程管理
 │   │   └── manager.go           # Xray 进程管理
-│   └── xray/                     # Xray 配置
-│       └── config_builder.go    # Xray 配置生成器
+│   ├── xray/                     # Xray 配置
+│   │   └── config_builder.go    # Xray 配置生成器
+│   └── assets/                   # 嵌入式资源
+│       ├── binary.go            # 二进制文件提取逻辑
+│       └── xray/                # Xray 核心文件（需手动放置）
+│           ├── windows/         # Windows 平台
+│           ├── linux/           # Linux 平台
+│           └── darwin/          # macOS 平台
 └── README.md                      # 项目说明
 ```
 
