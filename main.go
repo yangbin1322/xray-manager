@@ -19,9 +19,9 @@ func main() {
 
 	// 配置应用选项
 	err := wails.Run(&options.App{
-		Title:  "Gost 管理器",
-		Width:  867,
-		Height: 642,
+		Title:  "Xray 管理器",
+		Width:  1100,
+		Height: 700,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

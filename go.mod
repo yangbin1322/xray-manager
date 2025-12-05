@@ -1,4 +1,4 @@
-module gost-manager
+module xray-manager
 
 go 1.22.0
 
