@@ -1,0 +1,68 @@
+{
+  "autoStart": false,
+  "rules": [
+    {
+      "id": "rule_1",
+      "alias": "1",
+      "localType": "socks",
+      "localPort": 35512,
+      "protocol": "shadowsocks",
+      "serverAddr": "47.112.11.103",
+      "serverPort": 11241,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "",
+      "enabled": false,
+      "processId": 0
+    },
+    {
+      "id": "rule_2",
+      "alias": "vmess",
+      "localType": "http",
+      "localPort": 35669,
+      "protocol": "vmess",
+      "serverAddr": "38.207.132.183",
+      "serverPort": 55989,
+      "settings": {
+        "vmessUserId": "de4aa9e4-476e-4c13-ef92-71a7e6e7d028",
+        "vmessSecurity": "auto",
+        "network": "tcp",
+        "security": "none"
+      },
+      "realIp": "",
+      "enabled": false,
+      "processId": 0
+    },
+    {
+      "id": "rule_3",
+      "alias": "trojan测试",
+      "localType": "http",
+      "localPort": 35669,
+      "protocol": "trojan",
+      "serverAddr": "38.207.132.183",
+      "serverPort": 17957,
+      "settings": {
+        "trojanPassword": "RfGOkCtQ0B",
+        "network": "tcp",
+        "security": "tls",
+        "tls": {
+          "serverName": "/",
+          "allowInsecure": true
+        }
+      },
+      "realIp": "",
+      "enabled": false,
+      "processId": 0
+    }
+  ]
+}
