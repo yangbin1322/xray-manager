@@ -34,6 +34,15 @@ type ProxySettings struct {
 	// Trojan 配置
 	TrojanPassword string `json:"trojanPassword,omitempty"` // Trojan密码
 
+	// HTTP 代理配置
+	HTTPUsername string `json:"httpUsername,omitempty"` // HTTP 代理用户名（可选）
+	HTTPPassword string `json:"httpPassword,omitempty"` // HTTP 代理密码（可选）
+
+	// SOCKS 代理配置
+	SOCKSUsername string `json:"socksUsername,omitempty"` // SOCKS 代理用户名（可选）
+	SOCKSPassword string `json:"socksPassword,omitempty"` // SOCKS 代理密码（可选）
+	SOCKSVersion  string `json:"socksVersion,omitempty"`  // SOCKS 版本 (socks4, socks5, 默认 socks5)
+
 	// 通用传输层配置
 	Network  string        `json:"network,omitempty"`  // 传输协议: tcp, ws, grpc, h2
 	Security string        `json:"security,omitempty"` // 传输层安全: none, tls

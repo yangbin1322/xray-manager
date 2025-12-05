@@ -30,8 +30,15 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Config files (optional, comment out if you want to track config)
+# Config files
 gost-manager-config.json
+xray-manager-config.json
+xray-configs/
+xray-bin/
+
+# Xray binaries (keep only placeholders)
+# The actual xray binaries should not be committed
+# Users should download and place them manually
 
 # Wails generated files
 wailsjs/

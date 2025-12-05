@@ -38,6 +38,8 @@ function bindEventListeners() {
     document.getElementById('stopSelectedBtn').addEventListener('click', stopSelectedRules);
     document.getElementById('deleteSelectedBtn').addEventListener('click', deleteSelectedRules);
     document.getElementById('clearLogBtn').addEventListener('click', clearLog);
+    document.getElementById('importConfigBtn').addEventListener('click', importConfig);
+    document.getElementById('exportConfigBtn').addEventListener('click', exportConfig);
 }
 
 // 监听后端事件
@@ -194,6 +196,10 @@ function onProtocolChange() {
         document.getElementById('vlessSettings').style.display = 'block';
     } else if (protocol === 'trojan') {
         document.getElementById('trojanSettings').style.display = 'block';
+    } else if (protocol === 'http') {
+        document.getElementById('httpSettings').style.display = 'block';
+    } else if (protocol === 'socks') {
+        document.getElementById('socksSettings').style.display = 'block';
     }
 }
 
@@ -245,6 +251,11 @@ function openAddRuleDialog() {
     document.getElementById('vlessFlow').value = '';
     document.getElementById('vlessEncryption').value = 'none';
     document.getElementById('trojanPassword').value = '';
+    document.getElementById('httpUsername').value = '';
+    document.getElementById('httpPassword').value = '';
+    document.getElementById('socksVersion').value = 'socks5';
+    document.getElementById('socksUsername').value = '';
+    document.getElementById('socksPassword').value = '';
 
     // 清空传输层配置
     document.getElementById('network').value = 'tcp';
@@ -303,6 +314,15 @@ function editRule(ruleId) {
 
     // Trojan
     document.getElementById('trojanPassword').value = settings.trojanPassword || '';
+
+    // HTTP
+    document.getElementById('httpUsername').value = settings.httpUsername || '';
+    document.getElementById('httpPassword').value = settings.httpPassword || '';
+
+    // SOCKS
+    document.getElementById('socksVersion').value = settings.socksVersion || 'socks5';
+    document.getElementById('socksUsername').value = settings.socksUsername || '';
+    document.getElementById('socksPassword').value = settings.socksPassword || '';
 
     // 填充传输层配置
     document.getElementById('network').value = settings.network || 'tcp';
@@ -411,6 +431,15 @@ async function saveRule() {
             alert('请输入Trojan密码');
             return;
         }
+    } else if (protocol === 'http') {
+        settings.httpUsername = document.getElementById('httpUsername').value.trim();
+        settings.httpPassword = document.getElementById('httpPassword').value.trim();
+        // HTTP 代理用户名和密码是可选的，不需要验证
+    } else if (protocol === 'socks') {
+        settings.socksVersion = document.getElementById('socksVersion').value;
+        settings.socksUsername = document.getElementById('socksUsername').value.trim();
+        settings.socksPassword = document.getElementById('socksPassword').value.trim();
+        // SOCKS 代理用户名和密码是可选的，不需要验证
     }
 
     // TLS配置
@@ -580,6 +609,37 @@ function addLog(message) {
 // 清空日志
 function clearLog() {
     document.getElementById('logTextarea').value = '';
+}
+
+// 导出配置
+async function exportConfig() {
+    try {
+        const filePath = await window.go.main.App.ExportConfig();
+        addLog(`[系统] 配置已导出到: ${filePath}`);
+    } catch (error) {
+        if (error && error.toString().includes('用户取消')) {
+            // 用户取消操作，不显示错误
+            return;
+        }
+        addLog(`[错误] 导出配置失败: ${error}`);
+        alert(`导出失败: ${error}`);
+    }
+}
+
+// 导入配置
+async function importConfig() {
+    try {
+        await window.go.main.App.ImportConfig();
+        await loadRules(); // 重新加载规则列表
+        addLog('[系统] 配置导入成功');
+    } catch (error) {
+        if (error && error.toString().includes('用户取消')) {
+            // 用户取消操作，不显示错误
+            return;
+        }
+        addLog(`[错误] 导入配置失败: ${error}`);
+        alert(`导入失败: ${error}`);
+    }
 }
 
 // HTML 转义
