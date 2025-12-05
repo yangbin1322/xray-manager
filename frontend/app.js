@@ -94,13 +94,12 @@ function createRuleRow(rule) {
             <input type="checkbox" class="row-checkbox">
         </td>
         <td>${escapeHtml(rule.alias)}</td>
-        <td style="text-align: left; font-size: 11px;">${escapeHtml(rule.proxyInfo)}</td>
+        <td>${escapeHtml(rule.protocol || '-')}</td>
+        <td style="text-align: left; font-size: 11px;">${escapeHtml(rule.serverAddr || '-')}</td>
+        <td>${rule.serverPort || '-'}</td>
         <td>${escapeHtml(rule.localType)}</td>
         <td>${rule.localPort}</td>
         <td style="text-align: right;">${escapeHtml(rule.realIp || '-')}</td>
-        <td>
-            <input type="checkbox" ${rule.useIpProxy ? 'checked' : ''} disabled>
-        </td>
         <td>
             <input type="checkbox" class="enable-checkbox" ${rule.enabled ? 'checked' : ''}>
         </td>
@@ -177,15 +176,92 @@ async function handleAutoStartChange(event) {
     }
 }
 
+// 协议变化时切换配置面板
+function onProtocolChange() {
+    const protocol = document.getElementById('ruleProtocol').value;
+
+    // 隐藏所有协议配置
+    document.querySelectorAll('.protocol-settings').forEach(el => {
+        el.style.display = 'none';
+    });
+
+    // 显示对应协议配置
+    if (protocol === 'shadowsocks') {
+        document.getElementById('shadowsocksSettings').style.display = 'block';
+    } else if (protocol === 'vmess') {
+        document.getElementById('vmessSettings').style.display = 'block';
+    } else if (protocol === 'vless') {
+        document.getElementById('vlessSettings').style.display = 'block';
+    } else if (protocol === 'trojan') {
+        document.getElementById('trojanSettings').style.display = 'block';
+    }
+}
+
+// 传输协议变化时切换配置面板
+function onNetworkChange() {
+    const network = document.getElementById('network').value;
+
+    // 隐藏所有传输层配置
+    document.getElementById('wsSettings').style.display = 'none';
+    document.getElementById('grpcSettings').style.display = 'none';
+    document.getElementById('h2Settings').style.display = 'none';
+
+    // 显示对应传输层配置
+    if (network === 'ws') {
+        document.getElementById('wsSettings').style.display = 'block';
+    } else if (network === 'grpc') {
+        document.getElementById('grpcSettings').style.display = 'block';
+    } else if (network === 'h2') {
+        document.getElementById('h2Settings').style.display = 'block';
+    }
+}
+
+// 安全类型变化时切换TLS配置
+function onSecurityChange() {
+    const security = document.getElementById('security').value;
+    document.getElementById('tlsSettings').style.display = security === 'tls' ? 'block' : 'none';
+}
+
 // 打开添加规则对话框
 function openAddRuleDialog() {
     editingRuleId = null;
     document.getElementById('dialogTitle').textContent = '添加规则';
+
+    // 清空表单
     document.getElementById('ruleAlias').value = '';
-    document.getElementById('ruleProxyInfo').value = '';
-    document.getElementById('ruleLocalType').value = 'auto';
+    document.getElementById('ruleLocalType').value = 'socks5';
     document.getElementById('ruleLocalPort').value = '';
-    document.getElementById('ruleUseIpProxy').checked = false;
+    document.getElementById('ruleProtocol').value = 'shadowsocks';
+    document.getElementById('ruleServerAddr').value = '';
+    document.getElementById('ruleServerPort').value = '';
+
+    // 清空协议配置
+    document.getElementById('ssMethod').value = 'aes-256-gcm';
+    document.getElementById('ssPassword').value = '';
+    document.getElementById('vmessUserId').value = '';
+    document.getElementById('vmessAlterId').value = '0';
+    document.getElementById('vmessSecurity').value = 'auto';
+    document.getElementById('vlessUserId').value = '';
+    document.getElementById('vlessFlow').value = '';
+    document.getElementById('vlessEncryption').value = 'none';
+    document.getElementById('trojanPassword').value = '';
+
+    // 清空传输层配置
+    document.getElementById('network').value = 'tcp';
+    document.getElementById('security').value = 'none';
+    document.getElementById('tlsServerName').value = '';
+    document.getElementById('tlsAllowInsecure').checked = false;
+    document.getElementById('wsPath').value = '';
+    document.getElementById('wsHost').value = '';
+    document.getElementById('grpcServiceName').value = '';
+    document.getElementById('h2Path').value = '';
+    document.getElementById('h2Host').value = '';
+
+    // 触发协议和传输层变化
+    onProtocolChange();
+    onNetworkChange();
+    onSecurityChange();
+
     document.getElementById('ruleDialog').style.display = 'flex';
 }
 
@@ -199,11 +275,67 @@ function editRule(ruleId) {
 
     editingRuleId = ruleId;
     document.getElementById('dialogTitle').textContent = '编辑规则';
-    document.getElementById('ruleAlias').value = rule.alias;
-    document.getElementById('ruleProxyInfo').value = rule.proxyInfo;
-    document.getElementById('ruleLocalType').value = rule.localType;
-    document.getElementById('ruleLocalPort').value = rule.localPort;
-    document.getElementById('ruleUseIpProxy').checked = rule.useIpProxy;
+
+    // 填充基本信息
+    document.getElementById('ruleAlias').value = rule.alias || '';
+    document.getElementById('ruleLocalType').value = rule.localType || 'socks5';
+    document.getElementById('ruleLocalPort').value = rule.localPort || '';
+    document.getElementById('ruleProtocol').value = rule.protocol || 'shadowsocks';
+    document.getElementById('ruleServerAddr').value = rule.serverAddr || '';
+    document.getElementById('ruleServerPort').value = rule.serverPort || '';
+
+    // 填充协议配置
+    const settings = rule.settings || {};
+
+    // Shadowsocks
+    document.getElementById('ssMethod').value = settings.ssMethod || 'aes-256-gcm';
+    document.getElementById('ssPassword').value = settings.ssPassword || '';
+
+    // VMess
+    document.getElementById('vmessUserId').value = settings.vmessUserId || '';
+    document.getElementById('vmessAlterId').value = settings.vmessAlterId || 0;
+    document.getElementById('vmessSecurity').value = settings.vmessSecurity || 'auto';
+
+    // VLESS
+    document.getElementById('vlessUserId').value = settings.vlessUserId || '';
+    document.getElementById('vlessFlow').value = settings.vlessFlow || '';
+    document.getElementById('vlessEncryption').value = settings.vlessEncryption || 'none';
+
+    // Trojan
+    document.getElementById('trojanPassword').value = settings.trojanPassword || '';
+
+    // 填充传输层配置
+    document.getElementById('network').value = settings.network || 'tcp';
+    document.getElementById('security').value = settings.security || 'none';
+
+    // TLS
+    if (settings.tls) {
+        document.getElementById('tlsServerName').value = settings.tls.serverName || '';
+        document.getElementById('tlsAllowInsecure').checked = settings.tls.allowInsecure || false;
+    }
+
+    // WebSocket
+    if (settings.ws) {
+        document.getElementById('wsPath').value = settings.ws.path || '';
+        document.getElementById('wsHost').value = (settings.ws.headers && settings.ws.headers.Host) || '';
+    }
+
+    // gRPC
+    if (settings.grpc) {
+        document.getElementById('grpcServiceName').value = settings.grpc.serviceName || '';
+    }
+
+    // HTTP/2
+    if (settings.h2) {
+        document.getElementById('h2Path').value = settings.h2.path || '';
+        document.getElementById('h2Host').value = (settings.h2.host && settings.h2.host[0]) || '';
+    }
+
+    // 触发协议和传输层变化
+    onProtocolChange();
+    onNetworkChange();
+    onSecurityChange();
+
     document.getElementById('ruleDialog').style.display = 'flex';
 }
 
@@ -216,10 +348,11 @@ function closeRuleDialog() {
 // 保存规则
 async function saveRule() {
     const alias = document.getElementById('ruleAlias').value.trim();
-    const proxyInfo = document.getElementById('ruleProxyInfo').value.trim();
     const localType = document.getElementById('ruleLocalType').value;
     const localPort = parseInt(document.getElementById('ruleLocalPort').value);
-    const useIpProxy = document.getElementById('ruleUseIpProxy').checked;
+    const protocol = document.getElementById('ruleProtocol').value;
+    const serverAddr = document.getElementById('ruleServerAddr').value.trim();
+    const serverPort = parseInt(document.getElementById('ruleServerPort').value);
 
     // 验证输入
     if (!alias) {
@@ -228,16 +361,103 @@ async function saveRule() {
     }
 
     if (!localPort || localPort < 1 || localPort > 65535) {
-        alert('请输入有效的端口号(1-65535)');
+        alert('请输入有效的本地端口号(1-65535)');
         return;
+    }
+
+    if (!serverAddr) {
+        alert('请输入服务器地址');
+        return;
+    }
+
+    if (!serverPort || serverPort < 1 || serverPort > 65535) {
+        alert('请输入有效的服务器端口号(1-65535)');
+        return;
+    }
+
+    // 构建设置对象
+    const settings = {
+        network: document.getElementById('network').value,
+        security: document.getElementById('security').value,
+    };
+
+    // 根据协议添加配置
+    if (protocol === 'shadowsocks') {
+        settings.ssMethod = document.getElementById('ssMethod').value;
+        settings.ssPassword = document.getElementById('ssPassword').value;
+        if (!settings.ssPassword) {
+            alert('请输入Shadowsocks密码');
+            return;
+        }
+    } else if (protocol === 'vmess') {
+        settings.vmessUserId = document.getElementById('vmessUserId').value.trim();
+        settings.vmessAlterId = parseInt(document.getElementById('vmessAlterId').value) || 0;
+        settings.vmessSecurity = document.getElementById('vmessSecurity').value;
+        if (!settings.vmessUserId) {
+            alert('请输入VMess用户ID');
+            return;
+        }
+    } else if (protocol === 'vless') {
+        settings.vlessUserId = document.getElementById('vlessUserId').value.trim();
+        settings.vlessFlow = document.getElementById('vlessFlow').value.trim();
+        settings.vlessEncryption = document.getElementById('vlessEncryption').value;
+        if (!settings.vlessUserId) {
+            alert('请输入VLESS用户ID');
+            return;
+        }
+    } else if (protocol === 'trojan') {
+        settings.trojanPassword = document.getElementById('trojanPassword').value;
+        if (!settings.trojanPassword) {
+            alert('请输入Trojan密码');
+            return;
+        }
+    }
+
+    // TLS配置
+    if (settings.security === 'tls') {
+        settings.tls = {
+            serverName: document.getElementById('tlsServerName').value.trim(),
+            allowInsecure: document.getElementById('tlsAllowInsecure').checked,
+        };
+    }
+
+    // WebSocket配置
+    if (settings.network === 'ws') {
+        const wsHost = document.getElementById('wsHost').value.trim();
+        settings.ws = {
+            path: document.getElementById('wsPath').value.trim(),
+        };
+        if (wsHost) {
+            settings.ws.headers = { Host: wsHost };
+        }
+    }
+
+    // gRPC配置
+    if (settings.network === 'grpc') {
+        settings.grpc = {
+            serviceName: document.getElementById('grpcServiceName').value.trim(),
+        };
+    }
+
+    // HTTP/2配置
+    if (settings.network === 'h2') {
+        const h2Host = document.getElementById('h2Host').value.trim();
+        settings.h2 = {
+            path: document.getElementById('h2Path').value.trim(),
+        };
+        if (h2Host) {
+            settings.h2.host = [h2Host];
+        }
     }
 
     const rule = {
         alias: alias,
-        proxyInfo: proxyInfo,
         localType: localType,
         localPort: localPort,
-        useIpProxy: useIpProxy
+        protocol: protocol,
+        serverAddr: serverAddr,
+        serverPort: serverPort,
+        settings: settings,
     };
 
     try {
@@ -364,6 +584,7 @@ function clearLog() {
 
 // HTML 转义
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;

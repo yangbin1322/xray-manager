@@ -2,12 +2,12 @@ package config
 
 import (
 	"encoding/json"
-	"gost-manager/internal/models"
 	"os"
 	"path/filepath"
+	"xray-manager/internal/models"
 )
 
-const configFileName = "gost-manager-config.json"
+const configFileName = "xray-manager-config.json"
 
 // Manager 配置管理器
 type Manager struct {
@@ -35,7 +35,7 @@ func (m *Manager) Load() (*models.Config, error) {
 	if _, err := os.Stat(m.configPath); os.IsNotExist(err) {
 		return &models.Config{
 			AutoStart: false,
-			Rules:     []models.ForwardRule{},
+			Rules:     []models.ProxyRule{},
 		}, nil
 	}
 

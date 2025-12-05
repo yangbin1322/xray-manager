@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gost 管理器</title>
+    <title>Xray 管理器</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -16,14 +16,15 @@
                         <th style="width: 40px;">
                             <input type="checkbox" id="selectAll" title="全选">
                         </th>
-                        <th style="width: 150px;">别名</th>
-                        <th style="width: 240px;">代理信息</th>
+                        <th style="width: 120px;">别名</th>
+                        <th style="width: 100px;">协议</th>
+                        <th style="width: 180px;">服务器地址</th>
+                        <th style="width: 80px;">服务器端口</th>
                         <th style="width: 100px;">本地代理类型</th>
-                        <th style="width: 100px;">本地代理端口</th>
-                        <th style="width: 95px;">真实IP</th>
-                        <th style="width: 90px;">使用IP代理</th>
+                        <th style="width: 100px;">本地端口</th>
+                        <th style="width: 120px;">真实IP</th>
                         <th style="width: 60px;">启动</th>
-                        <th style="width: 100px;">操作</th>
+                        <th style="width: 120px;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="rulesTableBody">
@@ -60,39 +61,209 @@
 
     <!-- 添加/编辑规则对话框 -->
     <div id="ruleDialog" class="dialog-overlay" style="display: none;">
-        <div class="dialog">
+        <div class="dialog dialog-large">
             <div class="dialog-header">
                 <h3 id="dialogTitle">添加规则</h3>
                 <button class="dialog-close" onclick="closeRuleDialog()">&times;</button>
             </div>
             <div class="dialog-body">
-                <div class="form-group">
-                    <label>别名：</label>
-                    <input type="text" id="ruleAlias" placeholder="例如：香港代理">
+                <!-- 基本信息 -->
+                <div class="form-section">
+                    <h4>基本信息</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>别名：</label>
+                            <input type="text" id="ruleAlias" placeholder="例如：香港节点">
+                        </div>
+                        <div class="form-group">
+                            <label>本地代理类型：</label>
+                            <select id="ruleLocalType">
+                                <option value="socks">socks</option>
+                                <option value="http">http</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>本地代理端口：</label>
+                            <input type="number" id="ruleLocalPort" placeholder="例如：1080" min="1" max="65535">
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>代理信息：</label>
-                    <input type="text" id="ruleProxyInfo" placeholder="例如：http://proxy.example.com:8080">
+
+                <!-- 服务器信息 -->
+                <div class="form-section">
+                    <h4>服务器信息</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>协议类型：</label>
+                            <select id="ruleProtocol" onchange="onProtocolChange()">
+                                <option value="shadowsocks">Shadowsocks</option>
+                                <option value="vmess">VMess</option>
+                                <option value="vless">VLESS</option>
+                                <option value="trojan">Trojan</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>服务器地址：</label>
+                            <input type="text" id="ruleServerAddr" placeholder="例如：example.com">
+                        </div>
+                        <div class="form-group">
+                            <label>服务器端口：</label>
+                            <input type="number" id="ruleServerPort" placeholder="例如：443" min="1" max="65535">
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>本地代理类型：</label>
-                    <select id="ruleLocalType">
-                        <option value="auto">auto</option>
-                        <option value="socks5">socks5</option>
-                        <option value="socks4">socks4</option>
-                        <option value="http">http</option>
-                        <option value="http2">http2</option>
-                    </select>
+
+                <!-- Shadowsocks 配置 -->
+                <div id="shadowsocksSettings" class="form-section protocol-settings">
+                    <h4>Shadowsocks 配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>加密方法：</label>
+                            <select id="ssMethod">
+                                <option value="aes-256-gcm">aes-256-gcm</option>
+                                <option value="aes-128-gcm">aes-128-gcm</option>
+                                <option value="chacha20-poly1305">chacha20-poly1305</option>
+                                <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>密码：</label>
+                            <input type="text" id="ssPassword" placeholder="密码">
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>本地代理端口：</label>
-                    <input type="number" id="ruleLocalPort" placeholder="例如：1080" min="1" max="65535">
+
+                <!-- VMess 配置 -->
+                <div id="vmessSettings" class="form-section protocol-settings" style="display:none;">
+                    <h4>VMess 配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>用户ID (UUID)：</label>
+                            <input type="text" id="vmessUserId" placeholder="例如：b1e1e5c4-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                        </div>
+                        <div class="form-group">
+                            <label>额外ID：</label>
+                            <input type="number" id="vmessAlterId" placeholder="0" value="0" min="0">
+                        </div>
+                        <div class="form-group">
+                            <label>加密方式：</label>
+                            <select id="vmessSecurity">
+                                <option value="auto">auto</option>
+                                <option value="aes-128-gcm">aes-128-gcm</option>
+                                <option value="chacha20-poly1305">chacha20-poly1305</option>
+                                <option value="none">none</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="ruleUseIpProxy">
-                        使用IP代理
-                    </label>
+
+                <!-- VLESS 配置 -->
+                <div id="vlessSettings" class="form-section protocol-settings" style="display:none;">
+                    <h4>VLESS 配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>用户ID (UUID)：</label>
+                            <input type="text" id="vlessUserId" placeholder="例如：b1e1e5c4-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                        </div>
+                        <div class="form-group">
+                            <label>Flow (流控)：</label>
+                            <input type="text" id="vlessFlow" placeholder="留空或填写：xtls-rprx-vision">
+                        </div>
+                        <div class="form-group">
+                            <label>加密方式：</label>
+                            <select id="vlessEncryption">
+                                <option value="none">none</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trojan 配置 -->
+                <div id="trojanSettings" class="form-section protocol-settings" style="display:none;">
+                    <h4>Trojan 配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>密码：</label>
+                            <input type="text" id="trojanPassword" placeholder="Trojan 密码">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 传输层配置 -->
+                <div class="form-section">
+                    <h4>传输层配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>传输协议：</label>
+                            <select id="network" onchange="onNetworkChange()">
+                                <option value="tcp">TCP</option>
+                                <option value="ws">WebSocket</option>
+                                <option value="grpc">gRPC</option>
+                                <option value="h2">HTTP/2</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>传输层安全：</label>
+                            <select id="security" onchange="onSecurityChange()">
+                                <option value="none">none</option>
+                                <option value="tls">tls</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- TLS 配置 -->
+                    <div id="tlsSettings" style="display:none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>SNI (服务器名称)：</label>
+                                <input type="text" id="tlsServerName" placeholder="例如：example.com">
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="tlsAllowInsecure">
+                                    允许不安全连接
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- WebSocket 配置 -->
+                    <div id="wsSettings" style="display:none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>WebSocket 路径：</label>
+                                <input type="text" id="wsPath" placeholder="例如：/ray">
+                            </div>
+                            <div class="form-group">
+                                <label>WebSocket Host：</label>
+                                <input type="text" id="wsHost" placeholder="例如：example.com">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- gRPC 配置 -->
+                    <div id="grpcSettings" style="display:none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>gRPC 服务名：</label>
+                                <input type="text" id="grpcServiceName" placeholder="例如：grpcService">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- HTTP/2 配置 -->
+                    <div id="h2Settings" style="display:none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>HTTP/2 路径：</label>
+                                <input type="text" id="h2Path" placeholder="例如：/h2">
+                            </div>
+                            <div class="form-group">
+                                <label>HTTP/2 Host：</label>
+                                <input type="text" id="h2Host" placeholder="例如：example.com">
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="dialog-footer">

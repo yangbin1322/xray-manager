@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"gost-manager/internal/config"
-	"gost-manager/internal/models"
-	"gost-manager/internal/process"
 	"sync"
+	"xray-manager/internal/config"
+	"xray-manager/internal/models"
+	"xray-manager/internal/process"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -26,7 +26,7 @@ func NewApp() *App {
 	return &App{
 		config: &models.Config{
 			AutoStart: false,
-			Rules:     []models.ForwardRule{},
+			Rules:     []models.ProxyRule{},
 		},
 	}
 }
@@ -50,7 +50,7 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	// 初始化开机自启管理器
-	autostartManager, err := config.NewAutoStartManager("GostManager")
+	autostartManager, err := config.NewAutoStartManager("XrayManager")
 	if err != nil {
 		a.logError("初始化开机自启管理器失败", err)
 	} else {
@@ -78,7 +78,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
-	a.log("Gost 管理器已启动")
+	a.log("Xray 管理器已启动")
 }
 
 // shutdown 在应用关闭时调用
@@ -91,18 +91,18 @@ func (a *App) shutdown(ctx context.Context) {
 		a.logError("保存配置失败", err)
 	}
 
-	a.log("Gost 管理器已关闭")
+	a.log("Xray 管理器已关闭")
 }
 
 // GetRules 获取所有规则
-func (a *App) GetRules() []models.ForwardRule {
+func (a *App) GetRules() []models.ProxyRule {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.Rules
 }
 
 // AddRule 添加规则
-func (a *App) AddRule(rule models.ForwardRule) error {
+func (a *App) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -123,7 +123,7 @@ func (a *App) AddRule(rule models.ForwardRule) error {
 }
 
 // UpdateRule 更新规则
-func (a *App) UpdateRule(id string, updatedRule models.ForwardRule) error {
+func (a *App) UpdateRule(id string, updatedRule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

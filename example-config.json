@@ -5,7 +5,7 @@
       "id": "rule_1",
       "alias": "示例代理 - 本地转发",
       "proxyInfo": "http://proxy.example.com:8080",
-      "localType": "socks5",
+      "localType": "socks",
       "localPort": 1080,
       "realIp": "",
       "useIpProxy": true,

@@ -257,8 +257,15 @@ td input[type="checkbox"] {
     background-color: white;
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-    width: 500px;
+    width: 700px;
     max-width: 90%;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.dialog-large {
+    width: 800px;
 }
 
 .dialog-header {
@@ -267,6 +274,7 @@ td input[type="checkbox"] {
     align-items: center;
     padding: 16px 20px;
     border-bottom: 1px solid #ddd;
+    flex-shrink: 0;
 }
 
 .dialog-header h3 {
@@ -292,16 +300,47 @@ td input[type="checkbox"] {
 
 .dialog-body {
     padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.form-section {
+    margin-bottom: 20px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 16px;
+    background-color: #fafafa;
+}
+
+.form-section h4 {
+    margin: 0 0 12px 0;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #ddd;
+    color: #2196F3;
+    font-size: 15px;
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.form-row:last-child {
+    margin-bottom: 0;
 }
 
 .form-group {
-    margin-bottom: 16px;
+    flex: 1;
+    margin-bottom: 0;
 }
 
 .form-group label {
     display: block;
     margin-bottom: 6px;
     font-weight: bold;
+    font-size: 13px;
+    color: #555;
 }
 
 .form-group input[type="text"],
@@ -312,6 +351,14 @@ td input[type="checkbox"] {
     border: 1px solid #ccc;
     border-radius: 4px;
     font-size: 14px;
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="number"]:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #2196F3;
+    box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
 }
 
 .form-group input[type="checkbox"] {
@@ -328,6 +375,7 @@ td input[type="checkbox"] {
     padding: 16px 20px;
     border-top: 1px solid #ddd;
     background-color: #f9f9f9;
+    flex-shrink: 0;
 }
 
 /* 滚动条样式 */
@@ -357,4 +405,15 @@ td input[type="checkbox"] {
 
 .status-stopped {
     color: #9E9E9E;
+}
+
+/* 协议配置部分显示/隐藏控制 */
+.protocol-settings {
+    display: none;
+}
+
+/* 辅助样式 */
+.text-muted {
+    color: #999;
+    font-size: 12px;
 }

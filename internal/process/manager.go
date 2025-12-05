@@ -3,14 +3,17 @@ package process
 import (
 	"bufio"
 	"fmt"
-	"gost-manager/internal/models"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"xray-manager/internal/models"
+	"xray-manager/internal/xray"
 )
 
 // Manager 进程管理器
@@ -18,25 +21,43 @@ type Manager struct {
 	processes map[int]*ProcessInfo // key: localPort
 	mu        sync.RWMutex
 	logFunc   func(string) // 日志回调函数
+	configDir string       // 配置文件目录
 }
 
 // ProcessInfo 进程信息
 type ProcessInfo struct {
-	Cmd    *exec.Cmd
-	Rule   *models.ForwardRule
-	Cancel chan struct{}
+	Cmd        *exec.Cmd
+	Rule       *models.ProxyRule
+	ConfigPath string
+	Cancel     chan struct{}
 }
 
 // NewManager 创建进程管理器
 func NewManager(logFunc func(string)) *Manager {
+	// 获取可执行文件所在目录
+	exePath, err := os.Executable()
+	if err != nil {
+		logFunc(fmt.Sprintf("[错误] 获取可执行文件路径失败: %v", err))
+		return nil
+	}
+	exeDir := filepath.Dir(exePath)
+	configDir := filepath.Join(exeDir, "xray-configs")
+
+	// 创建配置文件目录
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		logFunc(fmt.Sprintf("[错误] 创建配置目录失败: %v", err))
+		return nil
+	}
+
 	return &Manager{
 		processes: make(map[int]*ProcessInfo),
 		logFunc:   logFunc,
+		configDir: configDir,
 	}
 }
 
-// Start 启动转发规则
-func (m *Manager) Start(rule *models.ForwardRule) error {
+// Start 启动代理规则
+func (m *Manager) Start(rule *models.ProxyRule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -45,13 +66,29 @@ func (m *Manager) Start(rule *models.ForwardRule) error {
 		return fmt.Errorf("端口 %d 已被占用", rule.LocalPort)
 	}
 
-	// 构建 gost 命令
-	gostCmd := m.buildGostCommand(rule)
+	// 生成 Xray 配置
+	xrayConfig, err := xray.BuildConfig(rule)
+	if err != nil {
+		return fmt.Errorf("生成 Xray 配置失败: %v", err)
+	}
 
-	m.log(fmt.Sprintf("[启动] %s - 端口:%d - 命令: %s", rule.Alias, rule.LocalPort, gostCmd))
+	// 将配置转换为 JSON
+	configJSON, err := xrayConfig.ToJSON()
+	if err != nil {
+		return fmt.Errorf("转换配置为 JSON 失败: %v", err)
+	}
 
-	// 创建命令
-	cmd := exec.Command("gost", gostCmd...)
+	// 保存配置文件
+	configPath := filepath.Join(m.configDir, fmt.Sprintf("config_%d.json", rule.LocalPort))
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		return fmt.Errorf("保存配置文件失败: %v", err)
+	}
+
+	m.log(fmt.Sprintf("[启动] %s - 端口:%d - 协议:%s", rule.Alias, rule.LocalPort, rule.Protocol))
+	m.log(fmt.Sprintf("[配置] 配置文件: %s", configPath))
+
+	// 创建命令 - 使用 xray 命令和配置文件
+	cmd := exec.Command("./xray.exe", "run", "-c", configPath)
 
 	// 获取标准输出和标准错误
 	stdout, err := cmd.StdoutPipe()
@@ -66,14 +103,15 @@ func (m *Manager) Start(rule *models.ForwardRule) error {
 
 	// 启动进程
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 gost 进程失败: %v", err)
+		return fmt.Errorf("启动 xray 进程失败: %v (请确保 xray 命令可用)", err)
 	}
 
 	// 创建进程信息
 	processInfo := &ProcessInfo{
-		Cmd:    cmd,
-		Rule:   rule,
-		Cancel: make(chan struct{}),
+		Cmd:        cmd,
+		Rule:       rule,
+		ConfigPath: configPath,
+		Cancel:     make(chan struct{}),
 	}
 
 	// 保存进程信息
@@ -92,7 +130,7 @@ func (m *Manager) Start(rule *models.ForwardRule) error {
 	return nil
 }
 
-// Stop 停止转发规则
+// Stop 停止代理规则
 func (m *Manager) Stop(localPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,6 +152,11 @@ func (m *Manager) Stop(localPort int) error {
 
 	// 等待进程结束
 	_ = processInfo.Cmd.Wait()
+
+	// 删除配置文件
+	if err := os.Remove(processInfo.ConfigPath); err != nil {
+		m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
+	}
 
 	// 清理进程信息
 	delete(m.processes, localPort)
@@ -150,35 +193,17 @@ func (m *Manager) StopAll() {
 			_ = processInfo.Cmd.Wait()
 		}
 
+		// 删除配置文件
+		if err := os.Remove(processInfo.ConfigPath); err != nil {
+			m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
+		}
+
 		processInfo.Rule.ProcessID = 0
 		processInfo.Rule.RealIP = ""
 	}
 
 	m.processes = make(map[int]*ProcessInfo)
 	m.log("[系统] 所有进程已停止")
-}
-
-// buildGostCommand 构建 gost 命令参数
-func (m *Manager) buildGostCommand(rule *models.ForwardRule) []string {
-	// gost 命令格式: gost -L <local> -F <forward>
-	// 例如: gost -L socks5://localhost:1080 -F http://proxy.example.com:8080
-
-	localType := rule.LocalType
-	if localType == "auto" {
-		localType = "socks5" // auto 默认使用 socks5
-	}
-
-	args := []string{
-		"-L",
-		fmt.Sprintf("%s://0.0.0.0:%d", localType, rule.LocalPort),
-	}
-
-	// 如果有代理信息，添加转发参数
-	if rule.ProxyInfo != "" {
-		args = append(args, "-F", rule.ProxyInfo)
-	}
-
-	return args
 }
 
 // readLog 读取进程日志
@@ -204,14 +229,14 @@ func (m *Manager) readLog(reader io.Reader, alias, level string, cancel chan str
 }
 
 // getRealIP 获取真实 IP
-func (m *Manager) getRealIP(rule *models.ForwardRule) {
+func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	// 等待服务启动
 	time.Sleep(2 * time.Second)
 
 	// 构建代理 URL
 	var proxyURL *url.URL
 	var err error
-	if rule.LocalType == "socks5" || rule.LocalType == "socks4" || rule.LocalType == "auto" {
+	if rule.LocalType == "socks5" || rule.LocalType == "socks" {
 		proxyURL, err = url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", rule.LocalPort))
 	} else {
 		proxyURL, err = url.Parse(fmt.Sprintf("http://127.0.0.1:%d", rule.LocalPort))
@@ -245,7 +270,7 @@ func (m *Manager) getRealIP(rule *models.ForwardRule) {
 		}
 
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close() // 循环中直接关闭
+		resp.Body.Close()
 		if err != nil {
 			m.log(fmt.Sprintf("[警告] %s 读取 %s 响应失败: %v", rule.Alias, service, err))
 			continue
