@@ -1,0 +1,360 @@
+/* 全局样式 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Microsoft YaHei", Arial, sans-serif;
+    font-size: 14px;
+    color: #333;
+    background-color: #f5f5f5;
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 0;
+}
+
+/* 表格容器 */
+.table-container {
+    height: 312px;
+    overflow-y: auto;
+    border-bottom: 1px solid #ddd;
+    background-color: #fff;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+thead {
+    position: sticky;
+    top: 0;
+    background-color: #f0f0f0;
+    z-index: 10;
+}
+
+th {
+    padding: 10px 8px;
+    text-align: center;
+    font-weight: bold;
+    border: 1px solid #ddd;
+    background-color: #e8e8e8;
+}
+
+td {
+    padding: 8px;
+    text-align: center;
+    border: 1px solid #ddd;
+    vertical-align: middle;
+}
+
+tbody tr:hover {
+    background-color: #f9f9f9;
+}
+
+tbody tr.selected {
+    background-color: #e3f2fd;
+}
+
+/* 表格输入框和选择框 */
+td input[type="text"],
+td input[type="number"],
+td select {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+td input[type="checkbox"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+/* 操作按钮 */
+.btn-edit,
+.btn-delete {
+    padding: 4px 10px;
+    margin: 0 2px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.btn-edit {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.btn-edit:hover {
+    background-color: #45a049;
+}
+
+.btn-delete {
+    background-color: #f44336;
+    color: white;
+}
+
+.btn-delete:hover {
+    background-color: #da190b;
+}
+
+/* 日志容器 */
+.log-container {
+    height: 208px;
+    background-color: #fff;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    flex-direction: column;
+}
+
+.log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+    font-weight: bold;
+}
+
+.btn-small {
+    padding: 4px 12px;
+    font-size: 12px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background-color: #fff;
+    cursor: pointer;
+}
+
+.btn-small:hover {
+    background-color: #e0e0e0;
+}
+
+#logTextarea {
+    flex: 1;
+    padding: 8px 12px;
+    border: none;
+    resize: none;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    background-color: #fafafa;
+    color: #333;
+}
+
+/* 底部控制区域 */
+.control-container {
+    height: 122px;
+    padding: 16px;
+    background-color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.control-left {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.control-left label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.control-left input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.control-right {
+    display: flex;
+    gap: 12px;
+}
+
+/* 按钮样式 */
+.btn-primary,
+.btn-secondary,
+.btn-action,
+.btn-danger {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
+    background-color: #2196F3;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #0b7dda;
+}
+
+.btn-secondary {
+    background-color: #9E9E9E;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #7c7c7c;
+}
+
+.btn-action {
+    background-color: #FF9800;
+    color: white;
+}
+
+.btn-action:hover {
+    background-color: #e68900;
+}
+
+.btn-danger {
+    background-color: #f44336;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #da190b;
+}
+
+/* 对话框样式 */
+.dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.dialog {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    width: 500px;
+    max-width: 90%;
+}
+
+.dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid #ddd;
+}
+
+.dialog-header h3 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.dialog-close {
+    background: none;
+    border: none;
+    font-size: 28px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+}
+
+.dialog-close:hover {
+    color: #333;
+}
+
+.dialog-body {
+    padding: 20px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: bold;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.form-group input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    margin-right: 6px;
+}
+
+.dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px;
+    border-top: 1px solid #ddd;
+    background-color: #f9f9f9;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* 状态指示器 */
+.status-running {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.status-stopped {
+    color: #9E9E9E;
+}

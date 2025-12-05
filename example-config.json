@@ -1,0 +1,27 @@
+{
+  "autoStart": false,
+  "rules": [
+    {
+      "id": "rule_1",
+      "alias": "示例代理 - 本地转发",
+      "proxyInfo": "http://proxy.example.com:8080",
+      "localType": "socks5",
+      "localPort": 1080,
+      "realIp": "",
+      "useIpProxy": true,
+      "enabled": false,
+      "processId": 0
+    },
+    {
+      "id": "rule_2",
+      "alias": "示例代理 - HTTP 转发",
+      "proxyInfo": "socks5://proxy.example.com:1080",
+      "localType": "http",
+      "localPort": 8080,
+      "realIp": "",
+      "useIpProxy": false,
+      "enabled": false,
+      "processId": 0
+    }
+  ]
+}
