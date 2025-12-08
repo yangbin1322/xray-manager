@@ -3,6 +3,7 @@ let rules = [];
 let editingRuleId = null;
 let sortColumn = null; // 当前排序列
 let sortDirection = 'asc'; // 排序方向: asc, desc
+let searchKeyword = ''; // 节点搜索关键字
 import { MyService } from "./bindings/xray-manager/index.js";
 import { Events } from '@wailsio/runtime';
 import * as Extended from "./app-extended.js";
@@ -72,6 +73,15 @@ function bindEventListeners() {
             setSortColumn(column);
         });
     });
+
+    // 节点搜索
+    const searchInput = document.getElementById('nodeSearchInput');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            searchKeyword = e.target.value.trim();
+            renderRulesTable();
+        });
+    }
 }
 
 // 监听后端事件
@@ -117,8 +127,23 @@ function renderRulesTable() {
     const tbody = document.getElementById('rulesTableBody');
     tbody.innerHTML = '';
 
+    // 应用搜索过滤
+    let filteredRules = rules;
+    if (searchKeyword) {
+        const keyword = searchKeyword.toLowerCase();
+        filteredRules = rules.filter(rule => {
+            return (
+                (rule.alias && rule.alias.toLowerCase().includes(keyword)) ||
+                (rule.serverAddr && rule.serverAddr.toLowerCase().includes(keyword)) ||
+                (rule.protocol && rule.protocol.toLowerCase().includes(keyword)) ||
+                (rule.groupName && rule.groupName.toLowerCase().includes(keyword)) ||
+                (rule.localPort && String(rule.localPort).includes(keyword))
+            );
+        });
+    }
+
     // 应用排序
-    const sortedRules = sortColumn ? sortRules([...rules], sortColumn, sortDirection) : rules;
+    const sortedRules = sortColumn ? sortRules([...filteredRules], sortColumn, sortDirection) : filteredRules;
 
     sortedRules.forEach(rule => {
         const row = createRuleRow(rule);

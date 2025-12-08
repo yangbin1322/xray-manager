@@ -356,6 +356,21 @@ td input[type="checkbox"] {
 .control-right {
     display: flex;
     gap: 12px;
+    align-items: center;
+}
+
+.search-input {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 250px;
+    transition: border-color 0.2s;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: #4CAF50;
 }
 
 /* 按钮样式 */
