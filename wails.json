@@ -1,19 +1,24 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "gost-manager",
-  "outputfilename": "gost-manager",
-  "frontend:install": "",
-  "frontend:build": "",
+  "name": "xray-manager",
+  "outputfilename": "xray-manager",
+  "frontend": {
+    "dir": "./frontend",
+    "install": "npm install",
+    "build": "npm run build",
+    "dev": "npm run dev",
+    "devServerUrl": "http://localhost:5173"
+  },
 
   "author": {
-    "name": "GostManager",
-    "email": "gost@example.com"
+    "name": "XrayManager",
+    "email": "yangbin1322@gmail.com"
   },
   "info": {
-    "companyName": "GostManager",
-    "productName": "Gost管理器",
+    "companyName": "XrayManager",
+    "productName": "Xray管理器",
     "productVersion": "1.0.0",
     "copyright": "Copyright.........",
-    "comments": "Gost转发规则管理工具"
+    "comments": "Xray转发规则管理工具"
   }
 }

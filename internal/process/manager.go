@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"xray-manager/internal/assets"
 	"xray-manager/internal/models"
@@ -23,6 +25,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	logFunc   func(string) // 日志回调函数
 	configDir string       // 配置文件目录
+	loadRules func()       //前端重新加载规则
 }
 
 // ProcessInfo 进程信息
@@ -31,10 +34,11 @@ type ProcessInfo struct {
 	Rule       *models.ProxyRule
 	ConfigPath string
 	Cancel     chan struct{}
+	cancelOnce sync.Once // 确保 Cancel channel 只关闭一次
 }
 
 // NewManager 创建进程管理器
-func NewManager(logFunc func(string)) *Manager {
+func NewManager(logFunc func(string), loadRules func()) *Manager {
 	// 获取可执行文件所在目录
 	exePath, err := os.Executable()
 	if err != nil {
@@ -53,6 +57,7 @@ func NewManager(logFunc func(string)) *Manager {
 	return &Manager{
 		processes: make(map[int]*ProcessInfo),
 		logFunc:   logFunc,
+		loadRules: loadRules,
 		configDir: configDir,
 	}
 }
@@ -63,8 +68,8 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	defer m.mu.Unlock()
 
 	// 检查端口是否已被占用
-	if _, exists := m.processes[rule.LocalPort]; exists {
-		return fmt.Errorf("端口 %d 已被占用", rule.LocalPort)
+	if existingProcess, exists := m.processes[rule.LocalPort]; exists {
+		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
 	}
 
 	// 生成 Xray 配置
@@ -97,6 +102,13 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	// 创建命令 - 使用提取的 xray 二进制文件
 	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
 
+	// Windows 平台特殊处理：创建新的进程组
+	if runtime.GOOS == "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		}
+	}
+
 	// 获取标准输出和标准错误
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -126,8 +138,8 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	rule.ProcessID = cmd.Process.Pid
 
 	// 启动日志读取协程
-	go m.readLog(stdout, rule.Alias, "INFO", processInfo.Cancel)
-	go m.readLog(stderr, rule.Alias, "ERROR", processInfo.Cancel)
+	go m.readLog(stdout, rule.Alias, "INFO", processInfo)
+	go m.readLog(stderr, rule.Alias, "ERROR", processInfo)
 
 	// 获取真实 IP（异步）
 	go m.getRealIP(rule)
@@ -147,21 +159,103 @@ func (m *Manager) Stop(localPort int) error {
 		return fmt.Errorf("端口 %d 未找到对应进程", localPort)
 	}
 
+	return m.stopProcessLocked(localPort, processInfo)
+}
+
+// stopProcessLocked 停止进程（内部方法，需要已持有锁）
+func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) error {
 	m.log(fmt.Sprintf("[停止] %s - 端口:%d", processInfo.Rule.Alias, localPort))
 
-	// 关闭日志读取协程
-	close(processInfo.Cancel)
+	// 关闭日志读取协程 - 使用 sync.Once 确保只关闭一次
+	processInfo.cancelOnce.Do(func() {
+		close(processInfo.Cancel)
+	})
 
 	// 终止进程
-	if err := processInfo.Cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("停止进程失败: %v", err)
+	if processInfo.Cmd.Process != nil {
+		killed := false
+
+		// 尝试优雅关闭（发送中断信号）
+		if runtime.GOOS == "windows" {
+			// Windows: 尝试发送 CTRL+BREAK 信号
+			m.log(fmt.Sprintf("[停止] 尝试发送中断信号到进程 %d", processInfo.Cmd.Process.Pid))
+			if err := processInfo.Cmd.Process.Signal(os.Interrupt); err != nil {
+				m.log(fmt.Sprintf("[警告] 发送中断信号失败: %v", err))
+			} else {
+				// 等待进程优雅退出
+				done := make(chan error, 1)
+				go func() {
+					done <- processInfo.Cmd.Wait()
+				}()
+				select {
+				case <-done:
+					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
+					killed = true
+				case <-time.After(3 * time.Second):
+					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
+				}
+			}
+		} else {
+			// Linux/Mac: 发送 SIGTERM
+			if err := processInfo.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				m.log(fmt.Sprintf("[警告] 发送 SIGTERM 失败: %v", err))
+			} else {
+				// 等待进程优雅退出
+				done := make(chan error, 1)
+				go func() {
+					done <- processInfo.Cmd.Wait()
+				}()
+				select {
+				case <-done:
+					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
+					killed = true
+				case <-time.After(3 * time.Second):
+					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
+				}
+			}
+		}
+
+		// 如果优雅关闭失败，尝试强制终止
+		if !killed {
+			m.log(fmt.Sprintf("[停止] 强制终止进程 %d", processInfo.Cmd.Process.Pid))
+
+			if runtime.GOOS == "windows" {
+				// Windows: 使用 taskkill 命令强制终止进程树
+				killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
+				if err := killCmd.Run(); err != nil {
+					m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
+					// 回退到 Kill()
+					if err := processInfo.Cmd.Process.Kill(); err != nil {
+						m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
+					}
+				} else {
+					m.log(fmt.Sprintf("[成功] 使用 taskkill 终止进程"))
+				}
+			} else {
+				// Linux/Mac: 发送 SIGKILL
+				if err := processInfo.Cmd.Process.Signal(syscall.SIGKILL); err != nil {
+					m.log(fmt.Sprintf("[警告] 发送 SIGKILL 失败: %v (进程可能已结束)", err))
+				} else {
+					m.log(fmt.Sprintf("[成功] 使用 SIGKILL 终止进程"))
+				}
+			}
+
+			// 等待进程结束（带超时）
+			done := make(chan error, 1)
+			go func() {
+				done <- processInfo.Cmd.Wait()
+			}()
+			select {
+			case <-done:
+				// 进程已结束
+			case <-time.After(2 * time.Second):
+				m.log(fmt.Sprintf("[警告] 等待进程强制终止超时"))
+			}
+		}
 	}
 
-	// 等待进程结束
-	_ = processInfo.Cmd.Wait()
-
 	// 删除配置文件
-	if err := os.Remove(processInfo.ConfigPath); err != nil {
+	if err := os.Remove(processInfo.ConfigPath); err != nil && !os.IsNotExist(err) {
 		m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
 	}
 
@@ -179,8 +273,42 @@ func (m *Manager) Stop(localPort int) error {
 func (m *Manager) IsRunning(localPort int) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, exists := m.processes[localPort]
-	return exists
+	processInfo, exists := m.processes[localPort]
+	if !exists {
+		return false
+	}
+	// 额外检查进程是否真的还活着
+	return m.isProcessAlive(processInfo)
+}
+
+// isProcessAlive 检查进程是否真的还在运行
+func (m *Manager) isProcessAlive(processInfo *ProcessInfo) bool {
+	if processInfo.Cmd.Process == nil {
+		return false
+	}
+
+	// 尝试发送信号 0 来检查进程是否存在
+	if runtime.GOOS == "windows" {
+		// Windows: 尝试打开进程句柄
+		// 如果进程不存在，FindProcess 会成功但 Signal 会失败
+		process, err := os.FindProcess(processInfo.Cmd.Process.Pid)
+		if err != nil {
+			return false
+		}
+		// Windows 上 Signal(syscall.Signal(0)) 不可用，改用其他方法
+		// 尝试获取进程状态
+		err = process.Signal(syscall.Signal(0))
+		// 在 Windows 上这个调用总是返回错误，所以我们检查进程状态
+		// 更可靠的方法是检查 ProcessState
+		if processInfo.Cmd.ProcessState != nil && processInfo.Cmd.ProcessState.Exited() {
+			return false
+		}
+		return true
+	} else {
+		// Unix 系统: 发送信号 0 不会实际发送信号，只检查权限
+		err := processInfo.Cmd.Process.Signal(syscall.Signal(0))
+		return err == nil
+	}
 }
 
 // StopAll 停止所有进程
@@ -188,42 +316,36 @@ func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for localPort, processInfo := range m.processes {
-		m.log(fmt.Sprintf("[停止] %s - 端口:%d", processInfo.Rule.Alias, localPort))
-
-		// 关闭日志读取协程
-		close(processInfo.Cancel)
-
-		// 终止进程
-		if processInfo.Cmd.Process != nil {
-			_ = processInfo.Cmd.Process.Kill()
-			_ = processInfo.Cmd.Wait()
-		}
-
-		// 删除配置文件
-		if err := os.Remove(processInfo.ConfigPath); err != nil {
-			m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
-		}
-
-		processInfo.Rule.ProcessID = 0
-		processInfo.Rule.RealIP = ""
+	// 创建副本以避免在迭代时修改 map
+	processesToStop := make(map[int]*ProcessInfo)
+	for port, info := range m.processes {
+		processesToStop[port] = info
 	}
 
-	m.processes = make(map[int]*ProcessInfo)
+	for localPort, processInfo := range processesToStop {
+		_ = m.stopProcessLocked(localPort, processInfo)
+	}
+
 	m.log("[系统] 所有进程已停止")
 }
 
 // readLog 读取进程日志
-func (m *Manager) readLog(reader io.Reader, alias, level string, cancel chan struct{}) {
+func (m *Manager) readLog(reader io.Reader, alias, level string, processInfo *ProcessInfo) {
 	scanner := bufio.NewScanner(reader)
+	// 增加缓冲区大小以处理长日志行
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for {
 		select {
-		case <-cancel:
+		case <-processInfo.Cancel:
 			return
 		default:
 			if scanner.Scan() {
 				line := scanner.Text()
-				m.log(fmt.Sprintf("[%s][%s] %s", alias, level, line))
+				if strings.TrimSpace(line) != "" { // 忽略空行
+					m.log(fmt.Sprintf("[%s][%s] %s", alias, level, line))
+				}
 			} else {
 				// 读取完毕或发生错误
 				if err := scanner.Err(); err != nil {
@@ -240,6 +362,13 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	// 等待服务启动
 	time.Sleep(2 * time.Second)
 
+	// 检查进程是否还在运行
+	if !m.IsRunning(rule.LocalPort) {
+		m.log(fmt.Sprintf("[警告] %s 进程已停止，跳过IP获取", rule.Alias))
+		m.loadRules()
+		return
+	}
+
 	// 构建代理 URL
 	var proxyURL *url.URL
 	var err error
@@ -251,6 +380,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	if err != nil {
 		m.log(fmt.Sprintf("[错误] %s 构建代理 URL 失败: %v", rule.Alias, err))
 		rule.RealIP = "获取失败"
+		m.loadRules()
 		return
 	}
 
@@ -270,6 +400,13 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	}
 
 	for _, service := range ipServices {
+		// 再次检查进程是否还在运行
+		if !m.IsRunning(rule.LocalPort) {
+			m.log(fmt.Sprintf("[警告] %s 进程已停止，停止IP获取", rule.Alias))
+			m.loadRules()
+			return
+		}
+
 		resp, err := client.Get(service)
 		if err != nil {
 			m.log(fmt.Sprintf("[警告] %s 请求 %s 失败: %v", rule.Alias, service, err))
@@ -285,14 +422,18 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 
 		if resp.StatusCode == 200 {
 			realIP := strings.TrimSpace(string(body))
-			rule.RealIP = realIP
-			m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
-			return
+			if realIP != "" {
+				rule.RealIP = realIP
+				m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
+				m.loadRules()
+				return
+			}
 		}
 	}
 
 	m.log(fmt.Sprintf("[警告] %s 无法获取真实IP", rule.Alias))
 	rule.RealIP = "获取失败"
+	m.loadRules()
 }
 
 // log 输出日志

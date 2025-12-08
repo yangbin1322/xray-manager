@@ -8,12 +8,12 @@ import (
 	"xray-manager/internal/models"
 	"xray-manager/internal/process"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // App 应用结构
-type App struct {
-	ctx              context.Context
+type MyService struct {
+	app              *application.App
 	configManager    *config.Manager
 	processManager   *process.Manager
 	autostartManager *config.AutoStartManager
@@ -21,33 +21,26 @@ type App struct {
 	mu               sync.RWMutex
 }
 
-// NewApp 创建新应用实例
-func NewApp() *App {
-	return &App{
-		config: &models.Config{
-			AutoStart: false,
-			Rules:     []models.ProxyRule{},
-		},
-	}
+func NewMyService() *MyService {
+	return &MyService{}
 }
 
-// startup 在应用启动时调用
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-
+// ServiceStartup  在应用启动时调用
+func (a *MyService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	a.app = application.Get()
 	// 初始化配置管理器
 	configManager, err := config.NewManager()
 	if err != nil {
 		a.logError("初始化配置管理器失败", err)
-		return
+		return err
 	}
 	a.configManager = configManager
 
 	// 初始化进程管理器
 	a.processManager = process.NewManager(func(message string) {
 		// 日志回调函数
-		runtime.EventsEmit(ctx, "log", message)
-	})
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: message})
+	}, a.loadRules)
 
 	// 初始化开机自启管理器
 	autostartManager, err := config.NewAutoStartManager("XrayManager")
@@ -79,10 +72,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.log("Xray 管理器已启动")
+
+	return nil
 }
 
-// shutdown 在应用关闭时调用
-func (a *App) shutdown(ctx context.Context) {
+// ServiceShutdown 在应用关闭时调用
+func (a *MyService) ServiceShutdown() error {
 	a.log("正在停止所有进程...")
 	a.processManager.StopAll()
 
@@ -92,17 +87,18 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 
 	a.log("Xray 管理器已关闭")
+	return nil
 }
 
 // GetRules 获取所有规则
-func (a *App) GetRules() []models.ProxyRule {
+func (a *MyService) GetRules() []models.ProxyRule {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.Rules
 }
 
 // AddRule 添加规则
-func (a *App) AddRule(rule models.ProxyRule) error {
+func (a *MyService) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -123,7 +119,7 @@ func (a *App) AddRule(rule models.ProxyRule) error {
 }
 
 // UpdateRule 更新规则
-func (a *App) UpdateRule(id string, updatedRule models.ProxyRule) error {
+func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -150,7 +146,7 @@ func (a *App) UpdateRule(id string, updatedRule models.ProxyRule) error {
 }
 
 // DeleteRule 删除规则
-func (a *App) DeleteRule(id string) error {
+func (a *MyService) DeleteRule(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -179,7 +175,7 @@ func (a *App) DeleteRule(id string) error {
 }
 
 // StartRule 启动规则
-func (a *App) StartRule(id string) error {
+func (a *MyService) StartRule(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -201,7 +197,7 @@ func (a *App) StartRule(id string) error {
 			}
 
 			// 发送规则更新事件
-			runtime.EventsEmit(a.ctx, "ruleUpdated", rule)
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: rule})
 
 			return nil
 		}
@@ -211,7 +207,7 @@ func (a *App) StartRule(id string) error {
 }
 
 // StopRule 停止规则
-func (a *App) StopRule(id string) error {
+func (a *MyService) StopRule(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -223,6 +219,7 @@ func (a *App) StopRule(id string) error {
 			}
 
 			if err := a.processManager.Stop(rule.LocalPort); err != nil {
+				rule.Enabled = false
 				return err
 			}
 
@@ -233,7 +230,7 @@ func (a *App) StopRule(id string) error {
 			}
 
 			// 发送规则更新事件
-			runtime.EventsEmit(a.ctx, "ruleUpdated", rule)
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: rule})
 
 			return nil
 		}
@@ -243,7 +240,7 @@ func (a *App) StopRule(id string) error {
 }
 
 // SetAutoStart 设置开机自启
-func (a *App) SetAutoStart(enabled bool) error {
+func (a *MyService) SetAutoStart(enabled bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -267,14 +264,14 @@ func (a *App) SetAutoStart(enabled bool) error {
 }
 
 // GetAutoStart 获取开机自启状态
-func (a *App) GetAutoStart() bool {
+func (a *MyService) GetAutoStart() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.AutoStart
 }
 
 // saveConfig 保存配置（内部方法，不加锁）
-func (a *App) saveConfig() error {
+func (a *MyService) saveConfig() error {
 	if a.configManager != nil {
 		return a.configManager.Save(a.config)
 	}
@@ -282,24 +279,24 @@ func (a *App) saveConfig() error {
 }
 
 // log 输出日志
-func (a *App) log(message string) {
-	runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("[系统] %s", message))
+func (a *MyService) log(message string) {
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: fmt.Sprintf("[系统] %s", message)})
 }
 
 // ExportConfig 导出配置
-func (a *App) ExportConfig() (string, error) {
+func (a *MyService) ExportConfig() (string, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	// 选择保存路径
-	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "导出配置",
-		DefaultFilename: "xray-config-export.json",
-		Filters: []runtime.FileFilter{
+	filePath, err := a.app.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
+		Title:    "导出配置",
+		Filename: "xray-config-export.json",
+		Filters: []application.FileFilter{
 			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
-	})
+	}).PromptForSingleSelection()
 
 	if err != nil {
 		return "", fmt.Errorf("选择文件失败: %v", err)
@@ -319,16 +316,15 @@ func (a *App) ExportConfig() (string, error) {
 }
 
 // ImportConfig 导入配置
-func (a *App) ImportConfig() error {
+func (a *MyService) ImportConfig() error {
 	// 选择导入文件
-	filePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "导入配置",
-		Filters: []runtime.FileFilter{
+	filePath, err := a.app.Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{
+		Title: "导出配置",
+		Filters: []application.FileFilter{
 			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
-	})
-
+	}).PromptForSingleSelection()
 	if err != nil {
 		return fmt.Errorf("选择文件失败: %v", err)
 	}
@@ -377,6 +373,14 @@ func (a *App) ImportConfig() error {
 }
 
 // logError 输出错误日志
-func (a *App) logError(message string, err error) {
-	runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("[错误] %s: %v", message, err))
+func (a *MyService) logError(message string, err error) {
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: fmt.Sprintf("[错误] %s: %v", message, err)})
+
+}
+
+// 触发重新加载规则事件
+func (a *MyService) loadRules() {
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+
+	return
 }

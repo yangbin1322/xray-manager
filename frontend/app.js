@@ -1,6 +1,10 @@
 // 全局变量
 let rules = [];
 let editingRuleId = null;
+import { MyService } from "./bindings/xray-manager/index.js";
+import { Events } from '@wailsio/runtime';
+
+
 
 // 页面加载完成后初始化
 window.addEventListener('DOMContentLoaded', () => {
@@ -9,19 +13,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // 初始化应用
 async function initializeApp() {
+    // 监听后端事件
+    listenToBackendEvents();
+    // 绑定事件监听器
+    bindEventListeners();
+
     // 加载规则
     await loadRules();
 
     // 加载开机自启状态
     await loadAutoStartStatus();
-
-    // 绑定事件监听器
-    bindEventListeners();
-
-    // 监听后端事件
-    listenToBackendEvents();
-
-    addLog('[系统] 应用初始化完成');
 }
 
 // 绑定事件监听器
@@ -45,20 +46,25 @@ function bindEventListeners() {
 // 监听后端事件
 function listenToBackendEvents() {
     // 监听日志事件
-    window.runtime.EventsOn('log', (message) => {
-        addLog(message);
+    Events.On('log', (message) => {
+        addLog(message.data);
     });
 
     // 监听规则更新事件
-    window.runtime.EventsOn('ruleUpdated', (rule) => {
-        updateRuleInTable(rule);
+    Events.On('ruleUpdated', (rule) => {
+        updateRuleInTable(rule.data);
     });
+    // 监听规则更新事件
+    Events.On('loadRules', (rule) => {
+        loadRules();
+    });
+
 }
 
 // 加载规则列表
 async function loadRules() {
     try {
-        rules = await window.go.main.App.GetRules();
+        rules = await MyService.GetRules();
         renderRulesTable();
     } catch (error) {
         addLog(`[错误] 加载规则失败: ${error}`);
@@ -68,7 +74,7 @@ async function loadRules() {
 // 加载开机自启状态
 async function loadAutoStartStatus() {
     try {
-        const autoStart = await window.go.main.App.GetAutoStart();
+        const autoStart = await MyService.GetAutoStart();
         document.getElementById('autoStartCheckbox').checked = autoStart;
     } catch (error) {
         addLog(`[错误] 加载开机自启状态失败: ${error}`);
@@ -106,8 +112,8 @@ function createRuleRow(rule) {
             <input type="checkbox" class="enable-checkbox" ${rule.enabled ? 'checked' : ''}>
         </td>
         <td>
-            <button class="btn-edit" onclick="editRule('${rule.id}')">编辑</button>
-            <button class="btn-delete" onclick="deleteRule('${rule.id}')">删除</button>
+            <button class="btn-edit">编辑</button>
+            <button class="btn-delete">删除</button>
         </td>
     `;
 
@@ -118,6 +124,13 @@ function createRuleRow(rule) {
     // 绑定行复选框事件
     const rowCheckbox = row.querySelector('.row-checkbox');
     rowCheckbox.addEventListener('change', updateSelectAllCheckbox);
+
+    //绑定行编辑事件
+    const editBtn = row.querySelector('.btn-edit');
+    editBtn.addEventListener('click', () => editRule(rule.id));
+    //绑定行删除事件
+    const deleteBtn = row.querySelector('.btn-delete');
+    deleteBtn.addEventListener('click', () => deleteRule(rule.id));
 
     return row;
 }
@@ -157,9 +170,9 @@ function updateSelectAllCheckbox() {
 async function handleEnableChange(ruleId, enabled) {
     try {
         if (enabled) {
-            await window.go.main.App.StartRule(ruleId);
+            await MyService.StartRule(ruleId);
         } else {
-            await window.go.main.App.StopRule(ruleId);
+            await MyService.StopRule(ruleId);
         }
         await loadRules();
     } catch (error) {
@@ -171,7 +184,7 @@ async function handleEnableChange(ruleId, enabled) {
 // 处理开机自启变化
 async function handleAutoStartChange(event) {
     try {
-        await window.go.main.App.SetAutoStart(event.target.checked);
+        await MyService.SetAutoStart(event.target.checked);
     } catch (error) {
         addLog(`[错误] 设置开机自启失败: ${error}`);
         event.target.checked = !event.target.checked; // 恢复状态
@@ -492,10 +505,10 @@ async function saveRule() {
     try {
         if (editingRuleId) {
             // 更新规则
-            await window.go.main.App.UpdateRule(editingRuleId, rule);
+            await MyService.UpdateRule(editingRuleId, rule);
         } else {
             // 添加规则
-            await window.go.main.App.AddRule(rule);
+            await MyService.AddRule(rule);
         }
 
         closeRuleDialog();
@@ -513,7 +526,7 @@ async function deleteRule(ruleId) {
     }
 
     try {
-        await window.go.main.App.DeleteRule(ruleId);
+        await MyService.DeleteRule(ruleId);
         await loadRules();
     } catch (error) {
         addLog(`[错误] 删除规则失败: ${error}`);
@@ -546,7 +559,7 @@ async function startSelectedRules() {
 
     for (const ruleId of selectedIds) {
         try {
-            await window.go.main.App.StartRule(ruleId);
+            await MyService.StartRule(ruleId);
         } catch (error) {
             addLog(`[错误] 启动规则失败: ${error}`);
         }
@@ -566,7 +579,7 @@ async function stopSelectedRules() {
 
     for (const ruleId of selectedIds) {
         try {
-            await window.go.main.App.StopRule(ruleId);
+            await MyService.StopRule(ruleId);
         } catch (error) {
             addLog(`[错误] 停止规则失败: ${error}`);
         }
@@ -590,7 +603,7 @@ async function deleteSelectedRules() {
 
     for (const ruleId of selectedIds) {
         try {
-            await window.go.main.App.DeleteRule(ruleId);
+            await MyService.DeleteRule(ruleId);
         } catch (error) {
             addLog(`[错误] 删除规则失败: ${error}`);
         }
@@ -614,7 +627,7 @@ function clearLog() {
 // 导出配置
 async function exportConfig() {
     try {
-        const filePath = await window.go.main.App.ExportConfig();
+        const filePath = await MyService.ExportConfig();
         addLog(`[系统] 配置已导出到: ${filePath}`);
     } catch (error) {
         if (error && error.toString().includes('用户取消')) {
@@ -629,7 +642,7 @@ async function exportConfig() {
 // 导入配置
 async function importConfig() {
     try {
-        await window.go.main.App.ImportConfig();
+        await MyService.ImportConfig();
         await loadRules(); // 重新加载规则列表
         addLog('[系统] 配置导入成功');
     } catch (error) {
@@ -649,3 +662,9 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+// 将需要在HTML中调用的函数暴露到全局作用域
+window.closeRuleDialog = closeRuleDialog;
+window.saveRule = saveRule;
+window.onProtocolChange = onProtocolChange;
+window.onNetworkChange = onNetworkChange;
+window.onSecurityChange = onSecurityChange;
