@@ -13,6 +13,18 @@ type ProxyRule struct {
 	RealIP     string        `json:"realIp"`     // 真实IP
 	Enabled    bool          `json:"enabled"`    // 启动状态
 	ProcessID  int           `json:"processId"`  // 进程ID
+
+	// 测速相关字段
+	Latency      int    `json:"latency"`      // TCP 延迟（毫秒）
+	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）
+	LastTestTime string `json:"lastTestTime"` // 最后测速时间
+	TestStatus   string `json:"testStatus"`   // 测速状态: idle, testing, success, failed
+
+	// 分组相关字段
+	GroupID      string `json:"groupId"`      // 所属分组ID
+	GroupName    string `json:"groupName"`    // 所属分组名称
+	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
+	Source       string `json:"source"`       // 来源: manual（手动添加）, subscription（订阅导入）
 }
 
 // ProxySettings 代理协议设置（根据协议类型使用不同字段）
@@ -78,6 +90,43 @@ type H2Settings struct {
 
 // Config 配置文件结构
 type Config struct {
-	AutoStart bool        `json:"autoStart"` // 开机自启
-	Rules     []ProxyRule `json:"rules"`     // 代理规则列表
+	AutoStart     bool           `json:"autoStart"`     // 开机自启
+	Rules         []ProxyRule    `json:"rules"`         // 代理规则列表
+	Groups        []Group        `json:"groups"`        // 分组列表
+	Subscriptions []Subscription `json:"subscriptions"` // 订阅列表
+}
+
+// Group 节点分组
+type Group struct {
+	ID           string `json:"id"`           // 分组ID
+	Name         string `json:"name"`         // 分组名称
+	Description  string `json:"description"`  // 分组描述
+	Source       string `json:"source"`       // 来源: manual, subscription
+	SubscriptionID string `json:"subscriptionId,omitempty"` // 关联的订阅ID（如果来自订阅）
+	CreatedAt    string `json:"createdAt"`    // 创建时间
+}
+
+// Subscription 订阅配置
+type Subscription struct {
+	ID          string `json:"id"`          // 订阅ID
+	Name        string `json:"name"`        // 订阅名称
+	URL         string `json:"url"`         // 订阅链接
+	Type        string `json:"type"`        // 订阅类型: clash, v2ray, sip008, base64
+	GroupID     string `json:"groupId"`     // 关联的分组ID
+	Enabled     bool   `json:"enabled"`     // 是否启用
+	AutoUpdate  bool   `json:"autoUpdate"`  // 是否自动更新
+	UpdateInterval int `json:"updateInterval"` // 更新间隔（小时）
+	LastUpdate  string `json:"lastUpdate"`  // 最后更新时间
+	NextUpdate  string `json:"nextUpdate"`  // 下次更新时间
+	NodeCount   int    `json:"nodeCount"`   // 节点数量
+}
+
+// SpeedTestResult 测速结果
+type SpeedTestResult struct {
+	RuleID        string  `json:"ruleId"`
+	Latency       int     `json:"latency"`       // 延迟（毫秒）
+	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）
+	Success       bool    `json:"success"`
+	Error         string  `json:"error"`
+	Timestamp     string  `json:"timestamp"`
 }

@@ -39,6 +39,78 @@ export class GRPCSettings {
 }
 
 /**
+ * Group 节点分组
+ */
+export class Group {
+    /**
+     * Creates a new Group instance.
+     * @param {Partial<Group>} [$$source = {}] - The source object to create the Group.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 分组ID
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * 分组名称
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("description" in $$source)) {
+            /**
+             * 分组描述
+             * @member
+             * @type {string}
+             */
+            this["description"] = "";
+        }
+        if (!("source" in $$source)) {
+            /**
+             * 来源: manual, subscription
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 关联的订阅ID（如果来自订阅）
+             * @member
+             * @type {string | undefined}
+             */
+            this["subscriptionId"] = undefined;
+        }
+        if (!("createdAt" in $$source)) {
+            /**
+             * 创建时间
+             * @member
+             * @type {string}
+             */
+            this["createdAt"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Group instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Group}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Group(/** @type {Partial<Group>} */($$parsedSource));
+    }
+}
+
+/**
  * H2Settings HTTP/2配置
  */
 export class H2Settings {
@@ -178,6 +250,72 @@ export class ProxyRule {
              * @type {number}
              */
             this["processId"] = 0;
+        }
+        if (!("latency" in $$source)) {
+            /**
+             * 测速相关字段
+             * TCP 延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["latency"] = 0;
+        }
+        if (!("downloadSpeed" in $$source)) {
+            /**
+             * 下载速度（MB/s）
+             * @member
+             * @type {number}
+             */
+            this["downloadSpeed"] = 0;
+        }
+        if (!("lastTestTime" in $$source)) {
+            /**
+             * 最后测速时间
+             * @member
+             * @type {string}
+             */
+            this["lastTestTime"] = "";
+        }
+        if (!("testStatus" in $$source)) {
+            /**
+             * 测速状态: idle, testing, success, failed
+             * @member
+             * @type {string}
+             */
+            this["testStatus"] = "";
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 分组相关字段
+             * 所属分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 所属分组名称
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 订阅链接（如果来自订阅）
+             * @member
+             * @type {string | undefined}
+             */
+            this["subscriptionUrl"] = undefined;
+        }
+        if (!("source" in $$source)) {
+            /**
+             * 来源: manual（手动添加）, subscription（订阅导入）
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
         }
 
         Object.assign(this, $$source);
@@ -402,6 +540,118 @@ export class ProxySettings {
             $$parsedSource["h2"] = $$createField19_0($$parsedSource["h2"]);
         }
         return new ProxySettings(/** @type {Partial<ProxySettings>} */($$parsedSource));
+    }
+}
+
+/**
+ * Subscription 订阅配置
+ */
+export class Subscription {
+    /**
+     * Creates a new Subscription instance.
+     * @param {Partial<Subscription>} [$$source = {}] - The source object to create the Subscription.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 订阅ID
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * 订阅名称
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("url" in $$source)) {
+            /**
+             * 订阅链接
+             * @member
+             * @type {string}
+             */
+            this["url"] = "";
+        }
+        if (!("type" in $$source)) {
+            /**
+             * 订阅类型: clash, v2ray, sip008, base64
+             * @member
+             * @type {string}
+             */
+            this["type"] = "";
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 关联的分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 是否启用
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("autoUpdate" in $$source)) {
+            /**
+             * 是否自动更新
+             * @member
+             * @type {boolean}
+             */
+            this["autoUpdate"] = false;
+        }
+        if (!("updateInterval" in $$source)) {
+            /**
+             * 更新间隔（小时）
+             * @member
+             * @type {number}
+             */
+            this["updateInterval"] = 0;
+        }
+        if (!("lastUpdate" in $$source)) {
+            /**
+             * 最后更新时间
+             * @member
+             * @type {string}
+             */
+            this["lastUpdate"] = "";
+        }
+        if (!("nextUpdate" in $$source)) {
+            /**
+             * 下次更新时间
+             * @member
+             * @type {string}
+             */
+            this["nextUpdate"] = "";
+        }
+        if (!("nodeCount" in $$source)) {
+            /**
+             * 节点数量
+             * @member
+             * @type {number}
+             */
+            this["nodeCount"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Subscription instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Subscription}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Subscription(/** @type {Partial<Subscription>} */($$parsedSource));
     }
 }
 
