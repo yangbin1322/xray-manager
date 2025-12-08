@@ -58,6 +58,7 @@ function bindEventListeners() {
     document.getElementById('importConfigBtn').addEventListener('click', importConfig);
     document.getElementById('exportConfigBtn').addEventListener('click', exportConfig);
     document.getElementById('testAllSpeedBtn').addEventListener('click', Extended.testAllRulesSpeed);
+    document.getElementById('exportSpeedReportBtn').addEventListener('click', exportSpeedReport);
 
     // 新功能按钮
     document.getElementById('addGroupBtn').addEventListener('click', Extended.openAddGroupDialog);
@@ -768,6 +769,74 @@ async function deleteSelectedRules() {
     }
 
     await loadRules();
+}
+
+// 导出测速报告
+function exportSpeedReport() {
+    // 过滤出有测速数据的规则
+    const testedRules = rules.filter(rule => rule.latency > 0 || rule.downloadSpeed > 0);
+
+    if (testedRules.length === 0) {
+        alert('没有可导出的测速数据，请先进行测速');
+        return;
+    }
+
+    // 生成CSV内容
+    const headers = ['别名', '分组', '协议', '服务器地址', '服务器端口', '延迟(ms)', '速度(MB/s)', '测试时间', '状态'];
+    const csvRows = [headers.join(',')];
+
+    testedRules.forEach(rule => {
+        const row = [
+            escapeCSV(rule.alias || '-'),
+            escapeCSV(rule.groupName || '无分组'),
+            escapeCSV(rule.protocol || '-'),
+            escapeCSV(rule.serverAddr || '-'),
+            rule.serverPort || '-',
+            rule.latency || 0,
+            rule.downloadSpeed ? rule.downloadSpeed.toFixed(2) : 0,
+            escapeCSV(rule.lastTestTime || '-'),
+            escapeCSV(getSpeedStatus(rule.latency))
+        ];
+        csvRows.push(row.join(','));
+    });
+
+    const csvContent = csvRows.join('\n');
+
+    // 添加BOM以支持中文
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+
+    // 生成文件名（包含当前时间）
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const filename = `测速报告_${timestamp}.csv`;
+
+    // 触发下载
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+
+    addLog(`[系统] 测速报告已导出: ${filename}`);
+}
+
+// CSV转义辅助函数
+function escapeCSV(str) {
+    if (str === null || str === undefined) return '';
+    const s = String(str);
+    // 如果包含逗号、引号或换行符，需要用引号包裹并转义引号
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+// 根据延迟获取状态描述
+function getSpeedStatus(latency) {
+    if (!latency || latency === 0) return '未测试';
+    if (latency < 100) return '优秀';
+    if (latency < 300) return '一般';
+    return '较差';
 }
 
 // 添加日志

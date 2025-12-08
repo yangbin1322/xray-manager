@@ -116,6 +116,25 @@ body {
     color: #2c3e50;
 }
 
+.btn-icon-small {
+    background: transparent;
+    border: none;
+    color: #bdc3c7;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin: 0 2px;
+    transition: all 0.2s;
+}
+
+.btn-start-group:hover {
+    color: #27ae60;
+}
+
+.btn-stop-group:hover {
+    color: #e74c3c;
+}
+
 .btn-delete-group {
     background: transparent;
     border: none;
