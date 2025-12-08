@@ -3,6 +3,7 @@ let rules = [];
 let editingRuleId = null;
 import { MyService } from "./bindings/xray-manager/index.js";
 import { Events } from '@wailsio/runtime';
+import * as Extended from "./app-extended.js";
 
 
 
@@ -10,6 +11,10 @@ import { Events } from '@wailsio/runtime';
 window.addEventListener('DOMContentLoaded', () => {
     initializeApp();
 });
+
+// 导出给其他模块使用
+window.loadRules = loadRules;
+window.filterRulesByGroup = filterRulesByGroup;
 
 // 初始化应用
 async function initializeApp() {
@@ -23,6 +28,12 @@ async function initializeApp() {
 
     // 加载开机自启状态
     await loadAutoStartStatus();
+
+    // 加载分组和订阅
+    await Extended.loadGroups();
+
+    // 设置日志过滤
+    Extended.setupLogFiltering();
 }
 
 // 绑定事件监听器
@@ -38,9 +49,18 @@ function bindEventListeners() {
     document.getElementById('startSelectedBtn').addEventListener('click', startSelectedRules);
     document.getElementById('stopSelectedBtn').addEventListener('click', stopSelectedRules);
     document.getElementById('deleteSelectedBtn').addEventListener('click', deleteSelectedRules);
-    document.getElementById('clearLogBtn').addEventListener('click', clearLog);
+    document.getElementById('clearLogBtn').addEventListener('click', () => {
+        clearLog();
+        Extended.clearBackendLogs();
+    });
     document.getElementById('importConfigBtn').addEventListener('click', importConfig);
     document.getElementById('exportConfigBtn').addEventListener('click', exportConfig);
+    document.getElementById('testAllSpeedBtn').addEventListener('click', Extended.testAllRulesSpeed);
+
+    // 新功能按钮
+    document.getElementById('addGroupBtn').addEventListener('click', Extended.openAddGroupDialog);
+    document.getElementById('manageSubscriptionsBtn').addEventListener('click', Extended.openSubscriptionDialog);
+    document.getElementById('addSubscriptionBtn').addEventListener('click', Extended.openAddSubscriptionDialog);
 }
 
 // 监听后端事件
@@ -97,22 +117,49 @@ function createRuleRow(rule) {
     const row = document.createElement('tr');
     row.dataset.ruleId = rule.id;
 
+    // 格式化延迟显示
+    let latencyText = '-';
+    if (rule.testStatus === 'testing') {
+        latencyText = '测试中...';
+    } else if (rule.latency > 0) {
+        latencyText = `${rule.latency}ms`;
+        if (rule.latency < 100) {
+            latencyText = `<span class="speed-good">${latencyText}</span>`;
+        } else if (rule.latency < 300) {
+            latencyText = `<span class="speed-medium">${latencyText}</span>`;
+        } else {
+            latencyText = `<span class="speed-bad">${latencyText}</span>`;
+        }
+    }
+
+    // 格式化速度显示
+    let speedText = '-';
+    if (rule.downloadSpeed > 0) {
+        speedText = `${rule.downloadSpeed.toFixed(2)}MB/s`;
+    }
+
     row.innerHTML = `
         <td>
             <input type="checkbox" class="row-checkbox">
         </td>
-        <td>${escapeHtml(rule.alias)}</td>
+        <td>
+            ${escapeHtml(rule.alias)}
+            ${rule.groupName ? `<br><small class="group-tag">${escapeHtml(rule.groupName)}</small>` : ''}
+        </td>
         <td>${escapeHtml(rule.protocol || '-')}</td>
         <td style="text-align: left; font-size: 11px;">${escapeHtml(rule.serverAddr || '-')}</td>
         <td>${rule.serverPort || '-'}</td>
         <td>${escapeHtml(rule.localType)}</td>
         <td>${rule.localPort}</td>
+        <td>${latencyText}</td>
+        <td>${speedText}</td>
         <td style="text-align: right;">${escapeHtml(rule.realIp || '-')}</td>
         <td>
             <input type="checkbox" class="enable-checkbox" ${rule.enabled ? 'checked' : ''}>
         </td>
         <td>
             <button class="btn-edit">编辑</button>
+            <button class="btn-test" title="测速">🚀</button>
             <button class="btn-delete">删除</button>
         </td>
     `;
@@ -131,8 +178,27 @@ function createRuleRow(rule) {
     //绑定行删除事件
     const deleteBtn = row.querySelector('.btn-delete');
     deleteBtn.addEventListener('click', () => deleteRule(rule.id));
+    // 绑定测速事件
+    const testBtn = row.querySelector('.btn-test');
+    testBtn.addEventListener('click', () => Extended.testRuleSpeed(rule.id));
 
     return row;
+}
+
+// 按分组过滤规则
+function filterRulesByGroup(groupId) {
+    const tbody = document.getElementById('rulesTableBody');
+    tbody.innerHTML = '';
+
+    let filteredRules = rules;
+    if (groupId !== null) {
+        filteredRules = rules.filter(rule => rule.groupId === groupId);
+    }
+
+    filteredRules.forEach(rule => {
+        const row = createRuleRow(rule);
+        tbody.appendChild(row);
+    });
 }
 
 // 更新表格中的规则
@@ -246,6 +312,9 @@ function openAddRuleDialog() {
     editingRuleId = null;
     document.getElementById('dialogTitle').textContent = '添加规则';
 
+    // 设置端口验证
+    Extended.setupPortValidation();
+
     // 清空表单
     document.getElementById('ruleAlias').value = '';
     document.getElementById('ruleLocalType').value = 'socks5';
@@ -299,6 +368,9 @@ function editRule(ruleId) {
 
     editingRuleId = ruleId;
     document.getElementById('dialogTitle').textContent = '编辑规则';
+
+    // 设置端口验证
+    Extended.setupPortValidation();
 
     // 填充基本信息
     document.getElementById('ruleAlias').value = rule.alias || '';
