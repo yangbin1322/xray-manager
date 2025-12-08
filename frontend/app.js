@@ -1,6 +1,8 @@
 // 全局变量
 let rules = [];
 let editingRuleId = null;
+let sortColumn = null; // 当前排序列
+let sortDirection = 'asc'; // 排序方向: asc, desc
 import { MyService } from "./bindings/xray-manager/index.js";
 import { Events } from '@wailsio/runtime';
 import * as Extended from "./app-extended.js";
@@ -61,6 +63,14 @@ function bindEventListeners() {
     document.getElementById('addGroupBtn').addEventListener('click', Extended.openAddGroupDialog);
     document.getElementById('manageSubscriptionsBtn').addEventListener('click', Extended.openSubscriptionDialog);
     document.getElementById('addSubscriptionBtn').addEventListener('click', Extended.openAddSubscriptionDialog);
+
+    // 表格排序
+    document.querySelectorAll('th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            const column = th.getAttribute('data-sort');
+            setSortColumn(column);
+        });
+    });
 }
 
 // 监听后端事件
@@ -106,10 +116,59 @@ function renderRulesTable() {
     const tbody = document.getElementById('rulesTableBody');
     tbody.innerHTML = '';
 
-    rules.forEach(rule => {
+    // 应用排序
+    const sortedRules = sortColumn ? sortRules([...rules], sortColumn, sortDirection) : rules;
+
+    sortedRules.forEach(rule => {
         const row = createRuleRow(rule);
         tbody.appendChild(row);
     });
+}
+
+// 排序规则
+function sortRules(rulesToSort, column, direction) {
+    return rulesToSort.sort((a, b) => {
+        let valueA = a[column] || 0;
+        let valueB = b[column] || 0;
+
+        // 对于数值类型
+        if (typeof valueA === 'number' && typeof valueB === 'number') {
+            return direction === 'asc' ? valueA - valueB : valueB - valueA;
+        }
+
+        // 对于字符串类型
+        const strA = String(valueA).toLowerCase();
+        const strB = String(valueB).toLowerCase();
+        if (direction === 'asc') {
+            return strA.localeCompare(strB);
+        } else {
+            return strB.localeCompare(strA);
+        }
+    });
+}
+
+// 设置排序
+function setSortColumn(column) {
+    // 如果点击的是当前排序列，切换方向
+    if (sortColumn === column) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortColumn = column;
+        sortDirection = 'asc';
+    }
+
+    // 更新表头样式
+    document.querySelectorAll('th.sortable').forEach(th => {
+        th.removeAttribute('data-sort-direction');
+    });
+
+    const currentHeader = document.querySelector(`th.sortable[data-sort="${column}"]`);
+    if (currentHeader) {
+        currentHeader.setAttribute('data-sort-direction', sortDirection);
+    }
+
+    // 重新渲染表格
+    renderRulesTable();
 }
 
 // 创建规则行
@@ -307,6 +366,21 @@ function onSecurityChange() {
     document.getElementById('tlsSettings').style.display = security === 'tls' ? 'block' : 'none';
 }
 
+// 填充分组选择器
+function populateGroupSelector() {
+    const groupSelect = document.getElementById('ruleGroupId');
+    groupSelect.innerHTML = '<option value="">无分组</option>';
+
+    // 只显示手动创建的分组
+    const manualGroups = Extended.groups.filter(g => g.source === 'manual');
+    manualGroups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        groupSelect.appendChild(option);
+    });
+}
+
 // 打开添加规则对话框
 function openAddRuleDialog() {
     editingRuleId = null;
@@ -315,8 +389,12 @@ function openAddRuleDialog() {
     // 设置端口验证
     Extended.setupPortValidation();
 
+    // 填充分组选择器
+    populateGroupSelector();
+
     // 清空表单
     document.getElementById('ruleAlias').value = '';
+    document.getElementById('ruleGroupId').value = '';
     document.getElementById('ruleLocalType').value = 'socks5';
     document.getElementById('ruleLocalPort').value = '';
     document.getElementById('ruleProtocol').value = 'shadowsocks';
@@ -372,8 +450,12 @@ function editRule(ruleId) {
     // 设置端口验证
     Extended.setupPortValidation();
 
+    // 填充分组选择器
+    populateGroupSelector();
+
     // 填充基本信息
     document.getElementById('ruleAlias').value = rule.alias || '';
+    document.getElementById('ruleGroupId').value = rule.groupId || '';
     document.getElementById('ruleLocalType').value = rule.localType || 'socks5';
     document.getElementById('ruleLocalPort').value = rule.localPort || '';
     document.getElementById('ruleProtocol').value = rule.protocol || 'shadowsocks';
@@ -564,6 +646,9 @@ async function saveRule() {
         }
     }
 
+    // 获取所选分组
+    const groupId = document.getElementById('ruleGroupId').value;
+
     const rule = {
         alias: alias,
         localType: localType,
@@ -572,6 +657,7 @@ async function saveRule() {
         serverAddr: serverAddr,
         serverPort: serverPort,
         settings: settings,
+        groupId: groupId || '',
     };
 
     try {

@@ -172,6 +172,33 @@ th {
     background-color: #e8e8e8;
 }
 
+/* 可排序列样式 */
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+}
+
+th.sortable:hover {
+    background-color: #d8d8d8;
+}
+
+.sort-indicator {
+    margin-left: 4px;
+    font-size: 10px;
+    color: #999;
+}
+
+th.sortable[data-sort-direction="asc"] .sort-indicator::after {
+    content: "▲";
+    color: #333;
+}
+
+th.sortable[data-sort-direction="desc"] .sort-indicator::after {
+    content: "▼";
+    color: #333;
+}
+
 td {
     padding: 8px;
     text-align: center;

@@ -171,6 +171,21 @@ func (a *MyService) AddRule(rule models.ProxyRule) error {
 	rule.ProcessID = 0
 	rule.RealIP = ""
 
+	// 如果没有设置来源，默认为手动添加
+	if rule.Source == "" {
+		rule.Source = "manual"
+	}
+
+	// 根据 GroupID 设置 GroupName
+	if rule.GroupID != "" {
+		for _, group := range a.config.Groups {
+			if group.ID == rule.GroupID {
+				rule.GroupName = group.Name
+				break
+			}
+		}
+	}
+
 	a.config.Rules = append(a.config.Rules, rule)
 
 	if err := a.saveConfig(); err != nil {
@@ -193,6 +208,26 @@ func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 			updatedRule.Enabled = rule.Enabled
 			updatedRule.ProcessID = rule.ProcessID
 			updatedRule.RealIP = rule.RealIP
+
+			// 保留订阅相关字段（如果是订阅节点）
+			if rule.Source == "subscription" {
+				updatedRule.Source = rule.Source
+				updatedRule.SubscriptionURL = rule.SubscriptionURL
+			} else if updatedRule.Source == "" {
+				updatedRule.Source = "manual"
+			}
+
+			// 根据 GroupID 设置 GroupName
+			if updatedRule.GroupID != "" {
+				for _, group := range a.config.Groups {
+					if group.ID == updatedRule.GroupID {
+						updatedRule.GroupName = group.Name
+						break
+					}
+				}
+			} else {
+				updatedRule.GroupName = ""
+			}
 
 			a.config.Rules[i] = updatedRule
 
