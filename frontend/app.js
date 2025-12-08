@@ -741,14 +741,46 @@ async function startSelectedRules() {
         return;
     }
 
-    for (const ruleId of selectedIds) {
-        try {
-            await MyService.StartRule(ruleId);
-        } catch (error) {
-            addLog(`[错误] 启动规则失败: ${error}`);
+    // 批量启动优化：分批并行处理
+    const batchSize = 10; // 每批启动10个节点
+    const delayBetweenBatches = 500; // 批次间延迟500ms
+
+    addLog(`[批量启动] 开始启动 ${selectedIds.length} 个节点（每批 ${batchSize} 个）...`);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // 分批处理
+    for (let i = 0; i < selectedIds.length; i += batchSize) {
+        const batch = selectedIds.slice(i, i + batchSize);
+        const batchNum = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(selectedIds.length / batchSize);
+
+        addLog(`[批量启动] 处理第 ${batchNum}/${totalBatches} 批...`);
+
+        // 并行启动当前批次的所有节点
+        const results = await Promise.allSettled(
+            batch.map(ruleId => MyService.StartRule(ruleId))
+        );
+
+        // 统计结果
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                successCount++;
+            } else {
+                failCount++;
+                const ruleId = batch[index];
+                addLog(`[错误] 节点 ${ruleId} 启动失败: ${result.reason}`);
+            }
+        });
+
+        // 批次间延迟（最后一批不需要延迟）
+        if (i + batchSize < selectedIds.length) {
+            await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
         }
     }
 
+    addLog(`[批量启动] 完成！成功: ${successCount}, 失败: ${failCount}`);
     await loadRules();
 }
 
@@ -761,14 +793,46 @@ async function stopSelectedRules() {
         return;
     }
 
-    for (const ruleId of selectedIds) {
-        try {
-            await MyService.StopRule(ruleId);
-        } catch (error) {
-            addLog(`[错误] 停止规则失败: ${error}`);
+    // 批量停止优化：分批并行处理
+    const batchSize = 10; // 每批停止10个节点
+    const delayBetweenBatches = 500; // 批次间延迟500ms
+
+    addLog(`[批量停止] 开始停止 ${selectedIds.length} 个节点（每批 ${batchSize} 个）...`);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // 分批处理
+    for (let i = 0; i < selectedIds.length; i += batchSize) {
+        const batch = selectedIds.slice(i, i + batchSize);
+        const batchNum = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(selectedIds.length / batchSize);
+
+        addLog(`[批量停止] 处理第 ${batchNum}/${totalBatches} 批...`);
+
+        // 并行停止当前批次的所有节点
+        const results = await Promise.allSettled(
+            batch.map(ruleId => MyService.StopRule(ruleId))
+        );
+
+        // 统计结果
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                successCount++;
+            } else {
+                failCount++;
+                const ruleId = batch[index];
+                addLog(`[错误] 节点 ${ruleId} 停止失败: ${result.reason}`);
+            }
+        });
+
+        // 批次间延迟（最后一批不需要延迟）
+        if (i + batchSize < selectedIds.length) {
+            await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
         }
     }
 
+    addLog(`[批量停止] 完成！成功: ${successCount}, 失败: ${failCount}`);
     await loadRules();
 }
 
