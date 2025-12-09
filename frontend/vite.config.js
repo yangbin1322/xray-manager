@@ -5,9 +5,8 @@ export default defineConfig({
     rollupOptions: {
       external: ['@wailsio/runtime'],
       output: {
-        paths: {
-          '@wailsio/runtime': '/wails/runtime.js'
-        }
+        // 保留原始的 import 语句，由 importmap 处理
+        format: 'es'
       }
     }
   }
