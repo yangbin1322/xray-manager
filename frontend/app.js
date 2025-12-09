@@ -957,6 +957,7 @@ async function importConfig() {
     try {
         await MyService.ImportConfig();
         await loadRules(); // 重新加载规则列表
+        await Extended.loadGroups(); // 重新加载分组列表
         addLog('[系统] 配置导入成功');
     } catch (error) {
         if (error && error.toString().includes('用户取消')) {

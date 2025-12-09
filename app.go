@@ -465,6 +465,66 @@ func (a *MyService) ImportConfig() error {
 		return fmt.Errorf("导入配置失败: %v", err)
 	}
 
+	// 建立分组ID映射（旧ID -> 新ID）
+	groupIDMap := make(map[string]string)
+	importedGroupsCount := 0
+
+	// 先导入分组
+	for _, group := range importedConfig.Groups {
+		// 检查分组名称是否已存在
+		exists := false
+		for _, existingGroup := range a.config.Groups {
+			if existingGroup.Name == group.Name && existingGroup.Source == group.Source {
+				// 分组已存在，使用现有分组ID
+				groupIDMap[group.ID] = existingGroup.ID
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			// 分组不存在，创建新分组
+			oldID := group.ID
+			group.ID = fmt.Sprintf("group_%d", time.Now().UnixNano())
+			group.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
+			groupIDMap[oldID] = group.ID
+			a.config.Groups = append(a.config.Groups, group)
+			importedGroupsCount++
+		}
+	}
+
+	// 建立订阅ID映射（旧ID -> 新ID）
+	subscriptionIDMap := make(map[string]string)
+	importedSubscriptionsCount := 0
+
+	// 再导入订阅
+	for _, sub := range importedConfig.Subscriptions {
+		// 更新订阅的分组ID
+		if newGroupID, ok := groupIDMap[sub.GroupID]; ok {
+			sub.GroupID = newGroupID
+		}
+
+		// 检查订阅URL是否已存在
+		exists := false
+		for _, existingSub := range a.config.Subscriptions {
+			if existingSub.URL == sub.URL {
+				// 订阅已存在，使用现有订阅ID
+				subscriptionIDMap[sub.ID] = existingSub.ID
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			// 订阅不存在，创建新订阅
+			oldID := sub.ID
+			sub.ID = fmt.Sprintf("sub_%d", time.Now().UnixNano())
+			subscriptionIDMap[oldID] = sub.ID
+			a.config.Subscriptions = append(a.config.Subscriptions, sub)
+			importedSubscriptionsCount++
+		}
+	}
+
 	// 合并规则（追加到现有规则）
 	existingPortMap := make(map[int]bool)
 	for _, rule := range a.config.Rules {
@@ -475,6 +535,18 @@ func (a *MyService) ImportConfig() error {
 	skippedCount := 0
 
 	for _, rule := range importedConfig.Rules {
+		// 更新规则的分组ID
+		if newGroupID, ok := groupIDMap[rule.GroupID]; ok {
+			rule.GroupID = newGroupID
+			// 更新分组名称
+			for _, group := range a.config.Groups {
+				if group.ID == newGroupID {
+					rule.GroupName = group.Name
+					break
+				}
+			}
+		}
+
 		// 生成新的唯一 ID
 		rule.ID = generateUniqueRuleID(a.config.Rules)
 		rule.Enabled = false
@@ -491,7 +563,7 @@ func (a *MyService) ImportConfig() error {
 		return err
 	}
 
-	a.log(fmt.Sprintf("导入完成: 成功 %d 条，跳过 %d 条", importedCount, skippedCount))
+	a.log(fmt.Sprintf("导入完成: 分组 %d 个，订阅 %d 个，规则 %d 条", importedGroupsCount, importedSubscriptionsCount, importedCount))
 	return nil
 }
 
