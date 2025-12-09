@@ -563,6 +563,16 @@ func (a *MyService) ImportConfig() error {
 		return err
 	}
 
+	// 同步更新分组管理器的缓存
+	a.groupManager.LoadGroups(a.config.Groups)
+
+	// 同步更新订阅管理器
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].AutoUpdate {
+			a.subscriptionManager.StartAutoUpdate(&a.config.Subscriptions[i])
+		}
+	}
+
 	a.log(fmt.Sprintf("导入完成: 分组 %d 个，订阅 %d 个，规则 %d 条", importedGroupsCount, importedSubscriptionsCount, importedCount))
 	return nil
 }
