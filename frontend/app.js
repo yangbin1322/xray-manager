@@ -127,11 +127,17 @@ function renderRulesTable() {
     const tbody = document.getElementById('rulesTableBody');
     tbody.innerHTML = '';
 
-    // 应用搜索过滤
     let filteredRules = rules;
+
+    // 应用分组过滤
+    if (Extended.currentGroupFilter !== null && Extended.currentGroupFilter !== undefined) {
+        filteredRules = filteredRules.filter(rule => rule.groupId === Extended.currentGroupFilter);
+    }
+
+    // 应用搜索过滤
     if (searchKeyword) {
         const keyword = searchKeyword.toLowerCase();
-        filteredRules = rules.filter(rule => {
+        filteredRules = filteredRules.filter(rule => {
             return (
                 (rule.alias && rule.alias.toLowerCase().includes(keyword)) ||
                 (rule.serverAddr && rule.serverAddr.toLowerCase().includes(keyword)) ||
@@ -272,18 +278,9 @@ function createRuleRow(rule) {
 
 // 按分组过滤规则
 function filterRulesByGroup(groupId) {
-    const tbody = document.getElementById('rulesTableBody');
-    tbody.innerHTML = '';
-
-    let filteredRules = rules;
-    if (groupId !== null) {
-        filteredRules = rules.filter(rule => rule.groupId === groupId);
-    }
-
-    filteredRules.forEach(rule => {
-        const row = createRuleRow(rule);
-        tbody.appendChild(row);
-    });
+    // 直接调用 renderRulesTable，它会应用分组过滤
+    // currentGroupFilter 已在 app-extended.js 中被设置
+    renderRulesTable();
 }
 
 // 更新表格中的规则
