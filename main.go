@@ -22,8 +22,8 @@ func main() {
 	// 创建主窗口
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "Xray 管理器",
-		Width:            1100,
-		Height:           700,
+		Width:            1600,
+		Height:           800,
 		BackgroundColour: application.NewRGB(255, 255, 255),
 	})
 
