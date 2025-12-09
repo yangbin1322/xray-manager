@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"log"
 
@@ -33,16 +32,16 @@ func main() {
 	app.RegisterService(application.NewService(Service))
 
 	// 创建系统托盘
-	systemTray := app.Systray()
+	systemTray := app.SystemTray.New()
 	if systemTray != nil {
 		// 设置托盘图标提示
 		systemTray.SetTooltip("Xray 管理器")
 
 		// 创建托盘菜单
-		menu := app.Menu.NewMenu()
+		menu := app.Menu.New()
 
 		// 显示/隐藏主窗口
-		menu.AddItem("显示主窗口").OnClick(func(ctx context.Context, data application.ClickEventData) {
+		menu.Add("显示主窗口").OnClick(func(c *application.Context) {
 			mainWindow.Show()
 			mainWindow.Focus()
 		})
@@ -50,7 +49,7 @@ func main() {
 		menu.AddSeparator()
 
 		// 一键启动所有节点
-		menu.AddItem("启动所有节点").OnClick(func(ctx context.Context, data application.ClickEventData) {
+		menu.Add("启动所有节点").OnClick(func(c *application.Context) {
 			// 调用服务方法启动所有节点
 			go func() {
 				rules := Service.GetRules()
@@ -63,7 +62,7 @@ func main() {
 		})
 
 		// 一键停止所有节点
-		menu.AddItem("停止所有节点").OnClick(func(ctx context.Context, data application.ClickEventData) {
+		menu.Add("停止所有节点").OnClick(func(c *application.Context) {
 			// 调用服务方法停止所有节点
 			go func() {
 				rules := Service.GetRules()
@@ -78,7 +77,7 @@ func main() {
 		menu.AddSeparator()
 
 		// 退出程序
-		menu.AddItem("退出").OnClick(func(ctx context.Context, data application.ClickEventData) {
+		menu.Add("退出").OnClick(func(c *application.Context) {
 			app.Quit()
 		})
 
@@ -86,7 +85,7 @@ func main() {
 		systemTray.SetMenu(menu)
 
 		// 托盘图标点击事件
-		systemTray.OnClick(func(ctx context.Context) {
+		systemTray.OnClick(func() {
 			if mainWindow.IsVisible() {
 				mainWindow.Hide()
 			} else {

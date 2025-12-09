@@ -21,6 +21,8 @@ body {
     gap: 0;
 }
 
+
+
 /* 侧边栏 */
 .sidebar {
     width: 220px;
@@ -116,6 +118,25 @@ body {
     color: #2c3e50;
 }
 
+.btn-icon-small {
+    background: transparent;
+    border: none;
+    color: #bdc3c7;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin: 0 2px;
+    transition: all 0.2s;
+}
+
+.btn-start-group:hover {
+    color: #27ae60;
+}
+
+.btn-stop-group:hover {
+    color: #e74c3c;
+}
+
 .btn-delete-group {
     background: transparent;
     border: none;
@@ -170,6 +191,42 @@ th {
     font-weight: bold;
     border: 1px solid #ddd;
     background-color: #e8e8e8;
+    position: relative;
+}
+/* 表头拖动条 */
+th .resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 5px;
+    cursor: col-resize;
+    height: 100%;
+}
+/* 可排序列样式 */
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+}
+
+th.sortable:hover {
+    background-color: #d8d8d8;
+}
+
+.sort-indicator {
+    margin-left: 4px;
+    font-size: 10px;
+    color: #999;
+}
+
+th.sortable[data-sort-direction="asc"] .sort-indicator::after {
+    content: "▲";
+    color: #333;
+}
+
+th.sortable[data-sort-direction="desc"] .sort-indicator::after {
+    content: "▼";
+    color: #333;
 }
 
 td {
@@ -310,6 +367,21 @@ td input[type="checkbox"] {
 .control-right {
     display: flex;
     gap: 12px;
+    align-items: center;
+}
+
+.search-input {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 250px;
+    transition: border-color 0.2s;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: #4CAF50;
 }
 
 /* 按钮样式 */

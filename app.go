@@ -160,16 +160,56 @@ func (a *MyService) GetRules() []models.ProxyRule {
 	return a.config.Rules
 }
 
+// generateUniqueRuleID 生成唯一的规则ID
+func generateUniqueRuleID(existingRules []models.ProxyRule) string {
+	// 使用时间戳（纳秒）确保唯一性
+	timestamp := time.Now().UnixNano()
+	id := fmt.Sprintf("rule_%d", timestamp)
+
+	// 双重检查：如果ID已存在（极小概率），添加随机后缀
+	for {
+		exists := false
+		for _, rule := range existingRules {
+			if rule.ID == id {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			break
+		}
+		// ID冲突，添加随机数
+		id = fmt.Sprintf("rule_%d_%d", timestamp, time.Now().UnixNano()%1000)
+	}
+
+	return id
+}
+
 // AddRule 添加规则
 func (a *MyService) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 生成唯一 ID
-	rule.ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+	// 生成唯一 ID - 使用时间戳 + 随机数确保唯一性
+	rule.ID = generateUniqueRuleID(a.config.Rules)
 	rule.Enabled = false
 	rule.ProcessID = 0
 	rule.RealIP = ""
+
+	// 如果没有设置来源，默认为手动添加
+	if rule.Source == "" {
+		rule.Source = "manual"
+	}
+
+	// 根据 GroupID 设置 GroupName
+	if rule.GroupID != "" {
+		for _, group := range a.config.Groups {
+			if group.ID == rule.GroupID {
+				rule.GroupName = group.Name
+				break
+			}
+		}
+	}
 
 	a.config.Rules = append(a.config.Rules, rule)
 
@@ -193,6 +233,26 @@ func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 			updatedRule.Enabled = rule.Enabled
 			updatedRule.ProcessID = rule.ProcessID
 			updatedRule.RealIP = rule.RealIP
+
+			// 保留订阅相关字段（如果是订阅节点）
+			if rule.Source == "subscription" {
+				updatedRule.Source = rule.Source
+				updatedRule.SubscriptionURL = rule.SubscriptionURL
+			} else if updatedRule.Source == "" {
+				updatedRule.Source = "manual"
+			}
+
+			// 根据 GroupID 设置 GroupName
+			if updatedRule.GroupID != "" {
+				for _, group := range a.config.Groups {
+					if group.ID == updatedRule.GroupID {
+						updatedRule.GroupName = group.Name
+						break
+					}
+				}
+			} else {
+				updatedRule.GroupName = ""
+			}
 
 			a.config.Rules[i] = updatedRule
 
@@ -405,6 +465,67 @@ func (a *MyService) ImportConfig() error {
 		return fmt.Errorf("导入配置失败: %v", err)
 	}
 
+	// 建立分组ID映射（旧ID -> 新ID）
+	groupIDMap := make(map[string]string)
+	importedGroupsCount := 0
+
+	// 先导入分组
+	for _, group := range importedConfig.Groups {
+		// 检查分组名称是否已存在
+		exists := false
+		for _, existingGroup := range a.config.Groups {
+			if existingGroup.Name == group.Name && existingGroup.Source == group.Source {
+				// 分组已存在，使用现有分组ID
+				groupIDMap[group.ID] = existingGroup.ID
+				exists = true
+				break
+			}
+		}
+		fmt.Println(exists, group.ID, group.Source, group.Name)
+
+		if !exists {
+			// 分组不存在，创建新分组
+			oldID := group.ID
+			group.ID = fmt.Sprintf("group_%d", time.Now().UnixNano())
+			group.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
+			groupIDMap[oldID] = group.ID
+			a.config.Groups = append(a.config.Groups, group)
+			importedGroupsCount++
+		}
+	}
+
+	// 建立订阅ID映射（旧ID -> 新ID）
+	subscriptionIDMap := make(map[string]string)
+	importedSubscriptionsCount := 0
+
+	// 再导入订阅
+	for _, sub := range importedConfig.Subscriptions {
+		// 更新订阅的分组ID
+		if newGroupID, ok := groupIDMap[sub.GroupID]; ok {
+			sub.GroupID = newGroupID
+		}
+
+		// 检查订阅URL是否已存在
+		exists := false
+		for _, existingSub := range a.config.Subscriptions {
+			if existingSub.URL == sub.URL {
+				// 订阅已存在，使用现有订阅ID
+				subscriptionIDMap[sub.ID] = existingSub.ID
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			// 订阅不存在，创建新订阅
+			oldID := sub.ID
+			sub.ID = fmt.Sprintf("sub_%d", time.Now().UnixNano())
+			subscriptionIDMap[oldID] = sub.ID
+			a.config.Subscriptions = append(a.config.Subscriptions, sub)
+			importedSubscriptionsCount++
+		}
+	}
+
 	// 合并规则（追加到现有规则）
 	existingPortMap := make(map[int]bool)
 	for _, rule := range a.config.Rules {
@@ -412,11 +533,21 @@ func (a *MyService) ImportConfig() error {
 	}
 
 	importedCount := 0
-	skippedCount := 0
-
 	for _, rule := range importedConfig.Rules {
-		// 生成新的 ID
-		rule.ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+		// 更新规则的分组ID
+		if newGroupID, ok := groupIDMap[rule.GroupID]; ok {
+			rule.GroupID = newGroupID
+			// 更新分组名称
+			for _, group := range a.config.Groups {
+				if group.ID == newGroupID {
+					rule.GroupName = group.Name
+					break
+				}
+			}
+		}
+
+		// 生成新的唯一 ID
+		rule.ID = generateUniqueRuleID(a.config.Rules)
 		rule.Enabled = false
 		rule.ProcessID = 0
 		rule.RealIP = ""
@@ -426,12 +557,21 @@ func (a *MyService) ImportConfig() error {
 		importedCount++
 	}
 
+	// 同步更新分组管理器的缓存
+	a.groupManager.LoadGroups(a.config.Groups)
+
+	// 同步更新订阅管理器
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].AutoUpdate {
+			a.subscriptionManager.RestartAutoUpdate(&a.config.Subscriptions[i])
+		}
+	}
+
 	// 保存合并后的配置
 	if err := a.saveConfig(); err != nil {
 		return err
 	}
-
-	a.log(fmt.Sprintf("导入完成: 成功 %d 条，跳过 %d 条", importedCount, skippedCount))
+	a.log(fmt.Sprintf("导入完成: 分组 %d 个，订阅 %d 个，规则 %d 条", importedGroupsCount, importedSubscriptionsCount, importedCount))
 	return nil
 }
 
@@ -600,7 +740,7 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 
 	// 添加节点到配置
 	for i := range rules {
-		rules[i].ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+		rules[i].ID = generateUniqueRuleID(a.config.Rules)
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].GroupID = group.ID
@@ -753,7 +893,7 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 			delete(oldRules, key)
 		} else {
 			// 新节点，添加到配置
-			newRules[i].ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+			newRules[i].ID = generateUniqueRuleID(a.config.Rules)
 			newRules[i].Enabled = false
 			newRules[i].GroupID = targetSub.GroupID
 			newRules[i].SubscriptionURL = targetSub.URL

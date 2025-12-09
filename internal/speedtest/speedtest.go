@@ -79,8 +79,8 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 
 	// 如果没有指定测试 URL，使用默认的
 	if testURL == "" {
-		// 使用 1MB 测试文件
-		testURL = "http://cachefly.cachefly.net/1mb.test"
+		// 使用 10MB 测试文件
+		testURL = "https://speed.cloudflare.com/__down?bytes=10000000"
 	}
 
 	start := time.Now()

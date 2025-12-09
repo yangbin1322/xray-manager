@@ -53,9 +53,13 @@ function createGroupItem(group, isAll) {
             <span class="group-name">${escapeHtml(group.name)}</span>
             ${group.source === 'subscription' ? '<span class="group-badge">订阅</span>' : ''}
         </div>
-        ${!isAll && group.source === 'manual' ? `
+        ${!isAll ? `
         <div class="group-actions">
+            <button class="btn-icon-small btn-start-group" data-group-id="${group.id}" title="启动">▶</button>
+            <button class="btn-icon-small btn-stop-group" data-group-id="${group.id}" title="停止">■</button>
+            ${group.source === 'manual' ? `
             <button class="btn-icon btn-delete-group" data-group-id="${group.id}" title="删除">×</button>
+            ` : ''}
         </div>
         ` : ''}
     `;
@@ -67,14 +71,34 @@ function createGroupItem(group, isAll) {
         window.filterRulesByGroup && window.filterRulesByGroup(group.id);
     });
 
-    // 删除分组按钮
-    if (!isAll && group.source === 'manual') {
-        const deleteBtn = div.querySelector('.btn-delete-group');
-        if (deleteBtn) {
-            deleteBtn.addEventListener('click', (e) => {
+    // 启动分组按钮
+    if (!isAll) {
+        const startBtn = div.querySelector('.btn-start-group');
+        if (startBtn) {
+            startBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                deleteGroup(group.id);
+                startGroupRules(group.id, group.name);
             });
+        }
+
+        // 停止分组按钮
+        const stopBtn = div.querySelector('.btn-stop-group');
+        if (stopBtn) {
+            stopBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                stopGroupRules(group.id, group.name);
+            });
+        }
+
+        // 删除分组按钮
+        if (group.source === 'manual') {
+            const deleteBtn = div.querySelector('.btn-delete-group');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteGroup(group.id);
+                });
+            }
         }
     }
 
@@ -125,6 +149,40 @@ async function deleteGroup(groupId) {
         addLog('[系统] 分组已删除');
     } catch (error) {
         alert(`删除分组失败: ${error}`);
+    }
+}
+
+// 启动分组所有节点
+async function startGroupRules(groupId, groupName) {
+    if (!confirm(`确定要启动分组"${groupName}"的所有节点吗？`)) {
+        return;
+    }
+
+    try {
+        addLog(`[分组] 正在启动分组"${groupName}"的所有节点...`);
+        await MyService.StartAllRulesInGroup(groupId);
+        window.loadRules && await window.loadRules();
+        addLog(`[分组] 分组"${groupName}"的所有节点已启动`);
+    } catch (error) {
+        alert(`启动分组失败: ${error}`);
+        addLog(`[错误] 启动分组失败: ${error}`);
+    }
+}
+
+// 停止分组所有节点
+async function stopGroupRules(groupId, groupName) {
+    if (!confirm(`确定要停止分组"${groupName}"的所有节点吗？`)) {
+        return;
+    }
+
+    try {
+        addLog(`[分组] 正在停止分组"${groupName}"的所有节点...`);
+        await MyService.StopAllRulesInGroup(groupId);
+        window.loadRules && await window.loadRules();
+        addLog(`[分组] 分组"${groupName}"的所有节点已停止`);
+    } catch (error) {
+        alert(`停止分组失败: ${error}`);
+        addLog(`[错误] 停止分组失败: ${error}`);
     }
 }
 
@@ -439,6 +497,32 @@ function addLog(message) {
     logTextarea.value += message + '\n';
     logTextarea.scrollTop = logTextarea.scrollHeight;
 }
+document.querySelectorAll("th").forEach(th => {
+    // 创建拖动条
+    const handle = document.createElement("div");
+    handle.className = "resize-handle";
+    th.appendChild(handle);
+
+    let startX, startWidth;
+
+    handle.addEventListener("mousedown", function (e) {
+        startX = e.pageX;
+        startWidth = th.offsetWidth;
+
+        document.addEventListener("mousemove", resizeColumn);
+        document.addEventListener("mouseup", stopResize);
+    });
+
+    function resizeColumn(e) {
+        const newWidth = startWidth + (e.pageX - startX);
+        th.style.width = newWidth + "px";
+    }
+
+    function stopResize() {
+        document.removeEventListener("mousemove", resizeColumn);
+        document.removeEventListener("mouseup", stopResize);
+    }
+});
 
 // 导出需要在 app.js 中使用的函数
 export {

@@ -2,7 +2,10 @@ module xray-manager
 
 go 1.24.0
 
-require github.com/wailsapp/wails/v3 v3.0.0-alpha.41
+require (
+	github.com/wailsapp/wails/v3 v3.0.0-alpha.41
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	dario.cat/mergo v1.0.1 // indirect
@@ -45,5 +48,4 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
