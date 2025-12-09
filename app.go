@@ -160,13 +160,38 @@ func (a *MyService) GetRules() []models.ProxyRule {
 	return a.config.Rules
 }
 
+// generateUniqueRuleID 生成唯一的规则ID
+func generateUniqueRuleID(existingRules []models.ProxyRule) string {
+	// 使用时间戳（纳秒）确保唯一性
+	timestamp := time.Now().UnixNano()
+	id := fmt.Sprintf("rule_%d", timestamp)
+
+	// 双重检查：如果ID已存在（极小概率），添加随机后缀
+	for {
+		exists := false
+		for _, rule := range existingRules {
+			if rule.ID == id {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			break
+		}
+		// ID冲突，添加随机数
+		id = fmt.Sprintf("rule_%d_%d", timestamp, time.Now().UnixNano()%1000)
+	}
+
+	return id
+}
+
 // AddRule 添加规则
 func (a *MyService) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 生成唯一 ID
-	rule.ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+	// 生成唯一 ID - 使用时间戳 + 随机数确保唯一性
+	rule.ID = generateUniqueRuleID(a.config.Rules)
 	rule.Enabled = false
 	rule.ProcessID = 0
 	rule.RealIP = ""
@@ -450,8 +475,8 @@ func (a *MyService) ImportConfig() error {
 	skippedCount := 0
 
 	for _, rule := range importedConfig.Rules {
-		// 生成新的 ID
-		rule.ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+		// 生成新的唯一 ID
+		rule.ID = generateUniqueRuleID(a.config.Rules)
 		rule.Enabled = false
 		rule.ProcessID = 0
 		rule.RealIP = ""
@@ -635,7 +660,7 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 
 	// 添加节点到配置
 	for i := range rules {
-		rules[i].ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+		rules[i].ID = generateUniqueRuleID(a.config.Rules)
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].GroupID = group.ID
@@ -788,7 +813,7 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 			delete(oldRules, key)
 		} else {
 			// 新节点，添加到配置
-			newRules[i].ID = fmt.Sprintf("rule_%d", len(a.config.Rules)+1)
+			newRules[i].ID = generateUniqueRuleID(a.config.Rules)
 			newRules[i].Enabled = false
 			newRules[i].GroupID = targetSub.GroupID
 			newRules[i].SubscriptionURL = targetSub.URL
