@@ -1,14 +1,14 @@
 {
-  "autoStart": false,
+  "autoStart": true,
   "rules": [
     {
-      "id": "rule_1",
-      "alias": "1",
+      "id": "rule_1765301764904387200",
+      "alias": "比特50/touliu1/38.207.132.183",
       "localType": "socks",
       "localPort": 35512,
       "protocol": "shadowsocks",
-      "serverAddr": "47.112.11.103",
-      "serverPort": 11241,
+      "serverAddr": "38.207.132.183",
+      "serverPort": 443,
       "settings": {
         "ssMethod": "aes-256-gcm",
         "ssPassword": "fRE1qjMQes",
@@ -23,46 +23,241 @@
       },
       "realIp": "",
       "enabled": false,
-      "processId": 0
+      "processId": 0,
+      "latency": 117,
+      "downloadSpeed": 0,
+      "lastTestTime": "2025-12-10 02:10:47",
+      "testStatus": "success",
+      "groupId": "",
+      "groupName": "",
+      "source": "manual"
     },
     {
-      "id": "rule_2",
-      "alias": "vmess",
-      "localType": "http",
-      "localPort": 35669,
-      "protocol": "vmess",
-      "serverAddr": "38.207.132.183",
-      "serverPort": 55989,
+      "id": "rule_1765302206110520500",
+      "alias": "比特31/司马1店/38.207.133.33",
+      "localType": "socks",
+      "localPort": 35500,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.133.33",
+      "serverPort": 443,
       "settings": {
-        "vmessUserId": "de4aa9e4-476e-4c13-ef92-71a7e6e7d028",
-        "vmessSecurity": "auto",
-        "network": "tcp",
-        "security": "none"
-      },
-      "realIp": "",
-      "enabled": false,
-      "processId": 0
-    },
-    {
-      "id": "rule_3",
-      "alias": "trojan测试",
-      "localType": "http",
-      "localPort": 35669,
-      "protocol": "trojan",
-      "serverAddr": "38.207.132.183",
-      "serverPort": 17957,
-      "settings": {
-        "trojanPassword": "RfGOkCtQ0B",
-        "network": "tcp",
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
         "security": "tls",
         "tls": {
-          "serverName": "/",
           "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
         }
       },
-      "realIp": "",
-      "enabled": false,
-      "processId": 0
+      "realIp": "38.207.133.33",
+      "enabled": true,
+      "processId": 51368,
+      "latency": 208,
+      "downloadSpeed": 2.180170504135086,
+      "lastTestTime": "2025-12-10 02:10:47",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787508525000",
+      "alias": "比特40/司马4店/38.207.133.246",
+      "localType": "socks",
+      "localPort": 35503,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.133.246",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.133.246",
+      "enabled": true,
+      "processId": 47792,
+      "latency": 209,
+      "downloadSpeed": 2.7364368383448507,
+      "lastTestTime": "2025-12-10 02:10:51",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787508525000_0",
+      "alias": "比特46/司马5店/38.207.132.232",
+      "localType": "socks",
+      "localPort": 35504,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.132.232",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.132.232",
+      "enabled": true,
+      "processId": 52148,
+      "latency": 115,
+      "downloadSpeed": 4.300139885267221,
+      "lastTestTime": "2025-12-10 02:10:47",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787508525000_500",
+      "alias": "比特47/司马6店/38.207.133.200",
+      "localType": "socks",
+      "localPort": 35505,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.133.200",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.133.200",
+      "enabled": true,
+      "processId": 47420,
+      "latency": 215,
+      "downloadSpeed": 2.6963883268100766,
+      "lastTestTime": "2025-12-10 02:10:51",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787509045500",
+      "alias": "比特30/司马2店/38.207.132.234",
+      "localType": "socks",
+      "localPort": 35501,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.132.234",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.132.234",
+      "enabled": true,
+      "processId": 65036,
+      "latency": 116,
+      "downloadSpeed": 4.6668487215991465,
+      "lastTestTime": "2025-12-10 02:10:53",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787509045500_500",
+      "alias": "比特44/司马3店/38.207.133.22",
+      "localType": "socks",
+      "localPort": 35502,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.133.22",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.133.22",
+      "enabled": true,
+      "processId": 44760,
+      "latency": 257,
+      "downloadSpeed": 2.3761077375403095,
+      "lastTestTime": "2025-12-10 02:10:49",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
+    },
+    {
+      "id": "rule_1765303787509045500_900",
+      "alias": "比特49/司马8店/38.207.133.53",
+      "localType": "socks",
+      "localPort": 35512,
+      "protocol": "shadowsocks",
+      "serverAddr": "38.207.133.53",
+      "serverPort": 443,
+      "settings": {
+        "ssMethod": "aes-256-gcm",
+        "ssPassword": "fRE1qjMQes",
+        "network": "ws",
+        "security": "tls",
+        "tls": {
+          "allowInsecure": true
+        },
+        "ws": {
+          "path": "/"
+        }
+      },
+      "realIp": "38.207.133.53",
+      "enabled": true,
+      "processId": 65228,
+      "latency": 212,
+      "downloadSpeed": 2.9666402058364656,
+      "lastTestTime": "2025-12-10 02:11:04",
+      "testStatus": "success",
+      "groupId": "group_1765302231271668400",
+      "groupName": "司马",
+      "source": "manual"
     }
-  ]
+  ],
+  "groups": [
+    {
+      "id": "group_1765302231271668400",
+      "name": "司马",
+      "description": "",
+      "source": "manual",
+      "createdAt": "2025-12-10 01:43:51"
+    }
+  ],
+  "subscriptions": []
 }

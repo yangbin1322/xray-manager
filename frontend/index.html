@@ -8,6 +8,24 @@
 </head>
 <body>
     <div class="container">
+        <!-- 侧边栏：分组列表 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>节点分组</h3>
+                <button id="addGroupBtn" class="btn-icon" title="添加分组">+</button>
+            </div>
+            <div class="sidebar-content">
+                <div id="groupsList">
+                    <!-- 分组列表将动态生成 -->
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <button id="manageSubscriptionsBtn" class="btn-small btn-block">订阅管理</button>
+            </div>
+        </div>
+
+        <!-- 主内容区域 -->
+        <div class="main-content">
         <!-- 转发规则表格区域 -->
         <div class="table-container">
             <table id="rulesTable">
@@ -18,13 +36,15 @@
                         </th>
                         <th style="width: 120px;">别名</th>
                         <th style="width: 100px;">协议</th>
-                        <th style="width: 180px;">服务器地址</th>
-                        <th style="width: 80px;">服务器端口</th>
-                        <th style="width: 100px;">本地代理类型</th>
-                        <th style="width: 100px;">本地端口</th>
-                        <th style="width: 120px;">真实IP</th>
+                        <th style="width: 150px;">服务器地址</th>
+                        <th style="width: 70px;">服务器端口</th>
+                        <th style="width: 90px;">本地代理</th>
+                        <th style="width: 80px;">本地端口</th>
+                        <th style="width: 100px;" class="sortable" data-sort="latency">延迟 <span class="sort-indicator"></span></th>
+                        <th style="width: 100px;" class="sortable" data-sort="downloadSpeed">速度 <span class="sort-indicator"></span></th>
+                        <th style="width: 100px;">真实IP</th>
                         <th style="width: 60px;">启动</th>
-                        <th style="width: 120px;">操作</th>
+                        <th style="width: 180px;">操作</th>
                     </tr>
                 </thead>
                 <tbody id="rulesTableBody">
@@ -37,7 +57,17 @@
         <div class="log-container">
             <div class="log-header">
                 <span>日志输出</span>
-                <button id="clearLogBtn" class="btn-small">清空日志</button>
+                <div class="log-controls">
+                    <input type="text" id="logSearchInput" placeholder="搜索日志..." class="log-search">
+                    <select id="logLevelFilter" class="log-filter">
+                        <option value="ALL">所有日志</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARN">WARN</option>
+                        <option value="ERROR">ERROR</option>
+                        <option value="XRAY">XRAY</option>
+                    </select>
+                    <button id="clearLogBtn" class="btn-small">清空日志</button>
+                </div>
             </div>
             <textarea id="logTextarea" readonly></textarea>
         </div>
@@ -52,11 +82,107 @@
                 <button id="startSelectedBtn" class="btn-action">启动选中</button>
                 <button id="stopSelectedBtn" class="btn-action">停止选中</button>
                 <button id="deleteSelectedBtn" class="btn-action btn-danger">删除选中</button>
+                <button id="testAllSpeedBtn" class="btn-action">批量测速</button>
+                <button id="exportSpeedReportBtn" class="btn-action">导出测速报告</button>
             </div>
             <div class="control-right">
+                <input type="text" id="nodeSearchInput" placeholder="搜索节点（别名/地址/协议）..." class="search-input">
                 <button id="importConfigBtn" class="btn-action">导入规则</button>
                 <button id="exportConfigBtn" class="btn-action">导出规则</button>
                 <button id="addRuleBtn" class="btn-primary">添加规则</button>
+            </div>
+        </div>
+        </div>
+    </div>
+
+    <!-- 订阅管理对话框 -->
+    <div id="subscriptionDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog dialog-large">
+            <div class="dialog-header">
+                <h3>订阅管理</h3>
+                <button class="dialog-close" onclick="closeSubscriptionDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="subscription-controls">
+                    <button id="addSubscriptionBtn" class="btn-primary">添加订阅</button>
+                </div>
+                <table id="subscriptionsTable">
+                    <thead>
+                        <tr>
+                            <th>订阅名称</th>
+                            <th>节点数</th>
+                            <th>类型</th>
+                            <th>最后更新</th>
+                            <th>下次更新</th>
+                            <th>自动更新</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subscriptionsTableBody">
+                        <!-- 订阅列表将动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeSubscriptionDialog()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加订阅对话框 -->
+    <div id="addSubscriptionDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog">
+            <div class="dialog-header">
+                <h3>添加订阅</h3>
+                <button class="dialog-close" onclick="closeAddSubscriptionDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="form-group">
+                    <label>订阅名称：</label>
+                    <input type="text" id="subName" placeholder="例如：我的订阅">
+                </div>
+                <div class="form-group">
+                    <label>订阅地址：</label>
+                    <input type="text" id="subURL" placeholder="https://example.com/subscription">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="subAutoUpdate" checked>
+                        自动更新
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>更新间隔（小时）：</label>
+                    <input type="number" id="subUpdateInterval" value="6" min="1" max="168">
+                </div>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeAddSubscriptionDialog()">取消</button>
+                <button class="btn-primary" onclick="saveSubscription()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加分组对话框 -->
+    <div id="addGroupDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog">
+            <div class="dialog-header">
+                <h3>添加分组</h3>
+                <button class="dialog-close" onclick="closeAddGroupDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="form-group">
+                    <label>分组名称：</label>
+                    <input type="text" id="groupName" placeholder="例如：美国节点">
+                </div>
+                <div class="form-group">
+                    <label>描述：</label>
+                    <input type="text" id="groupDescription" placeholder="可选">
+                </div>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeAddGroupDialog()">取消</button>
+                <button class="btn-primary" onclick="saveGroup()">添加</button>
             </div>
         </div>
     </div>
@@ -78,6 +204,12 @@
                             <input type="text" id="ruleAlias" placeholder="例如：香港节点">
                         </div>
                         <div class="form-group">
+                            <label>所属分组：</label>
+                            <select id="ruleGroupId">
+                                <option value="">无分组</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label>本地代理类型：</label>
                             <select id="ruleLocalType">
                                 <option value="socks">socks</option>
@@ -86,7 +218,11 @@
                         </div>
                         <div class="form-group">
                             <label>本地代理端口：</label>
-                            <input type="number" id="ruleLocalPort" placeholder="例如：1080" min="1" max="65535">
+                            <div class="port-input-group">
+                                <input type="number" id="ruleLocalPort" placeholder="例如：1080" min="1" max="65535">
+                                <button type="button" id="recommendPortBtn" class="btn-small">推荐端口</button>
+                                <span id="portStatus" class="port-status"></span>
+                            </div>
                         </div>
                     </div>
                 </div>
