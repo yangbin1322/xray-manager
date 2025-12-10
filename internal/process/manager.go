@@ -102,10 +102,12 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	// 创建命令 - 使用提取的 xray 二进制文件
 	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
 
-	// Windows 平台特殊处理：创建新的进程组
+	// Windows 平台特殊处理：创建新的进程组并隐藏控制台窗口
 	if runtime.GOOS == "windows" {
+		// CREATE_NEW_PROCESS_GROUP = 0x00000200
+		// CREATE_NO_WINDOW = 0x08000000
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | 0x08000000,
 		}
 	}
 
