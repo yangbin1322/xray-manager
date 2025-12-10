@@ -224,6 +224,10 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 			if runtime.GOOS == "windows" {
 				// Windows: 使用 taskkill 命令强制终止进程树
 				killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
+				// 隐藏 taskkill 的控制台窗口
+				killCmd.SysProcAttr = &syscall.SysProcAttr{
+					CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+				}
 				if err := killCmd.Run(); err != nil {
 					m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
 					// 回退到 Kill()
