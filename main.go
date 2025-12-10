@@ -26,6 +26,33 @@ func main() {
 		Width:            1100,
 		Height:           700,
 		BackgroundColour: application.NewRGB(255, 255, 255),
+		// 不自动关闭窗口，由事件处理器决定
+		Hidden: false,
+	})
+
+	// 设置窗口关闭事件处理器
+	mainWindow.OnWindowClose(func(ctx context.Context) {
+		// 显示对话框，让用户选择操作
+		selection, err := app.Dialog.Message("关闭窗口").
+			Title("Xray 管理器").
+			Message("请选择操作：").
+			Buttons("退出程序", "最小化到托盘").
+			DefaultButton("最小化到托盘").
+			Info()
+
+		if err != nil {
+			// 如果对话框出错，默认最小化到托盘
+			mainWindow.Hide()
+			return
+		}
+
+		if selection == "退出程序" {
+			// 退出程序
+			app.Quit()
+		} else {
+			// 最小化到托盘
+			mainWindow.Hide()
+		}
 	})
 
 	// 注册服务
