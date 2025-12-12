@@ -1,4 +1,4 @@
-name: Build macOS App with Debug
+name: Build and Upload to bin
 
 on:
   push:
@@ -32,85 +32,70 @@ jobs:
             npm install
           fi
 
-      - name: Build with verbose output
+      - name: Build
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           export CGO_ENABLED=1
-          wails3 build -v
+          wails3 build
 
-      - name: Debug - Find ALL build outputs
+      - name: Debug - Show all build outputs
         run: |
-          echo "=== 当前目录 ==="
-          pwd
-          echo ""
+          echo "=== 项目根目录的 bin ==="
+          ls -lah bin/ 2>/dev/null || echo "不存在"
           
-          echo "=== 搜索所有 .app 文件 ==="
-          find . -name "*.app" -type d 2>/dev/null || echo "未找到 .app 文件"
           echo ""
+          echo "=== build/bin ==="
+          ls -lah build/bin/ 2>/dev/null || echo "不存在"
           
-          echo "=== 搜索所有可执行文件 ==="
-          find . -type f -perm +111 2>/dev/null | grep -v node_modules | grep -v ".git" || echo "未找到可执行文件"
           echo ""
-          
-          echo "=== build 目录完整结构 ==="
-          ls -R build/ 2>/dev/null || echo "build 目录不存在"
-          echo ""
-          
-          echo "=== bin 目录 ==="
-          find . -name "bin" -type d -exec sh -c 'echo "目录: {}"; ls -la "{}"' \;
-          echo ""
-          
-          echo "=== dist 目录 ==="
-          ls -la dist/ 2>/dev/null || echo "dist 目录不存在"
-          echo ""
-          
-          echo "=== 所有最近修改的文件（最近 5 分钟）==="
-          find . -type f -mmin -5 -size +1M 2>/dev/null | head -20
+          echo "=== 搜索所有构建产物 ==="
+          find . -name "*.app" -o -name "xray-manager" -type f | grep -v node_modules | grep -v ".git"
 
-      - name: Package whatever we find
+      - name: Prepare bin directory
         run: |
-          mkdir -p artifacts
+          mkdir -p bin
           
-          # 策略 1: 查找 .app
-          APP_FILE=$(find . -name "*.app" -type d -not -path "*/node_modules/*" -not -path "*/.git/*" | head -1)
-          
-          if [ -n "$APP_FILE" ]; then
-            echo "✓ 找到 .app: $APP_FILE"
-            cp -r "$APP_FILE" artifacts/
+          # 从可能的位置复制文件
+          if [ -d "build/bin" ] && [ "$(ls -A build/bin)" ]; then
+            echo "✓ 从 build/bin 复制"
+            cp -r build/bin/* bin/
           fi
           
-          # 策略 2: 查找 build/bin 中的文件
-          if [ -d "build/bin" ] && [ "$(ls -A build/bin 2>/dev/null)" ]; then
-            echo "✓ 找到 build/bin 目录"
-            cp -r build/bin/* artifacts/ 2>/dev/null || true
+          if [ -d "build/darwin/bin" ] && [ "$(ls -A build/darwin/bin)" ]; then
+            echo "✓ 从 build/darwin/bin 复制"
+            cp -r build/darwin/bin/* bin/
           fi
           
-          # 策略 3: 查找任何名为 xray-manager 的可执行文件
-          find . -type f -name "xray-manager" -perm +111 -not -path "*/node_modules/*" -not -path "*/.git/*" | while read file; do
-            echo "✓ 找到可执行文件: $file"
-            cp "$file" artifacts/
+          # 查找 .app
+          find build -name "*.app" -type d | head -1 | while read app; do
+            if [ -n "$app" ]; then
+              echo "✓ 复制 .app: $app"
+              cp -r "$app" bin/
+            fi
           done
           
-          # 检查结果
           echo ""
-          echo "=== artifacts 目录内容 ==="
-          ls -lah artifacts/ || echo "artifacts 为空"
-          
-          # 如果 artifacts 不为空，创建压缩包
-          if [ "$(ls -A artifacts/ 2>/dev/null)" ]; then
-            cd artifacts
-            tar -czf ../xray-manager-macos.tar.gz .
-            cd ..
-            mv xray-manager-macos.tar.gz artifacts/
-            echo "✓ 已创建压缩包"
-          fi
+          echo "=== bin 目录最终内容 ==="
+          ls -lah bin/
+          du -sh bin/* 2>/dev/null || echo "bin 为空"
 
-      - name: Upload Artifacts (if any)
+      - name: Upload bin directory
         uses: actions/upload-artifact@v4
-        if: always()  # 即使构建失败也上传
         with:
-          name: xray-manager-macos-${{ github.sha }}
-          path: |
-            artifacts/
-            build/
-          retention-days: 7
+          name: xray-manager-macos
+          path: bin/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Commit bin to repository (optional)
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add bin/
+          if git diff --staged --quiet; then
+            echo "没有变化，跳过提交"
+          else
+            git commit -m "chore: 更新 macOS 编译产物 [skip ci]"
+            git push
+          fi
