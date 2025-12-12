@@ -1,34 +1,82 @@
-name: Build Wails App
+name: Generate Darwin Config
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      commit_changes:
+        description: '是否提交修改到仓库'
+        required: true
+        type: boolean
+        default: false
 
 jobs:
-  build-macos:
-    name: Build macOS ARM64
+  generate:
     runs-on: macos-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: '1.23'
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
-      - name: Build macOS ARM64
+      - name: Generate Config
         run: |
-          export CGO_ENABLED=1
-          wails3 task darwin:package
+          export PATH=$PATH:$(go env GOPATH)/bin
+          
+          # 在临时目录生成
+          cd /tmp
+          wails3 init -n xray-manager -t vanilla
+          
+          # 显示生成的文件
+          echo "=== 生成的 darwin 配置 ==="
+          find /tmp/xray-manager/build/darwin -type f
+          
+          echo ""
+          echo "=== Info.plist 内容 ==="
+          cat /tmp/xray-manager/build/darwin/Info.plist
+          
+          # 复制到工作区
+          mkdir -p $GITHUB_WORKSPACE/build/darwin-generated
+          cp -r /tmp/xray-manager/build/darwin/* $GITHUB_WORKSPACE/build/darwin-generated/
 
-      - name: Upload macOS Artifact
+      - name: Compare with Existing
+        run: |
+          if [ -d "build/darwin" ]; then
+            echo "=== 对比现有配置 ==="
+            echo "旧配置:"
+            head -20 build/darwin/Info.plist || echo "文件不存在"
+            echo ""
+            echo "新配置:"
+            head -20 build/darwin-generated/Info.plist
+          fi
+
+      - name: Upload Generated Config
         uses: actions/upload-artifact@v4
         with:
-          name: xray-manager-macos-arm64
-          path: bin/
+          name: darwin-config-generated
+          path: build/darwin-generated/
+          retention-days: 30
+
+      - name: Commit if Requested
+        if: ${{ inputs.commit_changes }}
+        run: |
+          # 备份旧配置
+          if [ -d "build/darwin" ]; then
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            mv build/darwin "build/darwin.backup_$timestamp"
+          fi
+          
+          # 使用新配置
+          mv build/darwin-generated build/darwin
+          
+          # 提交
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add build/darwin/
+          git commit -m "fix: 使用自动生成的 macOS 构建配置"
+          git push
