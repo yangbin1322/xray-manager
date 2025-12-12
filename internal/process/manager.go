@@ -103,13 +103,7 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
 
 	// Windows 平台特殊处理：创建新的进程组并隐藏控制台窗口
-	if runtime.GOOS == "windows" {
-		// CREATE_NEW_PROCESS_GROUP = 0x00000200
-		// CREATE_NO_WINDOW = 0x08000000
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | 0x08000000,
-		}
-	}
+	setPlatformSpecificAttrs(cmd)
 
 	// 获取标准输出和标准错误
 	stdout, err := cmd.StdoutPipe()
@@ -225,9 +219,8 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 				// Windows: 使用 taskkill 命令强制终止进程树
 				killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
 				// 隐藏 taskkill 的控制台窗口
-				killCmd.SysProcAttr = &syscall.SysProcAttr{
-					CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-				}
+				hideConsoleWindow(killCmd) // 调用平台特定函数
+
 				if err := killCmd.Run(); err != nil {
 					m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
 					// 回退到 Kill()

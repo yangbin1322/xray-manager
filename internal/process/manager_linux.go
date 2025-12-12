@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build linux
 
 package process
 
@@ -8,7 +8,7 @@ import (
 )
 
 func hideConsoleWindow(cmd *exec.Cmd) {
-	// macOS 没有控制台窗口的概念，不需要做任何事
+	// Linux 没有控制台窗口的概念，不需要做任何事
 }
 
 func setPlatformSpecificAttrs(cmd *exec.Cmd) {
