@@ -3,7 +3,7 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "._initwails3.exe"
+name: ".xray-manager.exe"
 arch: ${GOARCH}
 platform: "linux"
 version: "0.1.0"
@@ -17,12 +17,12 @@ license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/._initwails3.exe"
-    dst: "/usr/local/bin/._initwails3.exe"
+  - src: "./bin/.xray-manager.exe"
+    dst: "/usr/local/bin/.xray-manager.exe"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/._initwails3.exe.png"
-  - src: "./build/linux/._initwails3.exe.desktop"
-    dst: "/usr/share/applications/._initwails3.exe.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/.xray-manager.exe.png"
+  - src: "./build/linux/.xray-manager.exe.desktop"
+    dst: "/usr/share/applications/.xray-manager.exe.desktop"
 
 # Default dependencies for Debian 12/Ubuntu 22.04+ with WebKit 4.1
 depends:

@@ -8,7 +8,7 @@
         AllowPromptForPassword="false">
     </Settings>
     <Installer
-        Path="._initwails3.exe"
+        Path=".xray-manager.exe"
         Arguments=""
         InstallLocation="C:\Program Files\My Company\My Product">
     </Installer>
@@ -25,10 +25,10 @@
         </Capabilities>
         <Applications>
             <Application
-                Id="com.wails.._initwails3"
+                Id="com.wails..xray-manager"
                 Description="My Product Description"
                 DisplayName="My Product"
-                ExecutableName="._initwails3.exe"
+                ExecutableName=".xray-manager.exe"
                 EntryPoint="Windows.FullTrustApplication">
                 
             </Application>
@@ -47,7 +47,7 @@
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>
-    <SaveLocation PackagePath="._initwails3.msix" />
+    <SaveLocation PackagePath=".xray-manager.msix" />
     <PackageIntegrity>
         <CertificatePath></CertificatePath>
     </PackageIntegrity>

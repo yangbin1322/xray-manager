@@ -3,11 +3,11 @@ Version=1.0
 Name=My Product
 Comment=My Product Description
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/._initwails3.exe %u
+Exec=/usr/local/bin/.xray-manager.exe %u
 Terminal=false
 Type=Application
-Icon=._initwails3.exe
+Icon=.xray-manager.exe
 Categories=Utility;
-StartupWMClass=._initwails3.exe
+StartupWMClass=.xray-manager.exe
 
  

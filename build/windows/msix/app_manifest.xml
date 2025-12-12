@@ -6,7 +6,7 @@
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">
   
   <Identity 
-    Name="com.wails.._initwails3"
+    Name="com.wails..xray-manager"
     Publisher="CN=My Company"
     Version="0.1.0.0" 
     ProcessorArchitecture="x64" />
@@ -27,7 +27,7 @@
   </Resources>
   
   <Applications>
-    <Application Id="com.wails.._initwails3" Executable="._initwails3.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="com.wails..xray-manager" Executable=".xray-manager.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="My Product"
         Description="My Product Description"
@@ -39,7 +39,7 @@
       </uap:VisualElements>
       
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="._initwails3.exe" />
+        <desktop:Extension Category="windows.fullTrustProcess" Executable=".xray-manager.exe" />
         
       </Extensions>
     </Application>
