@@ -1,4 +1,4 @@
-name: Build macOS App
+name: Build macOS App with Debug
 
 on:
   push:
@@ -32,30 +32,85 @@ jobs:
             npm install
           fi
 
-      - name: Build
+      - name: Build with verbose output
         run: |
           export PATH=$PATH:$(go env GOPATH)/bin
           export CGO_ENABLED=1
-          wails3 build
+          wails3 build -v
 
-      - name: Prepare artifacts
+      - name: Debug - Find ALL build outputs
+        run: |
+          echo "=== 当前目录 ==="
+          pwd
+          echo ""
+          
+          echo "=== 搜索所有 .app 文件 ==="
+          find . -name "*.app" -type d 2>/dev/null || echo "未找到 .app 文件"
+          echo ""
+          
+          echo "=== 搜索所有可执行文件 ==="
+          find . -type f -perm +111 2>/dev/null | grep -v node_modules | grep -v ".git" || echo "未找到可执行文件"
+          echo ""
+          
+          echo "=== build 目录完整结构 ==="
+          ls -R build/ 2>/dev/null || echo "build 目录不存在"
+          echo ""
+          
+          echo "=== bin 目录 ==="
+          find . -name "bin" -type d -exec sh -c 'echo "目录: {}"; ls -la "{}"' \;
+          echo ""
+          
+          echo "=== dist 目录 ==="
+          ls -la dist/ 2>/dev/null || echo "dist 目录不存在"
+          echo ""
+          
+          echo "=== 所有最近修改的文件（最近 5 分钟）==="
+          find . -type f -mmin -5 -size +1M 2>/dev/null | head -20
+
+      - name: Package whatever we find
         run: |
           mkdir -p artifacts
           
-          # 查找 .app 文件
-          APP_FILE=$(find . -name "*.app" -type d | head -1)
+          # 策略 1: 查找 .app
+          APP_FILE=$(find . -name "*.app" -type d -not -path "*/node_modules/*" -not -path "*/.git/*" | head -1)
           
           if [ -n "$APP_FILE" ]; then
+            echo "✓ 找到 .app: $APP_FILE"
             cp -r "$APP_FILE" artifacts/
+          fi
           
-            # 创建压缩包方便下载
+          # 策略 2: 查找 build/bin 中的文件
+          if [ -d "build/bin" ] && [ "$(ls -A build/bin 2>/dev/null)" ]; then
+            echo "✓ 找到 build/bin 目录"
+            cp -r build/bin/* artifacts/ 2>/dev/null || true
+          fi
+          
+          # 策略 3: 查找任何名为 xray-manager 的可执行文件
+          find . -type f -name "xray-manager" -perm +111 -not -path "*/node_modules/*" -not -path "*/.git/*" | while read file; do
+            echo "✓ 找到可执行文件: $file"
+            cp "$file" artifacts/
+          done
+          
+          # 检查结果
+          echo ""
+          echo "=== artifacts 目录内容 ==="
+          ls -lah artifacts/ || echo "artifacts 为空"
+          
+          # 如果 artifacts 不为空，创建压缩包
+          if [ "$(ls -A artifacts/ 2>/dev/null)" ]; then
             cd artifacts
-            zip -r xray-manager-macos.zip *.app
+            tar -czf ../xray-manager-macos.tar.gz .
+            cd ..
+            mv xray-manager-macos.tar.gz artifacts/
+            echo "✓ 已创建压缩包"
           fi
 
-      - name: Upload Artifacts
+      - name: Upload Artifacts (if any)
         uses: actions/upload-artifact@v4
+        if: always()  # 即使构建失败也上传
         with:
-          name: xray-manager-macos
-          path: artifacts/
-          retention-days: 90  # 保存 90 天
+          name: xray-manager-macos-${{ github.sha }}
+          path: |
+            artifacts/
+            build/
+          retention-days: 7
