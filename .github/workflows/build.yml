@@ -25,7 +25,7 @@ jobs:
       - name: Build macOS ARM64
         run: |
           export CGO_ENABLED=1
-          wails3 build PRODUCTION=true
+          wails3 task darwin:build PRODUCTION=true
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
