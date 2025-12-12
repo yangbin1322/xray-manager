@@ -1,34 +1,61 @@
-name: Build Wails App
+name: Build macOS App
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build-macos:
-    name: Build macOS ARM64
     runs-on: macos-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: '1.23'
 
-      - name: Install Wails
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails v3
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
-      - name: Build macOS ARM64
+      - name: Install frontend dependencies
         run: |
+          if [ -d "frontend" ]; then
+            cd frontend
+            npm install
+          fi
+
+      - name: Build
+        run: |
+          export PATH=$PATH:$(go env GOPATH)/bin
           export CGO_ENABLED=1
           wails3 build
 
-      - name: Upload macOS Artifact
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          
+          # 查找 .app 文件
+          APP_FILE=$(find . -name "*.app" -type d | head -1)
+          
+          if [ -n "$APP_FILE" ]; then
+            cp -r "$APP_FILE" artifacts/
+          
+            # 创建压缩包方便下载
+            cd artifacts
+            zip -r xray-manager-macos.zip *.app
+          fi
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gost-manager-macos-arm64
-          path: build/bin/
+          name: xray-manager-macos
+          path: artifacts/
+          retention-days: 90  # 保存 90 天
