@@ -12,7 +12,7 @@
 *.out
 
 # Wails build directory
-build/
+
 frontend/dist/
 frontend/node_modules/
 
