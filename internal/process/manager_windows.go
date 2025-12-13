@@ -19,6 +19,6 @@ func hideConsoleWindow(cmd *exec.Cmd) {
 
 func setPlatformSpecificAttrs(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
 	}
 }
