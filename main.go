@@ -27,6 +27,7 @@ func main() {
 		Width:            1600,
 		Height:           800,
 		BackgroundColour: application.NewRGB(255, 255, 255),
+		Mac:              application.MacWindow{},
 	})
 
 	// 注册服务
@@ -67,6 +68,8 @@ func main() {
 	if systemTray != nil {
 		// 设置托盘图标提示
 		systemTray.SetTooltip("Xray 管理器")
+		systemTray.SetLabel("Xray 管理器")
+		systemTray.Show()
 
 		// 创建托盘菜单
 		menu := app.Menu.New()

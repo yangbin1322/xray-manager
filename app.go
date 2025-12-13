@@ -441,13 +441,8 @@ func (a *MyService) ExportConfig() (string, error) {
 // ImportConfig 导入配置
 func (a *MyService) ImportConfig() error {
 	// 选择导入文件
-	filePath, err := a.app.Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{
-		Title: "导出配置",
-		Filters: []application.FileFilter{
-			{DisplayName: "JSON Files (*.json)", Pattern: "*.json"},
-			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
-		},
-	}).PromptForSingleSelection()
+
+	filePath, err := a.app.Dialog.OpenFile().PromptForSingleSelection()
 	if err != nil {
 		return fmt.Errorf("选择文件失败: %v", err)
 	}
