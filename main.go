@@ -69,8 +69,7 @@ func main() {
 		// 设置托盘图标提示
 		systemTray.SetTooltip("Xray 管理器")
 		systemTray.SetLabel("Xray 管理器")
-		systemTray.Show()
-
+		//systemTray.SetIcon()
 		// 创建托盘菜单
 		menu := app.Menu.New()
 
