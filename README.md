@@ -78,7 +78,7 @@
 
 ```bash
 git clone <repository-url>
-cd gost-Forward
+cd xray-manager
 ```
 
 ### 2. 安装依赖
@@ -256,7 +256,7 @@ xray-configs/
 ## 项目结构
 
 ```
-gost-Forward/
+xray-manager/
 ├── main.go                        # 程序入口
 ├── app.go                         # 应用核心逻辑
 ├── wails.json                     # Wails 配置
