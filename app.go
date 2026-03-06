@@ -9,10 +9,12 @@ import (
 	"xray-manager/internal/group"
 	"xray-manager/internal/logger"
 	"xray-manager/internal/models"
+	"xray-manager/internal/parser"
 	"xray-manager/internal/process"
 	"xray-manager/internal/speedtest"
 	"xray-manager/internal/subscription"
 	"xray-manager/internal/utils"
+	"xray-manager/internal/xray"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -27,6 +29,7 @@ type MyService struct {
 	subscriptionManager *subscription.Manager
 	groupManager        *group.Manager
 	logFilter           *logger.Filter
+	sysProxyManager     *config.SysProxyManager
 	config              *models.Config
 	mu                  sync.RWMutex
 }
@@ -81,6 +84,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		a.handleSubscriptionUpdate,
 	)
 
+	// 初始化系统代理管理器
+	a.sysProxyManager = config.NewSysProxyManager()
+
 	// 初始化开机自启管理器
 	autostartManager, err := config.NewAutoStartManager("XrayManager")
 	if err != nil {
@@ -100,6 +106,12 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 初始化分组数据
 		if a.config.Groups == nil {
 			a.config.Groups = []models.Group{}
+		}
+		if a.config.LoadBalancers == nil {
+			a.config.LoadBalancers = []models.LoadBalanceNode{}
+		}
+		if a.config.ChainProxies == nil {
+			a.config.ChainProxies = []models.ChainProxy{}
 		}
 		a.groupManager.LoadGroups(a.config.Groups)
 
@@ -138,6 +150,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 func (a *MyService) ServiceShutdown() error {
 	a.log("正在停止所有进程...")
 	a.processManager.StopAll()
+
+	// 关闭系统代理
+	if a.sysProxyManager != nil && a.sysProxyManager.IsEnabled() {
+		_ = a.sysProxyManager.DisableSystemProxy()
+	}
 
 	// 停止所有订阅更新任务
 	if a.subscriptionManager != nil {
@@ -1048,4 +1065,494 @@ func (a *MyService) ClearLogs() {
 	if a.logFilter != nil {
 		a.logFilter.Clear()
 	}
+}
+
+// ==================== 规则排序 API (Feature 2) ====================
+
+// SaveRuleOrder 保存规则排序
+func (a *MyService) SaveRuleOrder(orderedIDs []string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 按照传入的 ID 顺序重新排列规则
+	ruleMap := make(map[string]models.ProxyRule)
+	for _, rule := range a.config.Rules {
+		ruleMap[rule.ID] = rule
+	}
+
+	newRules := make([]models.ProxyRule, 0, len(a.config.Rules))
+	usedIDs := make(map[string]bool)
+
+	for _, id := range orderedIDs {
+		if rule, ok := ruleMap[id]; ok {
+			newRules = append(newRules, rule)
+			usedIDs[id] = true
+		}
+	}
+
+	// 添加不在排序列表中的规则（保持原有位置）
+	for _, rule := range a.config.Rules {
+		if !usedIDs[rule.ID] {
+			newRules = append(newRules, rule)
+		}
+	}
+
+	a.config.Rules = newRules
+
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log("规则排序已保存")
+	return nil
+}
+
+// ==================== 批量导入 API (Feature 4) ====================
+
+// ImportShareLinks 批量导入分享链接
+func (a *MyService) ImportShareLinks(text string) (int, error) {
+	p := parser.NewShareLinkParser()
+	rules, errors := p.ParseMultipleLinks(text)
+
+	// 记录解析错误
+	for _, errMsg := range errors {
+		a.log(fmt.Sprintf("[导入] %s", errMsg))
+	}
+
+	if len(rules) == 0 {
+		return 0, fmt.Errorf("未解析到有效的代理链接")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	count := 0
+	for i := range rules {
+		rules[i].ID = generateUniqueRuleID(a.config.Rules)
+		rules[i].Enabled = false
+		rules[i].ProcessID = 0
+		rules[i].Source = "manual"
+		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		a.config.Rules = append(a.config.Rules, rules[i])
+		count++
+	}
+
+	if err := a.saveConfig(); err != nil {
+		return count, err
+	}
+
+	a.log(fmt.Sprintf("[导入] 批量导入完成，成功 %d 个节点，失败 %d 个", count, len(errors)))
+	return count, nil
+}
+
+// ==================== 系统代理 API (Feature 5) ====================
+
+// EnableSystemProxy 设置系统代理
+func (a *MyService) EnableSystemProxy(ruleID string) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// 查找规则
+	var targetRule *models.ProxyRule
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == ruleID {
+			targetRule = &a.config.Rules[i]
+			break
+		}
+	}
+
+	if targetRule == nil {
+		return fmt.Errorf("规则 %s 不存在", ruleID)
+	}
+
+	if !targetRule.Enabled {
+		return fmt.Errorf("请先启动节点再设置为系统代理")
+	}
+
+	if err := a.sysProxyManager.EnableSystemProxy(targetRule.LocalPort); err != nil {
+		return fmt.Errorf("设置系统代理失败: %v", err)
+	}
+
+	a.log(fmt.Sprintf("[系统代理] 已设置 %s (端口:%d) 为系统代理", targetRule.Alias, targetRule.LocalPort))
+	return nil
+}
+
+// DisableSystemProxy 取消系统代理
+func (a *MyService) DisableSystemProxy() error {
+	if err := a.sysProxyManager.DisableSystemProxy(); err != nil {
+		return fmt.Errorf("取消系统代理失败: %v", err)
+	}
+
+	a.log("[系统代理] 已取消系统代理")
+	return nil
+}
+
+// GetSystemProxyStatus 获取系统代理状态
+func (a *MyService) GetSystemProxyStatus() bool {
+	return a.sysProxyManager.IsEnabled()
+}
+
+// ==================== 选中节点测速 API (Feature 6) ====================
+
+// TestSelectedRulesSpeed 测试选中的规则速度
+func (a *MyService) TestSelectedRulesSpeed(ruleIDs []string) error {
+	a.mu.Lock()
+
+	// 收集选中的规则
+	rules := make([]*models.ProxyRule, 0)
+	idSet := make(map[string]bool)
+	for _, id := range ruleIDs {
+		idSet[id] = true
+	}
+
+	for i := range a.config.Rules {
+		if idSet[a.config.Rules[i].ID] {
+			a.config.Rules[i].TestStatus = "testing"
+			rules = append(rules, &a.config.Rules[i])
+		}
+	}
+	a.mu.Unlock()
+
+	if len(rules) == 0 {
+		return fmt.Errorf("未找到选中的节点")
+	}
+
+	a.log(fmt.Sprintf("开始测速选中的 %d 个节点", len(rules)))
+
+	// 异步执行批量测速
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		results := a.speedTestManager.TestRules(ctx, rules, 3)
+
+		a.mu.Lock()
+		defer a.mu.Unlock()
+
+		for _, result := range results {
+			for i := range a.config.Rules {
+				if a.config.Rules[i].ID == result.RuleID {
+					if result.Success {
+						a.config.Rules[i].Latency = result.Latency
+						a.config.Rules[i].DownloadSpeed = result.DownloadSpeed
+						a.config.Rules[i].TestStatus = "success"
+					} else {
+						a.config.Rules[i].TestStatus = "failed"
+					}
+					a.config.Rules[i].LastTestTime = result.Timestamp
+					a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: &a.config.Rules[i]})
+					break
+				}
+			}
+		}
+
+		_ = a.saveConfig()
+		a.log("选中节点测速完成")
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "allSpeedTestComplete"})
+	}()
+
+	return nil
+}
+
+// ==================== 负载均衡 API (Feature 7) ====================
+
+// GetLoadBalancers 获取所有负载均衡节点
+func (a *MyService) GetLoadBalancers() []models.LoadBalanceNode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.config.LoadBalancers
+}
+
+// AddLoadBalancer 添加负载均衡节点
+func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	lb.ID = fmt.Sprintf("lb_%d", time.Now().UnixNano())
+	lb.Enabled = false
+	lb.ProcessID = 0
+
+	if len(lb.NodeIDs) == 0 {
+		return fmt.Errorf("负载均衡节点需要至少一个子节点")
+	}
+
+	a.config.LoadBalancers = append(a.config.LoadBalancers, lb)
+
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log(fmt.Sprintf("添加负载均衡节点: %s", lb.Alias))
+	return nil
+}
+
+// DeleteLoadBalancer 删除负载均衡节点
+func (a *MyService) DeleteLoadBalancer(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i, lb := range a.config.LoadBalancers {
+		if lb.ID == id {
+			if lb.Enabled {
+				_ = a.processManager.Stop(lb.LocalPort)
+			}
+			a.config.LoadBalancers = append(a.config.LoadBalancers[:i], a.config.LoadBalancers[i+1:]...)
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("负载均衡节点不存在")
+}
+
+// StartLoadBalancer 启动负载均衡节点
+func (a *MyService) StartLoadBalancer(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.ID == id {
+			if lb.Enabled {
+				return fmt.Errorf("负载均衡节点已在运行")
+			}
+
+			// 收集子节点
+			nodes := make([]*models.ProxyRule, 0)
+			for _, nodeID := range lb.NodeIDs {
+				for j := range a.config.Rules {
+					if a.config.Rules[j].ID == nodeID {
+						nodes = append(nodes, &a.config.Rules[j])
+						break
+					}
+				}
+			}
+
+			if len(nodes) == 0 {
+				return fmt.Errorf("未找到有效的子节点")
+			}
+
+			// 构建负载均衡配置
+			xrayConfig, err := xray.BuildLoadBalanceConfig(lb, nodes)
+			if err != nil {
+				return err
+			}
+
+			configJSON, err := xrayConfig.ToJSON()
+			if err != nil {
+				return err
+			}
+
+			// 创建临时规则用于启动进程
+			tempRule := &models.ProxyRule{
+				ID:        lb.ID,
+				Alias:     lb.Alias,
+				LocalType: lb.LocalType,
+				LocalPort: lb.LocalPort,
+				Protocol:  "vmess", // 占位，不影响实际配置
+			}
+
+			// 使用 processManager 启动
+			if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+				return err
+			}
+
+			lb.Enabled = true
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("负载均衡节点不存在")
+}
+
+// StopLoadBalancer 停止负载均衡节点
+func (a *MyService) StopLoadBalancer(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.ID == id {
+			if !lb.Enabled {
+				return fmt.Errorf("负载均衡节点未运行")
+			}
+
+			if err := a.processManager.Stop(lb.LocalPort); err != nil {
+				lb.Enabled = false
+				return err
+			}
+
+			lb.Enabled = false
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("负载均衡节点不存在")
+}
+
+// ==================== 链式代理 API (Feature 8, 9) ====================
+
+// GetChainProxies 获取所有链式代理
+func (a *MyService) GetChainProxies() []models.ChainProxy {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.config.ChainProxies
+}
+
+// AddChainProxy 添加链式代理
+func (a *MyService) AddChainProxy(chain models.ChainProxy) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	chain.ID = fmt.Sprintf("chain_%d", time.Now().UnixNano())
+	chain.Enabled = false
+	chain.ProcessID = 0
+
+	if len(chain.ChainNodes) < 2 {
+		return fmt.Errorf("链式代理需要至少2个节点")
+	}
+
+	a.config.ChainProxies = append(a.config.ChainProxies, chain)
+
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log(fmt.Sprintf("添加链式代理: %s", chain.Alias))
+	return nil
+}
+
+// DeleteChainProxy 删除链式代理
+func (a *MyService) DeleteChainProxy(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i, chain := range a.config.ChainProxies {
+		if chain.ID == id {
+			if chain.Enabled {
+				_ = a.processManager.Stop(chain.LocalPort)
+			}
+			a.config.ChainProxies = append(a.config.ChainProxies[:i], a.config.ChainProxies[i+1:]...)
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("链式代理不存在")
+}
+
+// StartChainProxy 启动链式代理
+func (a *MyService) StartChainProxy(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.ID == id {
+			if chain.Enabled {
+				return fmt.Errorf("链式代理已在运行")
+			}
+
+			// 解析链中的节点（支持负载均衡节点）
+			chainRules, err := a.resolveChainNodes(chain.ChainNodes)
+			if err != nil {
+				return err
+			}
+
+			// 构建链式代理配置
+			xrayConfig, err := xray.BuildChainConfig(chain.LocalType, chain.LocalPort, chainRules)
+			if err != nil {
+				return err
+			}
+
+			configJSON, err := xrayConfig.ToJSON()
+			if err != nil {
+				return err
+			}
+
+			// 创建临时规则用于启动进程
+			tempRule := &models.ProxyRule{
+				ID:        chain.ID,
+				Alias:     chain.Alias,
+				LocalType: chain.LocalType,
+				LocalPort: chain.LocalPort,
+				Protocol:  "vmess", // 占位
+			}
+
+			if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+				return err
+			}
+
+			chain.Enabled = true
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("链式代理不存在")
+}
+
+// StopChainProxy 停止链式代理
+func (a *MyService) StopChainProxy(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.ID == id {
+			if !chain.Enabled {
+				return fmt.Errorf("链式代理未运行")
+			}
+
+			if err := a.processManager.Stop(chain.LocalPort); err != nil {
+				chain.Enabled = false
+				return err
+			}
+
+			chain.Enabled = false
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("链式代理不存在")
+}
+
+// resolveChainNodes 解析链中的节点（支持负载均衡节点）
+func (a *MyService) resolveChainNodes(nodeIDs []string) ([]*models.ProxyRule, error) {
+	var chainRules []*models.ProxyRule
+
+	for _, nodeID := range nodeIDs {
+		// 先查找是否为负载均衡节点
+		isLB := false
+		for _, lb := range a.config.LoadBalancers {
+			if lb.ID == nodeID {
+				isLB = true
+				// 取负载均衡中的第一个可用节点
+				for _, subNodeID := range lb.NodeIDs {
+					for j := range a.config.Rules {
+						if a.config.Rules[j].ID == subNodeID {
+							chainRules = append(chainRules, &a.config.Rules[j])
+							goto nextNode
+						}
+					}
+				}
+				return nil, fmt.Errorf("负载均衡节点 %s 中没有可用的子节点", lb.Alias)
+			}
+		}
+
+		if !isLB {
+			// 查找普通节点
+			found := false
+			for j := range a.config.Rules {
+				if a.config.Rules[j].ID == nodeID {
+					chainRules = append(chainRules, &a.config.Rules[j])
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("节点 %s 不存在", nodeID)
+			}
+		}
+	nextNode:
+	}
+
+	return chainRules, nil
 }

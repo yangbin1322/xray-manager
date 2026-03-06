@@ -1,3 +1,61 @@
+/* CSS 变量 - 浅色模式 (Feature 3) */
+:root {
+    --bg-color: #f5f5f5;
+    --text-color: #333;
+    --bg-white: #fff;
+    --bg-secondary: #f0f0f0;
+    --bg-input: #fff;
+    --border-color: #ddd;
+    --border-color-dark: #ccc;
+    --sidebar-bg: #2c3e50;
+    --sidebar-header-bg: #34495e;
+    --sidebar-text: #ecf0f1;
+    --sidebar-hover: #34495e;
+    --sidebar-active: #3498db;
+    --th-bg: #e8e8e8;
+    --th-hover: #d8d8d8;
+    --tr-hover: #f9f9f9;
+    --tr-selected: #e3f2fd;
+    --log-bg: #fafafa;
+    --dialog-bg: white;
+    --dialog-overlay: rgba(0, 0, 0, 0.5);
+    --form-section-bg: #fafafa;
+    --scrollbar-track: #f1f1f1;
+    --scrollbar-thumb: #888;
+    --scrollbar-thumb-hover: #555;
+    --btn-secondary-bg: #9E9E9E;
+    --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* 深色模式 (Feature 3) */
+[data-theme="dark"] {
+    --bg-color: #1a1a2e;
+    --text-color: #e0e0e0;
+    --bg-white: #16213e;
+    --bg-secondary: #0f3460;
+    --bg-input: #1a1a2e;
+    --border-color: #333;
+    --border-color-dark: #444;
+    --sidebar-bg: #0f0f23;
+    --sidebar-header-bg: #1a1a3e;
+    --sidebar-text: #e0e0e0;
+    --sidebar-hover: #1a1a3e;
+    --sidebar-active: #3498db;
+    --th-bg: #1a2744;
+    --th-hover: #233656;
+    --tr-hover: #1e2d4a;
+    --tr-selected: #1a3a5c;
+    --log-bg: #0d1b2a;
+    --dialog-bg: #16213e;
+    --dialog-overlay: rgba(0, 0, 0, 0.7);
+    --form-section-bg: #1a1a2e;
+    --scrollbar-track: #1a1a2e;
+    --scrollbar-thumb: #444;
+    --scrollbar-thumb-hover: #666;
+    --btn-secondary-bg: #555;
+    --shadow-color: rgba(0, 0, 0, 0.6);
+}
+
 /* 全局样式 */
 * {
     margin: 0;
@@ -8,8 +66,8 @@
 body {
     font-family: "Microsoft YaHei", Arial, sans-serif;
     font-size: 14px;
-    color: #333;
-    background-color: #f5f5f5;
+    color: var(--text-color);
+    background-color: var(--bg-color);
     overflow: hidden;
 }
 
@@ -27,17 +85,17 @@ body {
 .sidebar {
     width: 220px;
     min-width: 220px;
-    background: #2c3e50;
-    color: #ecf0f1;
+    background: var(--sidebar-bg);
+    color: var(--sidebar-text);
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #34495e;
+    border-right: 1px solid var(--sidebar-header-bg);
 }
 
 .sidebar-header {
     padding: 15px;
-    background: #34495e;
-    border-bottom: 1px solid #2c3e50;
+    background: var(--sidebar-header-bg);
+    border-bottom: 1px solid var(--sidebar-bg);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -73,11 +131,11 @@ body {
 }
 
 .group-item:hover {
-    background: #34495e;
+    background: var(--sidebar-hover);
 }
 
 .group-item.active {
-    background: #3498db;
+    background: var(--sidebar-active);
 }
 
 .group-info {
@@ -164,12 +222,65 @@ body {
     overflow: hidden;
 }
 
+/* 工具栏 (Feature 1, 3, 5) */
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 12px;
+    background-color: var(--bg-white);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.filter-group label {
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+.filter-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border-color-dark);
+    border-radius: 3px;
+    background: var(--bg-input);
+    color: var(--text-color);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+.filter-btn:hover {
+    background: var(--bg-secondary);
+}
+
+.filter-btn.active {
+    background: #2196F3;
+    color: white;
+    border-color: #2196F3;
+}
+
+.theme-toggle {
+    margin-left: auto;
+}
+
+.sysproxy-group {
+    display: flex;
+    gap: 6px;
+}
+
 /* 表格容器 */
 .table-container {
     height: 312px;
     overflow-y: auto;
-    border-bottom: 1px solid #ddd;
-    background-color: #fff;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-white);
 }
 
 table {
@@ -181,7 +292,7 @@ table {
 thead {
     position: sticky;
     top: 0;
-    background-color: #f0f0f0;
+    background-color: var(--bg-secondary);
     z-index: 10;
 }
 
@@ -189,8 +300,9 @@ th {
     padding: 10px 8px;
     text-align: center;
     font-weight: bold;
-    border: 1px solid #ddd;
-    background-color: #e8e8e8;
+    border: 1px solid var(--border-color);
+    background-color: var(--th-bg);
+    color: var(--text-color);
     position: relative;
 }
 /* 表头拖动条 */
@@ -210,7 +322,7 @@ th.sortable {
 }
 
 th.sortable:hover {
-    background-color: #d8d8d8;
+    background-color: var(--th-hover);
 }
 
 .sort-indicator {
@@ -221,54 +333,43 @@ th.sortable:hover {
 
 th.sortable[data-sort-direction="asc"] .sort-indicator::after {
     content: "▲";
-    color: #333;
+    color: var(--text-color);
 }
 
 th.sortable[data-sort-direction="desc"] .sort-indicator::after {
     content: "▼";
-    color: #333;
-}
-
-/* 可排序列样式 */
-th.sortable {
-    cursor: pointer;
-    user-select: none;
-    position: relative;
-}
-
-th.sortable:hover {
-    background-color: #d8d8d8;
-}
-
-.sort-indicator {
-    margin-left: 4px;
-    font-size: 10px;
-    color: #999;
-}
-
-th.sortable[data-sort-direction="asc"] .sort-indicator::after {
-    content: "▲";
-    color: #333;
-}
-
-th.sortable[data-sort-direction="desc"] .sort-indicator::after {
-    content: "▼";
-    color: #333;
+    color: var(--text-color);
 }
 
 td {
     padding: 8px;
     text-align: center;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     vertical-align: middle;
+    color: var(--text-color);
 }
 
 tbody tr:hover {
-    background-color: #f9f9f9;
+    background-color: var(--tr-hover);
 }
 
 tbody tr.selected {
-    background-color: #e3f2fd;
+    background-color: var(--tr-selected);
+}
+
+/* 拖拽排序样式 (Feature 2) */
+tbody tr {
+    cursor: grab;
+    transition: opacity 0.2s;
+}
+
+tbody tr.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+}
+
+tbody tr.drag-over {
+    border-top: 2px solid #2196F3;
 }
 
 /* 表格输入框和选择框 */
@@ -320,8 +421,8 @@ td input[type="checkbox"] {
 /* 日志容器 */
 .log-container {
     height: 208px;
-    background-color: #fff;
-    border-bottom: 1px solid #ddd;
+    background-color: var(--bg-white);
+    border-bottom: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
 }
@@ -331,22 +432,24 @@ td input[type="checkbox"] {
     justify-content: space-between;
     align-items: center;
     padding: 8px 12px;
-    background-color: #f0f0f0;
-    border-bottom: 1px solid #ddd;
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
     font-weight: bold;
+    color: var(--text-color);
 }
 
 .btn-small {
     padding: 4px 12px;
     font-size: 12px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--border-color-dark);
     border-radius: 3px;
-    background-color: #fff;
+    background-color: var(--bg-input);
+    color: var(--text-color);
     cursor: pointer;
 }
 
 .btn-small:hover {
-    background-color: #e0e0e0;
+    background-color: var(--bg-secondary);
 }
 
 #logTextarea {
@@ -357,15 +460,15 @@ td input[type="checkbox"] {
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
     line-height: 1.5;
-    background-color: #fafafa;
-    color: #333;
+    background-color: var(--log-bg);
+    color: var(--text-color);
 }
 
 /* 底部控制区域 */
 .control-container {
     height: 122px;
     padding: 16px;
-    background-color: #fff;
+    background-color: var(--bg-white);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -399,11 +502,13 @@ td input[type="checkbox"] {
 
 .search-input {
     padding: 8px 12px;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     font-size: 14px;
     width: 250px;
     transition: border-color 0.2s;
+    background-color: var(--bg-input);
+    color: var(--text-color);
 }
 
 .search-input:focus {
@@ -468,7 +573,7 @@ td input[type="checkbox"] {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: var(--dialog-overlay);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -476,9 +581,9 @@ td input[type="checkbox"] {
 }
 
 .dialog {
-    background-color: white;
+    background-color: var(--dialog-bg);
     border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px var(--shadow-color);
     width: 700px;
     max-width: 90%;
     max-height: 90vh;
@@ -495,8 +600,9 @@ td input[type="checkbox"] {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid #ddd;
+    border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    color: var(--text-color);
 }
 
 .dialog-header h3 {
@@ -528,16 +634,16 @@ td input[type="checkbox"] {
 
 .form-section {
     margin-bottom: 20px;
-    border: 1px solid #e0e0e0;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 16px;
-    background-color: #fafafa;
+    background-color: var(--form-section-bg);
 }
 
 .form-section h4 {
     margin: 0 0 12px 0;
     padding-bottom: 8px;
-    border-bottom: 1px solid #ddd;
+    border-bottom: 1px solid var(--border-color);
     color: #2196F3;
     font-size: 15px;
 }
@@ -562,7 +668,7 @@ td input[type="checkbox"] {
     margin-bottom: 6px;
     font-weight: bold;
     font-size: 13px;
-    color: #555;
+    color: var(--text-color);
 }
 
 .form-group input[type="text"],
@@ -570,9 +676,11 @@ td input[type="checkbox"] {
 .form-group select {
     width: 100%;
     padding: 8px 12px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--border-color-dark);
     border-radius: 4px;
     font-size: 14px;
+    background-color: var(--bg-input);
+    color: var(--text-color);
 }
 
 .form-group input[type="text"]:focus,
@@ -595,8 +703,8 @@ td input[type="checkbox"] {
     justify-content: flex-end;
     gap: 12px;
     padding: 16px 20px;
-    border-top: 1px solid #ddd;
-    background-color: #f9f9f9;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--form-section-bg);
     flex-shrink: 0;
 }
 
@@ -607,16 +715,16 @@ td input[type="checkbox"] {
 }
 
 ::-webkit-scrollbar-track {
-    background: #f1f1f1;
+    background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #888;
+    background: var(--scrollbar-thumb);
     border-radius: 5px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #555;
+    background: var(--scrollbar-thumb-hover);
 }
 
 /* 状态指示器 */
@@ -736,10 +844,84 @@ td input[type="checkbox"] {
 }
 
 #subscriptionsTable th {
-    background: #f0f0f0;
+    background: var(--bg-secondary);
     font-weight: bold;
+    color: var(--text-color);
 }
 
 #subscriptionsTable tr:hover {
-    background: #f9f9f9;
+    background: var(--tr-hover);
+}
+
+/* 节点选择列表 (Feature 7, 8) */
+.node-select-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 8px;
+    background: var(--bg-input);
+}
+
+.node-select-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-color);
+}
+
+.node-select-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+}
+
+/* 链式代理已选节点 (Feature 8) */
+.chain-selected-nodes {
+    min-height: 60px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 8px;
+    background: var(--bg-input);
+}
+
+.chain-node-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    margin: 2px 4px;
+    background: #2196F3;
+    color: white;
+    border-radius: 12px;
+    font-size: 12px;
+    cursor: grab;
+}
+
+.chain-node-item .chain-remove {
+    cursor: pointer;
+    font-weight: bold;
+    margin-left: 4px;
+}
+
+.chain-node-item .chain-arrow {
+    margin: 0 4px;
+    color: #999;
+}
+
+/* 日志搜索和过滤 - 深色模式兼容 */
+.log-search {
+    background-color: var(--bg-input);
+    color: var(--text-color);
+}
+
+.log-filter {
+    background-color: var(--bg-input);
+    color: var(--text-color);
+}
+
+/* 侧边栏 footer 深色兼容 */
+.sidebar-footer {
+    border-top: 1px solid var(--sidebar-header-bg);
 }

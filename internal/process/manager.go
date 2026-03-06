@@ -145,6 +145,65 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	return nil
 }
 
+// StartWithConfig 使用自定义配置 JSON 启动进程
+func (m *Manager) StartWithConfig(rule *models.ProxyRule, configJSON string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 检查端口是否已被占用
+	if existingProcess, exists := m.processes[rule.LocalPort]; exists {
+		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
+	}
+
+	// 保存配置文件
+	configPath := filepath.Join(m.configDir, fmt.Sprintf("config_%d.json", rule.LocalPort))
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		return fmt.Errorf("保存配置文件失败: %v", err)
+	}
+
+	m.log(fmt.Sprintf("[启动] %s - 端口:%d", rule.Alias, rule.LocalPort))
+
+	// 提取 xray 二进制文件
+	xrayBinary, err := assets.ExtractXrayBinary()
+	if err != nil {
+		return fmt.Errorf("提取 xray 二进制文件失败: %v", err)
+	}
+
+	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
+	setPlatformSpecificAttrs(cmd)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("获取标准输出失败: %v", err)
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("获取标准错误失败: %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("启动 xray 进程失败: %v", err)
+	}
+
+	processInfo := &ProcessInfo{
+		Cmd:        cmd,
+		Rule:       rule,
+		ConfigPath: configPath,
+		Cancel:     make(chan struct{}),
+	}
+
+	m.processes[rule.LocalPort] = processInfo
+	rule.ProcessID = cmd.Process.Pid
+
+	go m.readLog(stdout, rule.Alias, "INFO", processInfo)
+	go m.readLog(stderr, rule.Alias, "ERROR", processInfo)
+
+	m.log(fmt.Sprintf("[成功] %s 已启动，PID: %d", rule.Alias, cmd.Process.Pid))
+
+	return nil
+}
+
 // Stop 停止代理规则
 func (m *Manager) Stop(localPort int) error {
 	m.mu.Lock()

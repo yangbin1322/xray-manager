@@ -11,6 +11,19 @@ type XrayConfig struct {
 	Log       *LogConfig       `json:"log,omitempty"`
 	Inbounds  []InboundConfig  `json:"inbounds"`
 	Outbounds []OutboundConfig `json:"outbounds"`
+	Routing   *RoutingConfig   `json:"routing,omitempty"`
+}
+
+// RoutingConfig 路由配置
+type RoutingConfig struct {
+	Rules []RoutingRule `json:"rules"`
+}
+
+// RoutingRule 路由规则
+type RoutingRule struct {
+	Type        string   `json:"type"`
+	InboundTag  []string `json:"inboundTag,omitempty"`
+	OutboundTag string   `json:"outboundTag"`
 }
 
 // LogConfig 日志配置
@@ -33,6 +46,13 @@ type OutboundConfig struct {
 	Settings       map[string]interface{} `json:"settings,omitempty"`
 	StreamSettings *StreamSettings        `json:"streamSettings,omitempty"`
 	Tag            string                 `json:"tag"`
+	ProxySettings  *ProxySettingsConfig   `json:"proxySettings,omitempty"`
+}
+
+// ProxySettingsConfig 代理链配置（指定下一跳）
+type ProxySettingsConfig struct {
+	Tag                string `json:"tag"`
+	TransportLayer     bool   `json:"transportLayer"`
 }
 
 // StreamSettings 传输层配置
@@ -352,6 +372,186 @@ func buildSOCKSSettings(rule *models.ProxyRule) map[string]interface{} {
 	return map[string]interface{}{
 		"servers": []map[string]interface{}{server},
 	}
+}
+
+// BuildLoadBalanceConfig 构建负载均衡配置
+// nodes: 子节点列表，lb: 负载均衡节点本身
+func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRule) (*XrayConfig, error) {
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("负载均衡节点需要至少一个子节点")
+	}
+
+	config := &XrayConfig{
+		Log: &LogConfig{
+			Loglevel: "warning",
+		},
+	}
+
+	// 入站
+	inbound := InboundConfig{
+		Listen:   "0.0.0.0",
+		Port:     lb.LocalPort,
+		Protocol: lb.LocalType,
+		Tag:      "inbound",
+	}
+	switch lb.LocalType {
+	case "socks5", "socks":
+		inbound.Settings = map[string]interface{}{
+			"auth": "noauth",
+			"udp":  true,
+		}
+	case "http":
+		inbound.Settings = map[string]interface{}{
+			"allowTransparent": false,
+		}
+	}
+	config.Inbounds = []InboundConfig{inbound}
+
+	// 为每个子节点创建出站
+	var outbounds []OutboundConfig
+	var balancerSelectors []string
+
+	for i, node := range nodes {
+		tag := fmt.Sprintf("proxy_%d", i)
+		outbound := OutboundConfig{
+			Tag:      tag,
+			Protocol: node.Protocol,
+		}
+
+		switch node.Protocol {
+		case "shadowsocks":
+			outbound.Settings = buildShadowsocksSettings(node)
+		case "vmess":
+			outbound.Settings = buildVMessSettings(node)
+		case "vless":
+			outbound.Settings = buildVLessSettings(node)
+		case "trojan":
+			outbound.Settings = buildTrojanSettings(node)
+		case "http":
+			outbound.Settings = buildHTTPSettings(node)
+		case "socks":
+			outbound.Settings = buildSOCKSSettings(node)
+		}
+		outbound.StreamSettings = buildStreamSettings(node)
+
+		outbounds = append(outbounds, outbound)
+		balancerSelectors = append(balancerSelectors, tag)
+	}
+
+	// 直连和黑洞
+	outbounds = append(outbounds, OutboundConfig{Protocol: "freedom", Tag: "direct"})
+	outbounds = append(outbounds, OutboundConfig{Protocol: "blackhole", Tag: "block"})
+
+	config.Outbounds = outbounds
+
+	// 路由：入站 → 第一个节点，若失败则下一个（通过 Xray 的 balancer 实现 fallback）
+	// 注意：Xray 原生不直接支持 outbound fallback，使用路由规则按顺序尝试
+	// 这里我们使用第一个节点作为默认出站，客户端应用层实现 fallback
+	config.Routing = &RoutingConfig{
+		Rules: []RoutingRule{
+			{
+				Type:        "field",
+				InboundTag:  []string{"inbound"},
+				OutboundTag: balancerSelectors[0],
+			},
+		},
+	}
+
+	return config, nil
+}
+
+// BuildChainConfig 构建链式代理配置
+// chainRules: 按顺序排列的代理节点列表（最后一个是落地节点）
+// localType: 本地代理类型, localPort: 本地代理端口
+func BuildChainConfig(localType string, localPort int, chainRules []*models.ProxyRule) (*XrayConfig, error) {
+	if len(chainRules) < 2 {
+		return nil, fmt.Errorf("链式代理需要至少2个节点")
+	}
+
+	config := &XrayConfig{
+		Log: &LogConfig{
+			Loglevel: "warning",
+		},
+	}
+
+	// 入站
+	inbound := InboundConfig{
+		Listen:   "0.0.0.0",
+		Port:     localPort,
+		Protocol: localType,
+		Tag:      "inbound",
+	}
+	switch localType {
+	case "socks5", "socks":
+		inbound.Settings = map[string]interface{}{
+			"auth": "noauth",
+			"udp":  true,
+		}
+	case "http":
+		inbound.Settings = map[string]interface{}{
+			"allowTransparent": false,
+		}
+	}
+	config.Inbounds = []InboundConfig{inbound}
+
+	// 构建出站链
+	// Xray chain: proxy_0 -> proxy_1 -> ... -> proxy_n
+	// 通过 proxySettings.tag 链接
+	var outbounds []OutboundConfig
+
+	for i, rule := range chainRules {
+		tag := fmt.Sprintf("chain_%d", i)
+		outbound := OutboundConfig{
+			Tag:      tag,
+			Protocol: rule.Protocol,
+		}
+
+		switch rule.Protocol {
+		case "shadowsocks":
+			outbound.Settings = buildShadowsocksSettings(rule)
+		case "vmess":
+			outbound.Settings = buildVMessSettings(rule)
+		case "vless":
+			outbound.Settings = buildVLessSettings(rule)
+		case "trojan":
+			outbound.Settings = buildTrojanSettings(rule)
+		case "http":
+			outbound.Settings = buildHTTPSettings(rule)
+		case "socks":
+			outbound.Settings = buildSOCKSSettings(rule)
+		}
+		outbound.StreamSettings = buildStreamSettings(rule)
+
+		// 链式代理：除了最后一个节点，每个节点指向下一跳
+		if i < len(chainRules)-1 {
+			nextTag := fmt.Sprintf("chain_%d", i+1)
+			outbound.ProxySettings = &ProxySettingsConfig{
+				Tag:            nextTag,
+				TransportLayer: true,
+			}
+		}
+
+		outbounds = append(outbounds, outbound)
+	}
+
+	// 直连和黑洞
+	outbounds = append(outbounds, OutboundConfig{Protocol: "freedom", Tag: "direct"})
+	outbounds = append(outbounds, OutboundConfig{Protocol: "blackhole", Tag: "block"})
+
+	config.Outbounds = outbounds
+
+	// 路由：将入站流量导向第一个节点
+	config.Routing = &RoutingConfig{
+		Rules: []RoutingRule{
+			{
+				Type:        "field",
+				InboundTag:  []string{"inbound"},
+				OutboundTag: "chain_0",
+			},
+		},
+	}
+
+	return config, nil
 }
 
 // ToJSON 将配置转换为 JSON 字符串

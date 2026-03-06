@@ -27,12 +27,34 @@
                 </div>
             </div>
             <div class="sidebar-footer">
+                <button id="addLoadBalanceBtn" class="btn-small btn-block" style="margin-bottom:5px;">添加负载均衡</button>
+                <button id="addChainProxyBtn" class="btn-small btn-block" style="margin-bottom:5px;">添加链式代理</button>
                 <button id="manageSubscriptionsBtn" class="btn-small btn-block">订阅管理</button>
             </div>
         </div>
 
         <!-- 主内容区域 -->
         <div class="main-content">
+        <!-- 工具栏区域 -->
+        <div class="toolbar">
+            <!-- 状态过滤 (Feature 1) -->
+            <div class="filter-group">
+                <label>状态过滤：</label>
+                <button class="filter-btn active" data-filter="all">全部</button>
+                <button class="filter-btn" data-filter="running">已启动</button>
+                <button class="filter-btn" data-filter="stopped">未启动</button>
+            </div>
+            <!-- 深色模式切换 (Feature 3) -->
+            <div class="theme-toggle">
+                <button id="themeToggleBtn" class="btn-icon" title="切换深色模式">☀</button>
+            </div>
+            <!-- 系统代理 (Feature 5) -->
+            <div class="sysproxy-group">
+                <button id="enableSysProxyBtn" class="btn-action btn-small">设为系统代理</button>
+                <button id="disableSysProxyBtn" class="btn-action btn-small" style="display:none;">取消系统代理</button>
+            </div>
+        </div>
+
         <!-- 转发规则表格区域 -->
         <div class="table-container">
             <table id="rulesTable">
@@ -89,11 +111,12 @@
                 <button id="startSelectedBtn" class="btn-action">启动选中</button>
                 <button id="stopSelectedBtn" class="btn-action">停止选中</button>
                 <button id="deleteSelectedBtn" class="btn-action btn-danger">删除选中</button>
-                <button id="testAllSpeedBtn" class="btn-action">批量测速</button>
+                <button id="testSelectedSpeedBtn" class="btn-action">选中测速</button>
                 <button id="exportSpeedReportBtn" class="btn-action">导出测速报告</button>
             </div>
             <div class="control-right">
                 <input type="text" id="nodeSearchInput" placeholder="搜索节点（别名/地址/协议）..." class="search-input">
+                <button id="batchImportBtn" class="btn-action">批量导入</button>
                 <button id="importConfigBtn" class="btn-action">导入规则</button>
                 <button id="exportConfigBtn" class="btn-action">导出规则</button>
                 <button id="addRuleBtn" class="btn-primary">添加规则</button>
@@ -453,6 +476,113 @@
             <div class="dialog-footer">
                 <button class="btn-secondary" onclick="closeRuleDialog()">取消</button>
                 <button class="btn-primary" onclick="saveRule()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量导入对话框 (Feature 4) -->
+    <div id="batchImportDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog">
+            <div class="dialog-header">
+                <h3>批量导入节点</h3>
+                <button class="dialog-close" onclick="closeBatchImportDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="form-group">
+                    <label>粘贴分享链接（每行一个，支持 vmess:// vless:// ss:// trojan://）：</label>
+                    <textarea id="batchImportText" rows="10" style="width:100%;font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:4px;resize:vertical;" placeholder="vmess://...&#10;vless://...&#10;ss://...&#10;trojan://..."></textarea>
+                </div>
+                <div style="margin-top:8px;">
+                    <button class="btn-small" onclick="pasteFromClipboard()">从剪贴板粘贴</button>
+                </div>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeBatchImportDialog()">取消</button>
+                <button class="btn-primary" onclick="doBatchImport()">导入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 负载均衡对话框 (Feature 7) -->
+    <div id="loadBalanceDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog dialog-large">
+            <div class="dialog-header">
+                <h3 id="lbDialogTitle">添加负载均衡节点</h3>
+                <button class="dialog-close" onclick="closeLBDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="form-group">
+                    <label>别名：</label>
+                    <input type="text" id="lbAlias" placeholder="例如：负载均衡-美国">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>本地代理类型：</label>
+                        <select id="lbLocalType">
+                            <option value="socks">socks</option>
+                            <option value="http">http</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>本地代理端口：</label>
+                        <input type="number" id="lbLocalPort" placeholder="例如：10900" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>选择子节点（勾选要加入的节点）：</label>
+                    <div id="lbNodeList" class="node-select-list">
+                        <!-- 节点列表将动态生成 -->
+                    </div>
+                </div>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeLBDialog()">取消</button>
+                <button class="btn-primary" onclick="saveLB()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 链式代理对话框 (Feature 8) -->
+    <div id="chainProxyDialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog dialog-large">
+            <div class="dialog-header">
+                <h3 id="chainDialogTitle">添加链式代理</h3>
+                <button class="dialog-close" onclick="closeChainDialog()">&times;</button>
+            </div>
+            <div class="dialog-body">
+                <div class="form-group">
+                    <label>别名：</label>
+                    <input type="text" id="chainAlias" placeholder="例如：链式-HK→US">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>本地代理类型：</label>
+                        <select id="chainLocalType">
+                            <option value="socks">socks</option>
+                            <option value="http">http</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>本地代理端口：</label>
+                        <input type="number" id="chainLocalPort" placeholder="例如：10901" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>选择链中的节点（按顺序添加，支持普通节点和负载均衡节点）：</label>
+                    <div id="chainNodeList" class="node-select-list">
+                        <!-- 节点列表将动态生成 -->
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>已选节点（拖拽调整顺序，流量方向: 第1个 → 第2个 → ... → 落地）：</label>
+                    <div id="chainSelectedNodes" class="chain-selected-nodes">
+                        <!-- 已选节点将动态生成 -->
+                    </div>
+                </div>
+            </div>
+            <div class="dialog-footer">
+                <button class="btn-secondary" onclick="closeChainDialog()">取消</button>
+                <button class="btn-primary" onclick="saveChain()">保存</button>
             </div>
         </div>
     </div>

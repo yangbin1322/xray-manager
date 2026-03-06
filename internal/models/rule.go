@@ -90,10 +90,12 @@ type H2Settings struct {
 
 // Config 配置文件结构
 type Config struct {
-	AutoStart     bool           `json:"autoStart"`     // 开机自启
-	Rules         []ProxyRule    `json:"rules"`         // 代理规则列表
-	Groups        []Group        `json:"groups"`        // 分组列表
-	Subscriptions []Subscription `json:"subscriptions"` // 订阅列表
+	AutoStart      bool              `json:"autoStart"`      // 开机自启
+	Rules          []ProxyRule       `json:"rules"`          // 代理规则列表
+	Groups         []Group           `json:"groups"`         // 分组列表
+	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
+	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 负载均衡节点列表
+	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
 }
 
 // Group 节点分组
@@ -129,4 +131,30 @@ type SpeedTestResult struct {
 	Success       bool    `json:"success"`
 	Error         string  `json:"error"`
 	Timestamp     string  `json:"timestamp"`
+}
+
+// LoadBalanceNode 负载均衡节点
+type LoadBalanceNode struct {
+	ID        string   `json:"id"`        // 唯一标识
+	Alias     string   `json:"alias"`     // 别名
+	LocalType string   `json:"localType"` // 本地代理类型: socks 或 http
+	LocalPort int      `json:"localPort"` // 本地代理端口
+	NodeIDs   []string `json:"nodeIds"`   // 子节点 ID 列表
+	Enabled   bool     `json:"enabled"`   // 启动状态
+	ProcessID int      `json:"processId"` // 进程ID
+	GroupID   string   `json:"groupId"`   // 所属分组ID
+	GroupName string   `json:"groupName"` // 所属分组名称
+}
+
+// ChainProxy 链式代理配置
+type ChainProxy struct {
+	ID         string   `json:"id"`         // 唯一标识
+	Alias      string   `json:"alias"`      // 别名
+	LocalType  string   `json:"localType"`  // 本地代理类型
+	LocalPort  int      `json:"localPort"`  // 本地代理端口
+	ChainNodes []string `json:"chainNodes"` // 链中的节点ID列表（可以包含普通节点或LB节点ID）
+	Enabled    bool     `json:"enabled"`    // 启动状态
+	ProcessID  int      `json:"processId"`  // 进程ID
+	GroupID    string   `json:"groupId"`    // 所属分组ID
+	GroupName  string   `json:"groupName"`  // 所属分组名称
 }

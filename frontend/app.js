@@ -4,6 +4,8 @@ let editingRuleId = null;
 let sortColumn = null; // 当前排序列
 let sortDirection = 'asc'; // 排序方向: asc, desc
 let searchKeyword = ''; // 节点搜索关键字
+let statusFilter = 'all'; // 状态过滤: all, running, stopped (Feature 1)
+let dragSrcRow = null; // 拖拽源行 (Feature 2)
 import { MyService } from "./bindings/xray-manager/index.js";
 import { Events } from '@wailsio/runtime';
 import * as Extended from "./app-extended.js";
@@ -21,6 +23,9 @@ window.filterRulesByGroup = filterRulesByGroup;
 
 // 初始化应用
 async function initializeApp() {
+    // 初始化深色模式 (Feature 3)
+    initTheme();
+
     // 监听后端事件
     listenToBackendEvents();
     // 绑定事件监听器
@@ -37,6 +42,9 @@ async function initializeApp() {
 
     // 设置日志过滤
     Extended.setupLogFiltering();
+
+    // 加载系统代理状态 (Feature 5)
+    await loadSysProxyStatus();
 }
 
 // 绑定事件监听器
@@ -58,13 +66,35 @@ function bindEventListeners() {
     });
     document.getElementById('importConfigBtn').addEventListener('click', importConfig);
     document.getElementById('exportConfigBtn').addEventListener('click', exportConfig);
-    document.getElementById('testAllSpeedBtn').addEventListener('click', Extended.testAllRulesSpeed);
+    document.getElementById('testSelectedSpeedBtn').addEventListener('click', testSelectedRulesSpeed);
     document.getElementById('exportSpeedReportBtn').addEventListener('click', exportSpeedReport);
+    document.getElementById('batchImportBtn').addEventListener('click', openBatchImportDialog);
 
     // 新功能按钮
     document.getElementById('addGroupBtn').addEventListener('click', Extended.openAddGroupDialog);
     document.getElementById('manageSubscriptionsBtn').addEventListener('click', Extended.openSubscriptionDialog);
     document.getElementById('addSubscriptionBtn').addEventListener('click', Extended.openAddSubscriptionDialog);
+
+    // 负载均衡和链式代理 (Feature 7, 8)
+    document.getElementById('addLoadBalanceBtn').addEventListener('click', openLBDialog);
+    document.getElementById('addChainProxyBtn').addEventListener('click', openChainDialog);
+
+    // 深色模式切换 (Feature 3)
+    document.getElementById('themeToggleBtn').addEventListener('click', toggleTheme);
+
+    // 系统代理 (Feature 5)
+    document.getElementById('enableSysProxyBtn').addEventListener('click', enableSysProxy);
+    document.getElementById('disableSysProxyBtn').addEventListener('click', disableSysProxy);
+
+    // 状态过滤 (Feature 1)
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            statusFilter = btn.getAttribute('data-filter');
+            renderRulesTable();
+        });
+    });
 
     // 表格排序
     document.querySelectorAll('th.sortable').forEach(th => {
@@ -132,6 +162,13 @@ function renderRulesTable() {
     // 应用分组过滤
     if (Extended.currentGroupFilter !== null && Extended.currentGroupFilter !== undefined) {
         filteredRules = filteredRules.filter(rule => rule.groupId === Extended.currentGroupFilter);
+    }
+
+    // 应用状态过滤 (Feature 1)
+    if (statusFilter === 'running') {
+        filteredRules = filteredRules.filter(rule => rule.enabled);
+    } else if (statusFilter === 'stopped') {
+        filteredRules = filteredRules.filter(rule => !rule.enabled);
     }
 
     // 应用搜索过滤
@@ -207,6 +244,7 @@ function setSortColumn(column) {
 function createRuleRow(rule) {
     const row = document.createElement('tr');
     row.dataset.ruleId = rule.id;
+    row.draggable = true; // Feature 2: 启用拖拽
 
     // 格式化延迟显示
     let latencyText = '-';
@@ -251,6 +289,7 @@ function createRuleRow(rule) {
         <td>
             <button class="btn-edit">编辑</button>
             <button class="btn-test" title="测速">测速</button>
+            <button class="btn-sysproxy" title="设为系统代理" style="padding:4px 6px;margin:0 2px;border:none;background:#9b59b6;color:white;border-radius:3px;cursor:pointer;font-size:11px;">代理</button>
             <button class="btn-delete">删除</button>
         </td>
     `;
@@ -273,8 +312,373 @@ function createRuleRow(rule) {
     const testBtn = row.querySelector('.btn-test');
     testBtn.addEventListener('click', () => Extended.testRuleSpeed(rule.id));
 
+    // 绑定系统代理事件 (Feature 5)
+    const sysProxyBtn = row.querySelector('.btn-sysproxy');
+    sysProxyBtn.addEventListener('click', () => setRuleAsSystemProxy(rule.id));
+
+    // 拖拽排序事件 (Feature 2)
+    row.addEventListener('dragstart', handleDragStart);
+    row.addEventListener('dragover', handleDragOver);
+    row.addEventListener('dragenter', handleDragEnter);
+    row.addEventListener('dragleave', handleDragLeave);
+    row.addEventListener('drop', handleDrop);
+    row.addEventListener('dragend', handleDragEnd);
+
     return row;
 }
+
+// ==================== 拖拽排序 (Feature 2) ====================
+
+function handleDragStart(e) {
+    dragSrcRow = this;
+    this.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', this.dataset.ruleId);
+}
+
+function handleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+}
+
+function handleDragEnter(e) {
+    e.preventDefault();
+    this.classList.add('drag-over');
+}
+
+function handleDragLeave(e) {
+    this.classList.remove('drag-over');
+}
+
+function handleDrop(e) {
+    e.preventDefault();
+    this.classList.remove('drag-over');
+
+    if (dragSrcRow === this) return;
+
+    const srcId = dragSrcRow.dataset.ruleId;
+    const destId = this.dataset.ruleId;
+
+    // 在 rules 数组中交换位置
+    const srcIndex = rules.findIndex(r => r.id === srcId);
+    const destIndex = rules.findIndex(r => r.id === destId);
+
+    if (srcIndex === -1 || destIndex === -1) return;
+
+    // 移除源元素并插入到目标位置
+    const [moved] = rules.splice(srcIndex, 1);
+    rules.splice(destIndex, 0, moved);
+
+    // 重新渲染表格
+    renderRulesTable();
+
+    // 保存排序到后端
+    const orderedIDs = rules.map(r => r.id);
+    MyService.SaveRuleOrder(orderedIDs).catch(err => {
+        addLog(`[错误] 保存排序失败: ${err}`);
+    });
+}
+
+function handleDragEnd(e) {
+    this.classList.remove('dragging');
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    dragSrcRow = null;
+}
+
+// ==================== 深色模式 (Feature 3) ====================
+
+function initTheme() {
+    const savedTheme = localStorage.getItem('xray-manager-theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const newTheme = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('xray-manager-theme', newTheme);
+    updateThemeIcon(newTheme);
+}
+
+function updateThemeIcon(theme) {
+    const btn = document.getElementById('themeToggleBtn');
+    if (btn) {
+        btn.textContent = theme === 'dark' ? '☾' : '☀';
+        btn.title = theme === 'dark' ? '切换浅色模式' : '切换深色模式';
+    }
+}
+
+// ==================== 批量导入 (Feature 4) ====================
+
+function openBatchImportDialog() {
+    document.getElementById('batchImportText').value = '';
+    document.getElementById('batchImportDialog').style.display = 'flex';
+}
+
+window.closeBatchImportDialog = function() {
+    document.getElementById('batchImportDialog').style.display = 'none';
+};
+
+window.pasteFromClipboard = async function() {
+    try {
+        const text = await navigator.clipboard.readText();
+        document.getElementById('batchImportText').value = text;
+    } catch (error) {
+        addLog(`[错误] 读取剪贴板失败: ${error}`);
+        alert('读取剪贴板失败，请手动粘贴');
+    }
+};
+
+window.doBatchImport = async function() {
+    const text = document.getElementById('batchImportText').value.trim();
+    if (!text) {
+        alert('请输入分享链接');
+        return;
+    }
+
+    try {
+        const count = await MyService.ImportShareLinks(text);
+        closeBatchImportDialog();
+        await loadRules();
+        addLog(`[导入] 成功导入 ${count} 个节点`);
+        alert(`成功导入 ${count} 个节点`);
+    } catch (error) {
+        addLog(`[错误] 批量导入失败: ${error}`);
+        alert(`导入失败: ${error}`);
+    }
+};
+
+// ==================== 系统代理 (Feature 5) ====================
+
+async function loadSysProxyStatus() {
+    try {
+        const enabled = await MyService.GetSystemProxyStatus();
+        document.getElementById('enableSysProxyBtn').style.display = enabled ? 'none' : '';
+        document.getElementById('disableSysProxyBtn').style.display = enabled ? '' : 'none';
+    } catch (error) {
+        // 忽略
+    }
+}
+
+async function setRuleAsSystemProxy(ruleId) {
+    try {
+        await MyService.EnableSystemProxy(ruleId);
+        addLog('[系统代理] 设置成功');
+        await loadSysProxyStatus();
+    } catch (error) {
+        addLog(`[错误] 设置系统代理失败: ${error}`);
+        alert(`设置系统代理失败: ${error}`);
+    }
+}
+
+async function enableSysProxy() {
+    const selectedIds = getSelectedRuleIds();
+    if (selectedIds.length !== 1) {
+        alert('请选中一个节点设置为系统代理');
+        return;
+    }
+    await setRuleAsSystemProxy(selectedIds[0]);
+}
+
+async function disableSysProxy() {
+    try {
+        await MyService.DisableSystemProxy();
+        addLog('[系统代理] 已取消');
+        await loadSysProxyStatus();
+    } catch (error) {
+        addLog(`[错误] 取消系统代理失败: ${error}`);
+        alert(`取消系统代理失败: ${error}`);
+    }
+}
+
+// ==================== 选中节点测速 (Feature 6) ====================
+
+async function testSelectedRulesSpeed() {
+    const selectedIds = getSelectedRuleIds();
+    if (selectedIds.length === 0) {
+        alert('请先选择要测速的节点');
+        return;
+    }
+
+    if (!confirm(`确定要测速选中的 ${selectedIds.length} 个节点吗？`)) {
+        return;
+    }
+
+    try {
+        await MyService.TestSelectedRulesSpeed(selectedIds);
+        addLog(`[测速] 开始测速 ${selectedIds.length} 个节点...`);
+    } catch (error) {
+        addLog(`[错误] 测速失败: ${error}`);
+    }
+}
+
+// ==================== 负载均衡 (Feature 7) ====================
+
+function openLBDialog() {
+    document.getElementById('lbAlias').value = '';
+    document.getElementById('lbLocalType').value = 'socks';
+    document.getElementById('lbLocalPort').value = '';
+
+    // 生成节点选择列表
+    const list = document.getElementById('lbNodeList');
+    list.innerHTML = '';
+    rules.forEach(rule => {
+        const item = document.createElement('div');
+        item.className = 'node-select-item';
+        item.innerHTML = `<input type="checkbox" value="${rule.id}"> <span>${escapeHtml(rule.alias)} (${escapeHtml(rule.protocol)} - ${escapeHtml(rule.serverAddr)})</span>`;
+        list.appendChild(item);
+    });
+
+    document.getElementById('loadBalanceDialog').style.display = 'flex';
+}
+
+window.closeLBDialog = function() {
+    document.getElementById('loadBalanceDialog').style.display = 'none';
+};
+
+window.saveLB = async function() {
+    const alias = document.getElementById('lbAlias').value.trim();
+    const localType = document.getElementById('lbLocalType').value;
+    const localPort = parseInt(document.getElementById('lbLocalPort').value);
+
+    if (!alias) { alert('请输入别名'); return; }
+    if (!localPort || localPort < 1 || localPort > 65535) { alert('请输入有效端口'); return; }
+
+    const selectedNodes = [];
+    document.querySelectorAll('#lbNodeList input[type="checkbox"]:checked').forEach(cb => {
+        selectedNodes.push(cb.value);
+    });
+
+    if (selectedNodes.length === 0) { alert('请至少选择一个子节点'); return; }
+
+    try {
+        await MyService.AddLoadBalancer({
+            alias: alias,
+            localType: localType,
+            localPort: localPort,
+            nodeIds: selectedNodes,
+        });
+        closeLBDialog();
+        addLog(`[负载均衡] 添加成功: ${alias}`);
+        alert('负载均衡节点添加成功');
+    } catch (error) {
+        addLog(`[错误] 添加负载均衡失败: ${error}`);
+        alert(`添加失败: ${error}`);
+    }
+};
+
+// ==================== 链式代理 (Feature 8, 9) ====================
+
+let chainSelectedNodeIDs = [];
+
+function openChainDialog() {
+    document.getElementById('chainAlias').value = '';
+    document.getElementById('chainLocalType').value = 'socks';
+    document.getElementById('chainLocalPort').value = '';
+    chainSelectedNodeIDs = [];
+
+    // 生成节点选择列表（包含普通节点和负载均衡节点）
+    const list = document.getElementById('chainNodeList');
+    list.innerHTML = '';
+
+    // 普通节点
+    rules.forEach(rule => {
+        const item = document.createElement('div');
+        item.className = 'node-select-item';
+        item.innerHTML = `<button class="btn-small" onclick="addToChain('${rule.id}', '${escapeHtml(rule.alias)}', 'rule')">+ 添加</button> <span>${escapeHtml(rule.alias)} (${escapeHtml(rule.protocol)})</span>`;
+        list.appendChild(item);
+    });
+
+    // 分隔线
+    const sep = document.createElement('div');
+    sep.innerHTML = '<hr style="margin:8px 0"><strong style="font-size:12px;">负载均衡节点：</strong>';
+    list.appendChild(sep);
+
+    // 加载负载均衡节点
+    MyService.GetLoadBalancers().then(lbs => {
+        if (lbs && lbs.length > 0) {
+            lbs.forEach(lb => {
+                const item = document.createElement('div');
+                item.className = 'node-select-item';
+                item.innerHTML = `<button class="btn-small" onclick="addToChain('${lb.id}', '${escapeHtml(lb.alias)}', 'lb')">+ 添加</button> <span>[LB] ${escapeHtml(lb.alias)}</span>`;
+                list.appendChild(item);
+            });
+        } else {
+            const noLB = document.createElement('div');
+            noLB.innerHTML = '<span style="color:#999;font-size:12px;">暂无负载均衡节点</span>';
+            list.appendChild(noLB);
+        }
+    });
+
+    renderChainSelected();
+    document.getElementById('chainProxyDialog').style.display = 'flex';
+}
+
+window.closeChainDialog = function() {
+    document.getElementById('chainProxyDialog').style.display = 'none';
+};
+
+window.addToChain = function(nodeId, name, type) {
+    chainSelectedNodeIDs.push({ id: nodeId, name: name, type: type });
+    renderChainSelected();
+};
+
+window.removeFromChain = function(index) {
+    chainSelectedNodeIDs.splice(index, 1);
+    renderChainSelected();
+};
+
+function renderChainSelected() {
+    const container = document.getElementById('chainSelectedNodes');
+    container.innerHTML = '';
+
+    if (chainSelectedNodeIDs.length === 0) {
+        container.innerHTML = '<span style="color:#999;font-size:12px;">请从上方列表添加节点</span>';
+        return;
+    }
+
+    chainSelectedNodeIDs.forEach((node, index) => {
+        const item = document.createElement('span');
+        item.className = 'chain-node-item';
+        const prefix = node.type === 'lb' ? '[LB] ' : '';
+        item.innerHTML = `${prefix}${escapeHtml(node.name)} <span class="chain-remove" onclick="removeFromChain(${index})">×</span>`;
+        container.appendChild(item);
+
+        if (index < chainSelectedNodeIDs.length - 1) {
+            const arrow = document.createElement('span');
+            arrow.className = 'chain-arrow';
+            arrow.textContent = ' → ';
+            arrow.style.color = '#999';
+            container.appendChild(arrow);
+        }
+    });
+}
+
+window.saveChain = async function() {
+    const alias = document.getElementById('chainAlias').value.trim();
+    const localType = document.getElementById('chainLocalType').value;
+    const localPort = parseInt(document.getElementById('chainLocalPort').value);
+
+    if (!alias) { alert('请输入别名'); return; }
+    if (!localPort || localPort < 1 || localPort > 65535) { alert('请输入有效端口'); return; }
+    if (chainSelectedNodeIDs.length < 2) { alert('链式代理至少需要2个节点'); return; }
+
+    try {
+        await MyService.AddChainProxy({
+            alias: alias,
+            localType: localType,
+            localPort: localPort,
+            chainNodes: chainSelectedNodeIDs.map(n => n.id),
+        });
+        closeChainDialog();
+        addLog(`[链式代理] 添加成功: ${alias}`);
+        alert('链式代理添加成功');
+    } catch (error) {
+        addLog(`[错误] 添加链式代理失败: ${error}`);
+        alert(`添加失败: ${error}`);
+    }
+};
 
 // 按分组过滤规则
 function filterRulesByGroup(groupId) {
@@ -982,3 +1386,4 @@ window.saveRule = saveRule;
 window.onProtocolChange = onProtocolChange;
 window.onNetworkChange = onNetworkChange;
 window.onSecurityChange = onSecurityChange;
+window.toggleTheme = toggleTheme;
