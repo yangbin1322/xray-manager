@@ -375,15 +375,22 @@ function createRuleRow(rule) {
 function createLBRow(lb) {
     const row = document.createElement('tr');
     row.dataset.ruleId = lb.id;
+    row.dataset.nodeType = 'lb';
+    row.draggable = false;
+    row.style.cursor = 'default';
     row.style.background = lb.enabled ? 'rgba(155, 89, 182, 0.08)' : '';
 
     const nodeCount = lb.nodeIds ? lb.nodeIds.length : 0;
     const statusClass = lb.enabled ? 'status-running' : 'status-stopped';
     const statusText = lb.enabled ? '运行中' : '已停止';
+    const toggleColor = lb.enabled ? 'e74c3c' : '27ae60';
+    const toggleText = lb.enabled ? '停止' : '启动';
 
     row.innerHTML = `
         <td><input type="checkbox" class="rule-checkbox" value="${lb.id}"></td>
-        <td><span style="background:#9b59b6;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">LB</span> ${escapeHtml(lb.alias)}</td>
+        <td><span style="background:#9b59b6;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">LB</span> ${escapeHtml(lb.alias)}
+            ${lb.groupName ? `<br><small class="group-tag">${escapeHtml(lb.groupName)}</small>` : ''}
+        </td>
         <td>loadbalance</td>
         <td colspan="2">${nodeCount} 个子节点</td>
         <td>${lb.localType}</td>
@@ -392,12 +399,16 @@ function createLBRow(lb) {
         <td>-</td>
         <td>-</td>
         <td>-</td>
-        <td>${lb.groupName || '-'}</td>
         <td>
-            <button class="btn-edit" onclick="toggleLB('${lb.id}', ${lb.enabled})">${lb.enabled ? '停止' : '启动'}</button>
-            <button class="btn-delete" onclick="deleteLBNode('${lb.id}')">删除</button>
+            <button class="btn-edit btn-edit-lb">编辑</button>
+            <button class="btn-edit btn-toggle-lb" style="background:#${toggleColor}">${toggleText}</button>
+            <button class="btn-delete btn-delete-lb">删除</button>
         </td>
     `;
+
+    row.querySelector('.btn-edit-lb').addEventListener('click', () => editLB(lb.id));
+    row.querySelector('.btn-toggle-lb').addEventListener('click', () => window.toggleLB(lb.id, lb.enabled));
+    row.querySelector('.btn-delete-lb').addEventListener('click', () => window.deleteLBNode(lb.id));
 
     return row;
 }
@@ -405,15 +416,22 @@ function createLBRow(lb) {
 function createChainRow(chain) {
     const row = document.createElement('tr');
     row.dataset.ruleId = chain.id;
+    row.dataset.nodeType = 'chain';
+    row.draggable = false;
+    row.style.cursor = 'default';
     row.style.background = chain.enabled ? 'rgba(52, 152, 219, 0.08)' : '';
 
     const nodeCount = chain.chainNodes ? chain.chainNodes.length : 0;
     const statusClass = chain.enabled ? 'status-running' : 'status-stopped';
     const statusText = chain.enabled ? '运行中' : '已停止';
+    const toggleColor = chain.enabled ? 'e74c3c' : '27ae60';
+    const toggleText = chain.enabled ? '停止' : '启动';
 
     row.innerHTML = `
         <td><input type="checkbox" class="rule-checkbox" value="${chain.id}"></td>
-        <td><span style="background:#2980b9;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">链</span> ${escapeHtml(chain.alias)}</td>
+        <td><span style="background:#2980b9;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">链</span> ${escapeHtml(chain.alias)}
+            ${chain.groupName ? `<br><small class="group-tag">${escapeHtml(chain.groupName)}</small>` : ''}
+        </td>
         <td>chain</td>
         <td colspan="2">${nodeCount} 节点链</td>
         <td>${chain.localType}</td>
@@ -422,14 +440,111 @@ function createChainRow(chain) {
         <td>-</td>
         <td>-</td>
         <td>-</td>
-        <td>${chain.groupName || '-'}</td>
         <td>
-            <button class="btn-edit" onclick="toggleChain('${chain.id}', ${chain.enabled})">${chain.enabled ? '停止' : '启动'}</button>
-            <button class="btn-delete" onclick="deleteChainNode('${chain.id}')">删除</button>
+            <button class="btn-edit btn-edit-chain">编辑</button>
+            <button class="btn-edit btn-toggle-chain" style="background:#${toggleColor}">${toggleText}</button>
+            <button class="btn-delete btn-delete-chain">删除</button>
         </td>
     `;
 
+    row.querySelector('.btn-edit-chain').addEventListener('click', () => editChain(chain.id));
+    row.querySelector('.btn-toggle-chain').addEventListener('click', () => window.toggleChain(chain.id, chain.enabled));
+    row.querySelector('.btn-delete-chain').addEventListener('click', () => window.deleteChainNode(chain.id));
+
     return row;
+}
+
+// ==================== LB 编辑 ====================
+
+function editLB(id) {
+    const lb = loadBalancers.find(x => x.id === id);
+    if (!lb) return;
+
+    document.getElementById('lbDialogTitle').textContent = '编辑负载均衡节点';
+    document.getElementById('lbAlias').value = lb.alias || '';
+    document.getElementById('lbLocalType').value = lb.localType || 'socks';
+    document.getElementById('lbLocalPort').value = lb.localPort || '';
+
+    // 填充分组下拉
+    populateGroupSelect('lbGroupId');
+    setTimeout(() => { document.getElementById('lbGroupId').value = lb.groupId || ''; }, 100);
+
+    // 生成节点选择列表并勾选已有的
+    const list = document.getElementById('lbNodeList');
+    list.innerHTML = '';
+    const selectedSet = new Set(lb.nodeIds || []);
+    rules.forEach(rule => {
+        const item = document.createElement('div');
+        item.className = 'node-select-item';
+        const checked = selectedSet.has(rule.id) ? 'checked' : '';
+        item.innerHTML = `<input type="checkbox" value="${rule.id}" ${checked}> <span>${escapeHtml(rule.alias)} (${escapeHtml(rule.protocol)} - ${escapeHtml(rule.serverAddr)})</span>`;
+        list.appendChild(item);
+    });
+
+    // 标记为编辑模式
+    document.getElementById('loadBalanceDialog').dataset.editId = id;
+    document.getElementById('loadBalanceDialog').style.display = 'flex';
+}
+
+// ==================== Chain 编辑 ====================
+
+function editChain(id) {
+    const chain = chainProxies.find(x => x.id === id);
+    if (!chain) return;
+
+    document.getElementById('chainDialogTitle').textContent = '编辑链式代理';
+    document.getElementById('chainAlias').value = chain.alias || '';
+    document.getElementById('chainLocalType').value = chain.localType || 'socks';
+    document.getElementById('chainLocalPort').value = chain.localPort || '';
+
+    // 填充分组下拉
+    populateGroupSelect('chainGroupId');
+    setTimeout(() => { document.getElementById('chainGroupId').value = chain.groupId || ''; }, 100);
+
+    // 恢复已选节点
+    chainSelectedNodeIDs = [];
+    if (chain.chainNodes) {
+        chain.chainNodes.forEach(nodeId => {
+            const rule = rules.find(r => r.id === nodeId);
+            if (rule) {
+                chainSelectedNodeIDs.push({ id: rule.id, name: rule.alias, type: 'rule' });
+                return;
+            }
+            const lbNode = (loadBalancers || []).find(l => l.id === nodeId);
+            if (lbNode) {
+                chainSelectedNodeIDs.push({ id: lbNode.id, name: lbNode.alias, type: 'lb' });
+            }
+        });
+    }
+
+    // 生成节点选择列表
+    const list = document.getElementById('chainNodeList');
+    list.innerHTML = '';
+    rules.forEach(rule => {
+        const item = document.createElement('div');
+        item.className = 'node-select-item';
+        item.innerHTML = `<button class="btn-small" onclick="addToChain('${rule.id}', '${escapeHtml(rule.alias)}', 'rule')">+ 添加</button> <span>${escapeHtml(rule.alias)} (${escapeHtml(rule.protocol)})</span>`;
+        list.appendChild(item);
+    });
+    const sep = document.createElement('div');
+    sep.innerHTML = '<hr style="margin:8px 0"><strong style="font-size:12px;">负载均衡节点：</strong>';
+    list.appendChild(sep);
+    MyService.GetLoadBalancers().then(lbs => {
+        if (lbs && lbs.length > 0) {
+            lbs.forEach(lb => {
+                const item = document.createElement('div');
+                item.className = 'node-select-item';
+                item.innerHTML = `<button class="btn-small" onclick="addToChain('${lb.id}', '${escapeHtml(lb.alias)}', 'lb')">+ 添加</button> <span>[LB] ${escapeHtml(lb.alias)}</span>`;
+                list.appendChild(item);
+            });
+        }
+    });
+
+    renderChainSelected();
+
+    // 标记为编辑模式
+    document.getElementById('chainProxyDialog').dataset.editId = id;
+    document.getElementById('chainProxyDialog').style.display = 'flex';
 }
 
 // LB 和 Chain 操作函数
@@ -735,9 +850,13 @@ async function testSelectedRulesSpeed() {
 // ==================== 负载均衡 (Feature 7) ====================
 
 function openLBDialog() {
+    document.getElementById('lbDialogTitle').textContent = '添加负载均衡节点';
     document.getElementById('lbAlias').value = '';
     document.getElementById('lbLocalType').value = 'socks';
     document.getElementById('lbLocalPort').value = '';
+
+    // 清除编辑模式
+    delete document.getElementById('loadBalanceDialog').dataset.editId;
 
     // 填充分组下拉
     populateGroupSelect('lbGroupId');
@@ -789,22 +908,32 @@ window.saveLB = async function() {
     if (selectedNodes.length === 0) { alert('请至少选择一个子节点'); return; }
 
     const groupId = document.getElementById('lbGroupId').value;
+    const editId = document.getElementById('loadBalanceDialog').dataset.editId;
 
     try {
-        await MyService.AddLoadBalancer({
+        const lbData = {
             alias: alias,
             localType: localType,
             localPort: localPort,
             nodeIds: selectedNodes,
             groupId: groupId,
-        });
-        closeLBDialog();
-        await loadRules();
-        addLog(`[负载均衡] 添加成功: ${alias}`);
-        alert('负载均衡节点添加成功');
+        };
+
+        if (editId) {
+            lbData.id = editId;
+            await MyService.UpdateLoadBalancer(lbData);
+            closeLBDialog();
+            await loadRules();
+            addLog(`[负载均衡] 更新成功: ${alias}`);
+        } else {
+            await MyService.AddLoadBalancer(lbData);
+            closeLBDialog();
+            await loadRules();
+            addLog(`[负载均衡] 添加成功: ${alias}`);
+        }
     } catch (error) {
-        addLog(`[错误] 添加负载均衡失败: ${error}`);
-        alert(`添加失败: ${error}`);
+        addLog(`[错误] 操作负载均衡失败: ${error}`);
+        alert(`操作失败: ${error}`);
     }
 };
 
@@ -813,10 +942,14 @@ window.saveLB = async function() {
 let chainSelectedNodeIDs = [];
 
 function openChainDialog() {
+    document.getElementById('chainDialogTitle').textContent = '添加链式代理';
     document.getElementById('chainAlias').value = '';
     document.getElementById('chainLocalType').value = 'socks';
     document.getElementById('chainLocalPort').value = '';
     chainSelectedNodeIDs = [];
+
+    // 清除编辑模式
+    delete document.getElementById('chainProxyDialog').dataset.editId;
 
     // 填充分组下拉
     populateGroupSelect('chainGroupId');
@@ -908,22 +1041,32 @@ window.saveChain = async function() {
     if (chainSelectedNodeIDs.length < 2) { alert('链式代理至少需要2个节点'); return; }
 
     const groupId = document.getElementById('chainGroupId').value;
+    const editId = document.getElementById('chainProxyDialog').dataset.editId;
 
     try {
-        await MyService.AddChainProxy({
+        const chainData = {
             alias: alias,
             localType: localType,
             localPort: localPort,
             chainNodes: chainSelectedNodeIDs.map(n => n.id),
             groupId: groupId,
-        });
-        closeChainDialog();
-        await loadRules();
-        addLog(`[链式代理] 添加成功: ${alias}`);
-        alert('链式代理添加成功');
+        };
+
+        if (editId) {
+            chainData.id = editId;
+            await MyService.UpdateChainProxy(chainData);
+            closeChainDialog();
+            await loadRules();
+            addLog(`[链式代理] 更新成功: ${alias}`);
+        } else {
+            await MyService.AddChainProxy(chainData);
+            closeChainDialog();
+            await loadRules();
+            addLog(`[链式代理] 添加成功: ${alias}`);
+        }
     } catch (error) {
-        addLog(`[错误] 添加链式代理失败: ${error}`);
-        alert(`添加失败: ${error}`);
+        addLog(`[错误] 操作链式代理失败: ${error}`);
+        alert(`操作失败: ${error}`);
     }
 };
 

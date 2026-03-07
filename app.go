@@ -1314,6 +1314,53 @@ func (a *MyService) DeleteLoadBalancer(id string) error {
 	return fmt.Errorf("负载均衡节点不存在")
 }
 
+// UpdateLoadBalancer 更新负载均衡节点
+func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == lb.ID {
+			wasEnabled := a.config.LoadBalancers[i].Enabled
+
+			// 如果正在运行且端口或节点变了，需要先停止
+			if wasEnabled {
+				_ = a.processManager.Stop(a.config.LoadBalancers[i].LocalPort)
+				lb.Enabled = false
+				lb.ProcessID = 0
+			} else {
+				lb.Enabled = false
+				lb.ProcessID = 0
+			}
+
+			// 映射分组名称
+			if lb.GroupID != "" {
+				for _, g := range a.config.Groups {
+					if g.ID == lb.GroupID {
+						lb.GroupName = g.Name
+						break
+					}
+				}
+			}
+
+			if len(lb.NodeIDs) == 0 {
+				return fmt.Errorf("负载均衡节点需要至少一个子节点")
+			}
+
+			a.config.LoadBalancers[i] = lb
+
+			if err := a.saveConfig(); err != nil {
+				return err
+			}
+
+			a.log(fmt.Sprintf("更新负载均衡节点: %s", lb.Alias))
+			return nil
+		}
+	}
+
+	return fmt.Errorf("负载均衡节点不存在")
+}
+
 // StartLoadBalancer 启动负载均衡节点
 func (a *MyService) StartLoadBalancer(id string) error {
 	a.mu.Lock()
@@ -1453,6 +1500,53 @@ func (a *MyService) DeleteChainProxy(id string) error {
 			}
 			a.config.ChainProxies = append(a.config.ChainProxies[:i], a.config.ChainProxies[i+1:]...)
 			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("链式代理不存在")
+}
+
+// UpdateChainProxy 更新链式代理
+func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == chain.ID {
+			wasEnabled := a.config.ChainProxies[i].Enabled
+
+			// 如果正在运行，需要先停止
+			if wasEnabled {
+				_ = a.processManager.Stop(a.config.ChainProxies[i].LocalPort)
+				chain.Enabled = false
+				chain.ProcessID = 0
+			} else {
+				chain.Enabled = false
+				chain.ProcessID = 0
+			}
+
+			// 映射分组名称
+			if chain.GroupID != "" {
+				for _, g := range a.config.Groups {
+					if g.ID == chain.GroupID {
+						chain.GroupName = g.Name
+						break
+					}
+				}
+			}
+
+			if len(chain.ChainNodes) < 2 {
+				return fmt.Errorf("链式代理需要至少2个节点")
+			}
+
+			a.config.ChainProxies[i] = chain
+
+			if err := a.saveConfig(); err != nil {
+				return err
+			}
+
+			a.log(fmt.Sprintf("更新链式代理: %s", chain.Alias))
+			return nil
 		}
 	}
 
