@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-// enableWindowsProxy 通过修改注册表设置 Windows 系统代理
-func enableWindowsProxy(port int) error {
+// platformEnableProxy 通过修改注册表设置 Windows 系统代理
+func platformEnableProxy(port int) error {
 	proxyAddr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	// 启用代理
@@ -33,8 +33,8 @@ func enableWindowsProxy(port int) error {
 	return nil
 }
 
-// disableWindowsProxy 取消 Windows 系统代理
-func disableWindowsProxy() error {
+// platformDisableProxy 取消 Windows 系统代理
+func platformDisableProxy() error {
 	cmd := exec.Command("reg", "add",
 		`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`,
 		"/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f")
@@ -50,7 +50,6 @@ func disableWindowsProxy() error {
 
 // refreshWindowsProxy 通知系统刷新代理设置
 func refreshWindowsProxy() {
-	// 使用 rundll32 通知系统刷新 Internet 设置
 	cmd := exec.Command("rundll32.exe", "wininet.dll,InternetSetOptionW", "39", "0", "0", "0")
 	_ = cmd.Run()
 }

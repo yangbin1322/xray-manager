@@ -1,10 +1,5 @@
 package config
 
-import (
-	"fmt"
-	"runtime"
-)
-
 // SysProxyManager 系统代理管理器
 type SysProxyManager struct {
 	enabled bool
@@ -20,17 +15,7 @@ func NewSysProxyManager() *SysProxyManager {
 func (m *SysProxyManager) EnableSystemProxy(port int) error {
 	m.port = port
 
-	var err error
-	switch runtime.GOOS {
-	case "windows":
-		err = enableWindowsProxy(port)
-	case "darwin":
-		err = enableDarwinProxy(port)
-	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
-	}
-
-	if err != nil {
+	if err := platformEnableProxy(port); err != nil {
 		return err
 	}
 	m.enabled = true
@@ -39,17 +24,7 @@ func (m *SysProxyManager) EnableSystemProxy(port int) error {
 
 // DisableSystemProxy 取消系统代理
 func (m *SysProxyManager) DisableSystemProxy() error {
-	var err error
-	switch runtime.GOOS {
-	case "windows":
-		err = disableWindowsProxy()
-	case "darwin":
-		err = disableDarwinProxy()
-	default:
-		return fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
-	}
-
-	if err != nil {
+	if err := platformDisableProxy(); err != nil {
 		return err
 	}
 	m.enabled = false

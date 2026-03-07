@@ -1276,6 +1276,16 @@ func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 		return fmt.Errorf("负载均衡节点需要至少一个子节点")
 	}
 
+	// 映射分组名称
+	if lb.GroupID != "" {
+		for _, g := range a.config.Groups {
+			if g.ID == lb.GroupID {
+				lb.GroupName = g.Name
+				break
+			}
+		}
+	}
+
 	a.config.LoadBalancers = append(a.config.LoadBalancers, lb)
 
 	if err := a.saveConfig(); err != nil {
@@ -1409,6 +1419,16 @@ func (a *MyService) AddChainProxy(chain models.ChainProxy) error {
 
 	if len(chain.ChainNodes) < 2 {
 		return fmt.Errorf("链式代理需要至少2个节点")
+	}
+
+	// 映射分组名称
+	if chain.GroupID != "" {
+		for _, g := range a.config.Groups {
+			if g.ID == chain.GroupID {
+				chain.GroupName = g.Name
+				break
+			}
+		}
 	}
 
 	a.config.ChainProxies = append(a.config.ChainProxies, chain)

@@ -529,6 +529,12 @@
                     </div>
                 </div>
                 <div class="form-group">
+                    <label>所属分组：</label>
+                    <select id="lbGroupId">
+                        <option value="">无分组</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label>选择子节点（勾选要加入的节点）：</label>
                     <div id="lbNodeList" class="node-select-list">
                         <!-- 节点列表将动态生成 -->
@@ -566,6 +572,12 @@
                         <label>本地代理端口：</label>
                         <input type="number" id="chainLocalPort" placeholder="例如：10901" min="1" max="65535">
                     </div>
+                </div>
+                <div class="form-group">
+                    <label>所属分组：</label>
+                    <select id="chainGroupId">
+                        <option value="">无分组</option>
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>选择链中的节点（按顺序添加，支持普通节点和负载均衡节点）：</label>

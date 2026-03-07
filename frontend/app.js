@@ -6,6 +6,8 @@ let sortDirection = 'asc'; // 排序方向: asc, desc
 let searchKeyword = ''; // 节点搜索关键字
 let statusFilter = 'all'; // 状态过滤: all, running, stopped (Feature 1)
 let dragSrcRow = null; // 拖拽源行 (Feature 2)
+let loadBalancers = []; // 负载均衡节点列表 (Feature 7)
+let chainProxies = []; // 链式代理列表 (Feature 8)
 import { MyService } from "./bindings/xray-manager/index.js";
 import { Events } from '@wailsio/runtime';
 import * as Extended from "./app-extended.js";
@@ -136,6 +138,9 @@ function listenToBackendEvents() {
 async function loadRules() {
     try {
         rules = await MyService.GetRules();
+        // 同时加载负载均衡和链式代理
+        try { loadBalancers = await MyService.GetLoadBalancers() || []; } catch(e) { loadBalancers = []; }
+        try { chainProxies = await MyService.GetChainProxies() || []; } catch(e) { chainProxies = []; }
         renderRulesTable();
     } catch (error) {
         addLog(`[错误] 加载规则失败: ${error}`);
@@ -190,6 +195,44 @@ function renderRulesTable() {
 
     sortedRules.forEach(rule => {
         const row = createRuleRow(rule);
+        tbody.appendChild(row);
+    });
+
+    // 渲染负载均衡节点 (Feature 7)
+    let filteredLBs = loadBalancers || [];
+    if (Extended.currentGroupFilter !== null && Extended.currentGroupFilter !== undefined) {
+        filteredLBs = filteredLBs.filter(lb => lb.groupId === Extended.currentGroupFilter);
+    }
+    if (statusFilter === 'running') {
+        filteredLBs = filteredLBs.filter(lb => lb.enabled);
+    } else if (statusFilter === 'stopped') {
+        filteredLBs = filteredLBs.filter(lb => !lb.enabled);
+    }
+    if (searchKeyword) {
+        const kw = searchKeyword.toLowerCase();
+        filteredLBs = filteredLBs.filter(lb => lb.alias && lb.alias.toLowerCase().includes(kw));
+    }
+    filteredLBs.forEach(lb => {
+        const row = createLBRow(lb);
+        tbody.appendChild(row);
+    });
+
+    // 渲染链式代理节点 (Feature 8)
+    let filteredChains = chainProxies || [];
+    if (Extended.currentGroupFilter !== null && Extended.currentGroupFilter !== undefined) {
+        filteredChains = filteredChains.filter(c => c.groupId === Extended.currentGroupFilter);
+    }
+    if (statusFilter === 'running') {
+        filteredChains = filteredChains.filter(c => c.enabled);
+    } else if (statusFilter === 'stopped') {
+        filteredChains = filteredChains.filter(c => !c.enabled);
+    }
+    if (searchKeyword) {
+        const kw = searchKeyword.toLowerCase();
+        filteredChains = filteredChains.filter(c => c.alias && c.alias.toLowerCase().includes(kw));
+    }
+    filteredChains.forEach(chain => {
+        const row = createChainRow(chain);
         tbody.appendChild(row);
     });
 }
@@ -327,49 +370,217 @@ function createRuleRow(rule) {
     return row;
 }
 
+// ==================== 负载均衡行 (Feature 7) ====================
+
+function createLBRow(lb) {
+    const row = document.createElement('tr');
+    row.dataset.ruleId = lb.id;
+    row.style.background = lb.enabled ? 'rgba(155, 89, 182, 0.08)' : '';
+
+    const nodeCount = lb.nodeIds ? lb.nodeIds.length : 0;
+    const statusClass = lb.enabled ? 'status-running' : 'status-stopped';
+    const statusText = lb.enabled ? '运行中' : '已停止';
+
+    row.innerHTML = `
+        <td><input type="checkbox" class="rule-checkbox" value="${lb.id}"></td>
+        <td><span style="background:#9b59b6;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">LB</span> ${escapeHtml(lb.alias)}</td>
+        <td>loadbalance</td>
+        <td colspan="2">${nodeCount} 个子节点</td>
+        <td>${lb.localType}</td>
+        <td>${lb.localPort}</td>
+        <td class="${statusClass}">${statusText}</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>${lb.groupName || '-'}</td>
+        <td>
+            <button class="btn-edit" onclick="toggleLB('${lb.id}', ${lb.enabled})">${lb.enabled ? '停止' : '启动'}</button>
+            <button class="btn-delete" onclick="deleteLBNode('${lb.id}')">删除</button>
+        </td>
+    `;
+
+    return row;
+}
+
+function createChainRow(chain) {
+    const row = document.createElement('tr');
+    row.dataset.ruleId = chain.id;
+    row.style.background = chain.enabled ? 'rgba(52, 152, 219, 0.08)' : '';
+
+    const nodeCount = chain.chainNodes ? chain.chainNodes.length : 0;
+    const statusClass = chain.enabled ? 'status-running' : 'status-stopped';
+    const statusText = chain.enabled ? '运行中' : '已停止';
+
+    row.innerHTML = `
+        <td><input type="checkbox" class="rule-checkbox" value="${chain.id}"></td>
+        <td><span style="background:#2980b9;color:white;padding:1px 6px;border-radius:3px;font-size:11px;">链</span> ${escapeHtml(chain.alias)}</td>
+        <td>chain</td>
+        <td colspan="2">${nodeCount} 节点链</td>
+        <td>${chain.localType}</td>
+        <td>${chain.localPort}</td>
+        <td class="${statusClass}">${statusText}</td>
+        <td>-</td>
+        <td>-</td>
+        <td>-</td>
+        <td>${chain.groupName || '-'}</td>
+        <td>
+            <button class="btn-edit" onclick="toggleChain('${chain.id}', ${chain.enabled})">${chain.enabled ? '停止' : '启动'}</button>
+            <button class="btn-delete" onclick="deleteChainNode('${chain.id}')">删除</button>
+        </td>
+    `;
+
+    return row;
+}
+
+// LB 和 Chain 操作函数
+window.toggleLB = async function(id, isRunning) {
+    try {
+        if (isRunning) {
+            await MyService.StopLoadBalancer(id);
+        } else {
+            await MyService.StartLoadBalancer(id);
+        }
+        await loadRules();
+    } catch (error) {
+        addLog(`[错误] 操作负载均衡失败: ${error}`);
+        alert(`操作失败: ${error}`);
+    }
+};
+
+window.deleteLBNode = async function(id) {
+    if (!confirm('确定删除此负载均衡节点？')) return;
+    try {
+        await MyService.DeleteLoadBalancer(id);
+        await loadRules();
+    } catch (error) {
+        addLog(`[错误] 删除负载均衡失败: ${error}`);
+    }
+};
+
+window.toggleChain = async function(id, isRunning) {
+    try {
+        if (isRunning) {
+            await MyService.StopChainProxy(id);
+        } else {
+            await MyService.StartChainProxy(id);
+        }
+        await loadRules();
+    } catch (error) {
+        addLog(`[错误] 操作链式代理失败: ${error}`);
+        alert(`操作失败: ${error}`);
+    }
+};
+
+window.deleteChainNode = async function(id) {
+    if (!confirm('确定删除此链式代理？')) return;
+    try {
+        await MyService.DeleteChainProxy(id);
+        await loadRules();
+    } catch (error) {
+        addLog(`[错误] 删除链式代理失败: ${error}`);
+    }
+};
+
 // ==================== 拖拽排序 (Feature 2) ====================
+
+let dragPlaceholder = null;
+let autoScrollTimer = null;
 
 function handleDragStart(e) {
     dragSrcRow = this;
     this.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', this.dataset.ruleId);
+
+    // 创建占位符
+    dragPlaceholder = document.createElement('tr');
+    dragPlaceholder.className = 'drag-placeholder';
+    dragPlaceholder.innerHTML = `<td colspan="20" style="height:3px;padding:0;border:none;background:#2196F3;"></td>`;
 }
 
 function handleDragOver(e) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+
+    if (!dragSrcRow || this === dragSrcRow) return;
+
+    const tbody = document.getElementById('rulesTableBody');
+    const rect = this.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+
+    // 移除之前的占位符
+    if (dragPlaceholder && dragPlaceholder.parentNode) {
+        dragPlaceholder.parentNode.removeChild(dragPlaceholder);
+    }
+
+    // 根据鼠标位置决定插入到上方还是下方
+    if (e.clientY < midY) {
+        tbody.insertBefore(dragPlaceholder, this);
+    } else {
+        tbody.insertBefore(dragPlaceholder, this.nextSibling);
+    }
+
+    // 自动滚动
+    const container = document.querySelector('.table-container');
+    const containerRect = container.getBoundingClientRect();
+    const scrollMargin = 40;
+
+    if (autoScrollTimer) clearInterval(autoScrollTimer);
+
+    if (e.clientY < containerRect.top + scrollMargin) {
+        autoScrollTimer = setInterval(() => { container.scrollTop -= 5; }, 16);
+    } else if (e.clientY > containerRect.bottom - scrollMargin) {
+        autoScrollTimer = setInterval(() => { container.scrollTop += 5; }, 16);
+    }
 }
 
 function handleDragEnter(e) {
     e.preventDefault();
-    this.classList.add('drag-over');
 }
 
 function handleDragLeave(e) {
-    this.classList.remove('drag-over');
+    // 不再需要处理 drag-over class
 }
 
 function handleDrop(e) {
     e.preventDefault();
-    this.classList.remove('drag-over');
 
-    if (dragSrcRow === this) return;
+    if (autoScrollTimer) { clearInterval(autoScrollTimer); autoScrollTimer = null; }
+
+    if (!dragSrcRow || dragSrcRow === this) {
+        cleanupDrag();
+        return;
+    }
 
     const srcId = dragSrcRow.dataset.ruleId;
-    const destId = this.dataset.ruleId;
-
-    // 在 rules 数组中交换位置
     const srcIndex = rules.findIndex(r => r.id === srcId);
-    const destIndex = rules.findIndex(r => r.id === destId);
+    if (srcIndex === -1) { cleanupDrag(); return; }
 
-    if (srcIndex === -1 || destIndex === -1) return;
+    // 确定目标位置：占位符在哪，就插入到哪
+    let destIndex = -1;
+    if (dragPlaceholder && dragPlaceholder.parentNode) {
+        const rows = Array.from(document.getElementById('rulesTableBody').querySelectorAll('tr:not(.drag-placeholder):not(.dragging)'));
+        // 占位符之前有多少行 = 目标索引
+        let placeholderPos = 0;
+        let sibling = dragPlaceholder.previousElementSibling;
+        while (sibling) {
+            if (!sibling.classList.contains('dragging') && !sibling.classList.contains('drag-placeholder')) {
+                placeholderPos++;
+            }
+            sibling = sibling.previousElementSibling;
+        }
+        destIndex = placeholderPos;
+    }
+
+    if (destIndex === -1) { cleanupDrag(); return; }
 
     // 移除源元素并插入到目标位置
     const [moved] = rules.splice(srcIndex, 1);
+    // 如果源位置在目标之前，目标索引需要减1
+    if (srcIndex < destIndex) destIndex--;
     rules.splice(destIndex, 0, moved);
 
-    // 重新渲染表格
+    cleanupDrag();
     renderRulesTable();
 
     // 保存排序到后端
@@ -380,8 +591,16 @@ function handleDrop(e) {
 }
 
 function handleDragEnd(e) {
-    this.classList.remove('dragging');
-    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    cleanupDrag();
+}
+
+function cleanupDrag() {
+    if (autoScrollTimer) { clearInterval(autoScrollTimer); autoScrollTimer = null; }
+    if (dragSrcRow) dragSrcRow.classList.remove('dragging');
+    if (dragPlaceholder && dragPlaceholder.parentNode) {
+        dragPlaceholder.parentNode.removeChild(dragPlaceholder);
+    }
+    dragPlaceholder = null;
     dragSrcRow = null;
 }
 
@@ -520,6 +739,9 @@ function openLBDialog() {
     document.getElementById('lbLocalType').value = 'socks';
     document.getElementById('lbLocalPort').value = '';
 
+    // 填充分组下拉
+    populateGroupSelect('lbGroupId');
+
     // 生成节点选择列表
     const list = document.getElementById('lbNodeList');
     list.innerHTML = '';
@@ -531,6 +753,20 @@ function openLBDialog() {
     });
 
     document.getElementById('loadBalanceDialog').style.display = 'flex';
+}
+
+// 通用函数：填充分组下拉
+function populateGroupSelect(selectId) {
+    const select = document.getElementById(selectId);
+    select.innerHTML = '<option value="">无分组</option>';
+    MyService.GetGroups().then(groups => {
+        groups.forEach(g => {
+            const opt = document.createElement('option');
+            opt.value = g.id;
+            opt.textContent = g.name;
+            select.appendChild(opt);
+        });
+    }).catch(() => {});
 }
 
 window.closeLBDialog = function() {
@@ -552,14 +788,18 @@ window.saveLB = async function() {
 
     if (selectedNodes.length === 0) { alert('请至少选择一个子节点'); return; }
 
+    const groupId = document.getElementById('lbGroupId').value;
+
     try {
         await MyService.AddLoadBalancer({
             alias: alias,
             localType: localType,
             localPort: localPort,
             nodeIds: selectedNodes,
+            groupId: groupId,
         });
         closeLBDialog();
+        await loadRules();
         addLog(`[负载均衡] 添加成功: ${alias}`);
         alert('负载均衡节点添加成功');
     } catch (error) {
@@ -577,6 +817,9 @@ function openChainDialog() {
     document.getElementById('chainLocalType').value = 'socks';
     document.getElementById('chainLocalPort').value = '';
     chainSelectedNodeIDs = [];
+
+    // 填充分组下拉
+    populateGroupSelect('chainGroupId');
 
     // 生成节点选择列表（包含普通节点和负载均衡节点）
     const list = document.getElementById('chainNodeList');
@@ -664,14 +907,18 @@ window.saveChain = async function() {
     if (!localPort || localPort < 1 || localPort > 65535) { alert('请输入有效端口'); return; }
     if (chainSelectedNodeIDs.length < 2) { alert('链式代理至少需要2个节点'); return; }
 
+    const groupId = document.getElementById('chainGroupId').value;
+
     try {
         await MyService.AddChainProxy({
             alias: alias,
             localType: localType,
             localPort: localPort,
             chainNodes: chainSelectedNodeIDs.map(n => n.id),
+            groupId: groupId,
         });
         closeChainDialog();
+        await loadRules();
         addLog(`[链式代理] 添加成功: ${alias}`);
         alert('链式代理添加成功');
     } catch (error) {

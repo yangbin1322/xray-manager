@@ -228,8 +228,9 @@ body {
     align-items: center;
     gap: 16px;
     padding: 8px 12px;
-    background-color: var(--bg-white);
-    border-bottom: 1px solid var(--border-color);
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
     flex-shrink: 0;
 }
 
@@ -247,32 +248,66 @@ body {
 
 .filter-btn {
     padding: 4px 12px;
-    border: 1px solid var(--border-color-dark);
+    border: 1px solid #999;
     border-radius: 3px;
-    background: var(--bg-input);
+    background: var(--bg-white);
     color: var(--text-color);
     cursor: pointer;
     font-size: 12px;
+    font-weight: 500;
     transition: all 0.2s;
 }
 
 .filter-btn:hover {
-    background: var(--bg-secondary);
+    background: #e0e0e0;
+    border-color: #777;
+}
+
+[data-theme="dark"] .filter-btn:hover {
+    background: #2a2a4e;
+    border-color: #666;
 }
 
 .filter-btn.active {
     background: #2196F3;
     color: white;
-    border-color: #2196F3;
+    border-color: #1976D2;
+    font-weight: bold;
 }
 
 .theme-toggle {
     margin-left: auto;
 }
 
+#themeToggleBtn {
+    font-size: 18px;
+    padding: 4px 10px;
+    border: 1px solid #999;
+    border-radius: 4px;
+    background: var(--bg-white);
+    color: var(--text-color);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#themeToggleBtn:hover {
+    background: #e0e0e0;
+}
+
+[data-theme="dark"] #themeToggleBtn:hover {
+    background: #2a2a4e;
+}
+
 .sysproxy-group {
     display: flex;
     gap: 6px;
+}
+
+.sysproxy-group .btn-action {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: bold;
+    border-radius: 4px;
 }
 
 /* 表格容器 */
@@ -360,16 +395,16 @@ tbody tr.selected {
 /* 拖拽排序样式 (Feature 2) */
 tbody tr {
     cursor: grab;
-    transition: opacity 0.2s;
 }
 
 tbody tr.dragging {
-    opacity: 0.4;
+    opacity: 0.3;
     cursor: grabbing;
+    background: var(--bg-secondary) !important;
 }
 
-tbody tr.drag-over {
-    border-top: 2px solid #2196F3;
+tbody tr.drag-placeholder td {
+    transition: none;
 }
 
 /* 表格输入框和选择框 */
@@ -540,12 +575,12 @@ td input[type="checkbox"] {
 }
 
 .btn-secondary {
-    background-color: #9E9E9E;
+    background-color: #757575;
     color: white;
 }
 
 .btn-secondary:hover {
-    background-color: #7c7c7c;
+    background-color: #616161;
 }
 
 .btn-action {
