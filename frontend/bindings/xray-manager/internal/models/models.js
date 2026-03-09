@@ -7,6 +7,106 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * ChainProxy 链式代理配置
+ */
+export class ChainProxy {
+    /**
+     * Creates a new ChainProxy instance.
+     * @param {Partial<ChainProxy>} [$$source = {}] - The source object to create the ChainProxy.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 唯一标识
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * 别名
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+        if (!("localType" in $$source)) {
+            /**
+             * 本地代理类型
+             * @member
+             * @type {string}
+             */
+            this["localType"] = "";
+        }
+        if (!("localPort" in $$source)) {
+            /**
+             * 本地代理端口
+             * @member
+             * @type {number}
+             */
+            this["localPort"] = 0;
+        }
+        if (!("chainNodes" in $$source)) {
+            /**
+             * 链中的节点ID列表（可以包含普通节点或LB节点ID）
+             * @member
+             * @type {string[]}
+             */
+            this["chainNodes"] = [];
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 启动状态
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("processId" in $$source)) {
+            /**
+             * 进程ID
+             * @member
+             * @type {number}
+             */
+            this["processId"] = 0;
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 所属分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 所属分组名称
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ChainProxy instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ChainProxy}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("chainNodes" in $$parsedSource) {
+            $$parsedSource["chainNodes"] = $$createField4_0($$parsedSource["chainNodes"]);
+        }
+        return new ChainProxy(/** @type {Partial<ChainProxy>} */($$parsedSource));
+    }
+}
+
+/**
  * GRPCSettings gRPC配置
  */
 export class GRPCSettings {
@@ -151,6 +251,106 @@ export class H2Settings {
             $$parsedSource["host"] = $$createField1_0($$parsedSource["host"]);
         }
         return new H2Settings(/** @type {Partial<H2Settings>} */($$parsedSource));
+    }
+}
+
+/**
+ * LoadBalanceNode 负载均衡节点
+ */
+export class LoadBalanceNode {
+    /**
+     * Creates a new LoadBalanceNode instance.
+     * @param {Partial<LoadBalanceNode>} [$$source = {}] - The source object to create the LoadBalanceNode.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 唯一标识
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * 别名
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+        if (!("localType" in $$source)) {
+            /**
+             * 本地代理类型: socks 或 http
+             * @member
+             * @type {string}
+             */
+            this["localType"] = "";
+        }
+        if (!("localPort" in $$source)) {
+            /**
+             * 本地代理端口
+             * @member
+             * @type {number}
+             */
+            this["localPort"] = 0;
+        }
+        if (!("nodeIds" in $$source)) {
+            /**
+             * 子节点 ID 列表
+             * @member
+             * @type {string[]}
+             */
+            this["nodeIds"] = [];
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 启动状态
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("processId" in $$source)) {
+            /**
+             * 进程ID
+             * @member
+             * @type {number}
+             */
+            this["processId"] = 0;
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 所属分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 所属分组名称
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LoadBalanceNode instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {LoadBalanceNode}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("nodeIds" in $$parsedSource) {
+            $$parsedSource["nodeIds"] = $$createField4_0($$parsedSource["nodeIds"]);
+        }
+        return new LoadBalanceNode(/** @type {Partial<LoadBalanceNode>} */($$parsedSource));
     }
 }
 

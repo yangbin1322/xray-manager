@@ -19,6 +19,24 @@ import * as logger$0 from "./internal/logger/models.js";
 import * as models$0 from "./internal/models/models.js";
 
 /**
+ * AddChainProxy 添加链式代理
+ * @param {models$0.ChainProxy} chain
+ * @returns {$CancellablePromise<void>}
+ */
+export function AddChainProxy(chain) {
+    return $Call.ByID(1770443933, chain);
+}
+
+/**
+ * AddLoadBalancer 添加负载均衡节点
+ * @param {models$0.LoadBalanceNode} lb
+ * @returns {$CancellablePromise<void>}
+ */
+export function AddLoadBalancer(lb) {
+    return $Call.ByID(4076290104, lb);
+}
+
+/**
  * AddRule 添加规则
  * @param {models$0.ProxyRule} rule
  * @returns {$CancellablePromise<void>}
@@ -67,12 +85,30 @@ export function CreateGroup(name, description) {
 }
 
 /**
+ * DeleteChainProxy 删除链式代理
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteChainProxy(id) {
+    return $Call.ByID(1334481423, id);
+}
+
+/**
  * DeleteGroup 删除分组
  * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */
 export function DeleteGroup(groupID) {
     return $Call.ByID(3822698067, groupID);
+}
+
+/**
+ * DeleteLoadBalancer 删除负载均衡节点
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteLoadBalancer(id) {
+    return $Call.ByID(415466854, id);
 }
 
 /**
@@ -91,6 +127,23 @@ export function DeleteRule(id) {
  */
 export function DeleteSubscription(subID) {
     return $Call.ByID(1941456089, subID);
+}
+
+/**
+ * DisableSystemProxy 取消系统代理
+ * @returns {$CancellablePromise<void>}
+ */
+export function DisableSystemProxy() {
+    return $Call.ByID(501106876);
+}
+
+/**
+ * EnableSystemProxy 设置系统代理（支持普通节点、链式代理、负载均衡）
+ * @param {string} ruleID
+ * @returns {$CancellablePromise<void>}
+ */
+export function EnableSystemProxy(ruleID) {
+    return $Call.ByID(3655017931, ruleID);
 }
 
 /**
@@ -121,12 +174,32 @@ export function GetAutoStart() {
 }
 
 /**
+ * GetChainProxies 获取所有链式代理
+ * @returns {$CancellablePromise<models$0.ChainProxy[]>}
+ */
+export function GetChainProxies() {
+    return $Call.ByID(202626458).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * GetGroups 获取所有分组
  * @returns {$CancellablePromise<models$0.Group[]>}
  */
 export function GetGroups() {
     return $Call.ByID(3885822517).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType5($result);
+    }));
+}
+
+/**
+ * GetLoadBalancers 获取所有负载均衡节点
+ * @returns {$CancellablePromise<models$0.LoadBalanceNode[]>}
+ */
+export function GetLoadBalancers() {
+    return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
     }));
 }
 
@@ -146,7 +219,7 @@ export function GetLogs() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType9($result);
     }));
 }
 
@@ -156,8 +229,16 @@ export function GetRules() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType11($result);
     }));
+}
+
+/**
+ * GetSystemProxyStatus 获取系统代理状态
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function GetSystemProxyStatus() {
+    return $Call.ByID(3546341710);
 }
 
 /**
@@ -169,11 +250,29 @@ export function ImportConfig() {
 }
 
 /**
+ * ImportShareLinks 批量导入分享链接
+ * @param {string} text
+ * @returns {$CancellablePromise<number>}
+ */
+export function ImportShareLinks(text) {
+    return $Call.ByID(4153373042, text);
+}
+
+/**
  * RecommendPort 推荐可用端口
  * @returns {$CancellablePromise<number>}
  */
 export function RecommendPort() {
     return $Call.ByID(1630710424);
+}
+
+/**
+ * SaveRuleOrder 保存规则排序
+ * @param {string[]} orderedIDs
+ * @returns {$CancellablePromise<void>}
+ */
+export function SaveRuleOrder(orderedIDs) {
+    return $Call.ByID(2504508144, orderedIDs);
 }
 
 /**
@@ -207,6 +306,24 @@ export function StartAllRulesInGroup(groupID) {
 }
 
 /**
+ * StartChainProxy 启动链式代理
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartChainProxy(id) {
+    return $Call.ByID(2192625838, id);
+}
+
+/**
+ * StartLoadBalancer 启动负载均衡节点
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartLoadBalancer(id) {
+    return $Call.ByID(3817337139, id);
+}
+
+/**
  * StartRule 启动规则
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -222,6 +339,24 @@ export function StartRule(id) {
  */
 export function StopAllRulesInGroup(groupID) {
     return $Call.ByID(1876496629, groupID);
+}
+
+/**
+ * StopChainProxy 停止链式代理
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopChainProxy(id) {
+    return $Call.ByID(3219092048, id);
+}
+
+/**
+ * StopLoadBalancer 停止负载均衡节点
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopLoadBalancer(id) {
+    return $Call.ByID(3297196641, id);
 }
 
 /**
@@ -251,6 +386,33 @@ export function TestRuleSpeed(ruleID) {
 }
 
 /**
+ * TestSelectedRulesSpeed 测试选中的规则速度
+ * @param {string[]} ruleIDs
+ * @returns {$CancellablePromise<void>}
+ */
+export function TestSelectedRulesSpeed(ruleIDs) {
+    return $Call.ByID(2689257396, ruleIDs);
+}
+
+/**
+ * UpdateChainProxy 更新链式代理
+ * @param {models$0.ChainProxy} chain
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateChainProxy(chain) {
+    return $Call.ByID(2627418393, chain);
+}
+
+/**
+ * UpdateLoadBalancer 更新负载均衡节点
+ * @param {models$0.LoadBalanceNode} lb
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateLoadBalancer(lb) {
+    return $Call.ByID(682714724, lb);
+}
+
+/**
  * UpdateRule 更新规则
  * @param {string} id
  * @param {models$0.ProxyRule} updatedRule
@@ -272,9 +434,13 @@ export function UpdateSubscriptionByID(subID) {
 // Private type creation functions
 const $$createType0 = logger$0.LogEntry.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = models$0.Group.createFrom;
+const $$createType2 = models$0.ChainProxy.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = models$0.ProxyRule.createFrom;
+const $$createType4 = models$0.Group.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = models$0.Subscription.createFrom;
+const $$createType6 = models$0.LoadBalanceNode.createFrom;
 const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = models$0.ProxyRule.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = models$0.Subscription.createFrom;
+const $$createType11 = $Create.Array($$createType10);
