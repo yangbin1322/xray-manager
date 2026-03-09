@@ -1147,34 +1147,57 @@ func (a *MyService) ImportShareLinks(text string) (int, error) {
 
 // ==================== 系统代理 API (Feature 5) ====================
 
-// EnableSystemProxy 设置系统代理
+// EnableSystemProxy 设置系统代理（支持普通节点、链式代理、负载均衡）
 func (a *MyService) EnableSystemProxy(ruleID string) error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	// 查找规则
-	var targetRule *models.ProxyRule
+	// 先查找普通规则
 	for i := range a.config.Rules {
 		if a.config.Rules[i].ID == ruleID {
-			targetRule = &a.config.Rules[i]
-			break
+			rule := &a.config.Rules[i]
+			if !rule.Enabled {
+				return fmt.Errorf("请先启动节点再设置为系统代理")
+			}
+			if err := a.sysProxyManager.EnableSystemProxy(rule.LocalPort); err != nil {
+				return fmt.Errorf("设置系统代理失败: %v", err)
+			}
+			a.log(fmt.Sprintf("[系统代理] 已设置 %s (端口:%d) 为系统代理", rule.Alias, rule.LocalPort))
+			return nil
 		}
 	}
 
-	if targetRule == nil {
-		return fmt.Errorf("规则 %s 不存在", ruleID)
+	// 查找链式代理
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == ruleID {
+			chain := &a.config.ChainProxies[i]
+			if !chain.Enabled {
+				return fmt.Errorf("请先启动链式代理再设置为系统代理")
+			}
+			if err := a.sysProxyManager.EnableSystemProxy(chain.LocalPort); err != nil {
+				return fmt.Errorf("设置系统代理失败: %v", err)
+			}
+			a.log(fmt.Sprintf("[系统代理] 已设置链式代理 %s (端口:%d) 为系统代理", chain.Alias, chain.LocalPort))
+			return nil
+		}
 	}
 
-	if !targetRule.Enabled {
-		return fmt.Errorf("请先启动节点再设置为系统代理")
+	// 查找负载均衡
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == ruleID {
+			lb := &a.config.LoadBalancers[i]
+			if !lb.Enabled {
+				return fmt.Errorf("请先启动负载均衡再设置为系统代理")
+			}
+			if err := a.sysProxyManager.EnableSystemProxy(lb.LocalPort); err != nil {
+				return fmt.Errorf("设置系统代理失败: %v", err)
+			}
+			a.log(fmt.Sprintf("[系统代理] 已设置负载均衡 %s (端口:%d) 为系统代理", lb.Alias, lb.LocalPort))
+			return nil
+		}
 	}
 
-	if err := a.sysProxyManager.EnableSystemProxy(targetRule.LocalPort); err != nil {
-		return fmt.Errorf("设置系统代理失败: %v", err)
-	}
-
-	a.log(fmt.Sprintf("[系统代理] 已设置 %s (端口:%d) 为系统代理", targetRule.Alias, targetRule.LocalPort))
-	return nil
+	return fmt.Errorf("节点 %s 不存在", ruleID)
 }
 
 // DisableSystemProxy 取消系统代理

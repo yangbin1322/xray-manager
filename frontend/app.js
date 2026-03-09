@@ -402,12 +402,14 @@ function createLBRow(lb) {
         <td>
             <button class="btn-edit btn-edit-lb">编辑</button>
             <button class="btn-edit btn-toggle-lb" style="background:#${toggleColor}">${toggleText}</button>
+            <button class="btn-sysproxy" title="设为系统代理" style="padding:4px 6px;margin:0 2px;border:none;background:#9b59b6;color:white;border-radius:3px;cursor:pointer;font-size:11px;">代理</button>
             <button class="btn-delete btn-delete-lb">删除</button>
         </td>
     `;
 
     row.querySelector('.btn-edit-lb').addEventListener('click', () => editLB(lb.id));
     row.querySelector('.btn-toggle-lb').addEventListener('click', () => window.toggleLB(lb.id, lb.enabled));
+    row.querySelector('.btn-sysproxy').addEventListener('click', () => setRuleAsSystemProxy(lb.id));
     row.querySelector('.btn-delete-lb').addEventListener('click', () => window.deleteLBNode(lb.id));
 
     return row;
@@ -443,12 +445,14 @@ function createChainRow(chain) {
         <td>
             <button class="btn-edit btn-edit-chain">编辑</button>
             <button class="btn-edit btn-toggle-chain" style="background:#${toggleColor}">${toggleText}</button>
+            <button class="btn-sysproxy" title="设为系统代理" style="padding:4px 6px;margin:0 2px;border:none;background:#9b59b6;color:white;border-radius:3px;cursor:pointer;font-size:11px;">代理</button>
             <button class="btn-delete btn-delete-chain">删除</button>
         </td>
     `;
 
     row.querySelector('.btn-edit-chain').addEventListener('click', () => editChain(chain.id));
     row.querySelector('.btn-toggle-chain').addEventListener('click', () => window.toggleChain(chain.id, chain.enabled));
+    row.querySelector('.btn-sysproxy').addEventListener('click', () => setRuleAsSystemProxy(chain.id));
     row.querySelector('.btn-delete-chain').addEventListener('click', () => window.deleteChainNode(chain.id));
 
     return row;

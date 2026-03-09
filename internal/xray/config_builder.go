@@ -495,8 +495,10 @@ func BuildChainConfig(localType string, localPort int, chainRules []*models.Prox
 	config.Inbounds = []InboundConfig{inbound}
 
 	// 构建出站链
-	// Xray chain: proxy_0 -> proxy_1 -> ... -> proxy_n
-	// 通过 proxySettings.tag 链接
+	// 用户期望顺序: chain_0(第1个) → chain_1(第2个) → ... → chain_n(落地节点)
+	// Xray proxySettings 语义: proxySettings.tag 指定的出站作为当前出站的传输层
+	// 因此需要反向链接: 落地节点(chain_n) 的 proxySettings 指向 chain_n-1，以此类推
+	// 路由将流量导向落地节点(chain_n)，Xray 会自动按链路建立连接
 	var outbounds []OutboundConfig
 
 	for i, rule := range chainRules {
@@ -522,11 +524,12 @@ func BuildChainConfig(localType string, localPort int, chainRules []*models.Prox
 		}
 		outbound.StreamSettings = buildStreamSettings(rule)
 
-		// 链式代理：除了最后一个节点，每个节点指向下一跳
-		if i < len(chainRules)-1 {
-			nextTag := fmt.Sprintf("chain_%d", i+1)
+		// 链式代理：除了第一个节点（入口），每个节点的 proxySettings 指向前一个节点
+		// 这样 Xray 会先连接 chain_0，再通过 chain_0 连接 chain_1，依此类推
+		if i > 0 {
+			prevTag := fmt.Sprintf("chain_%d", i-1)
 			outbound.ProxySettings = &ProxySettingsConfig{
-				Tag:            nextTag,
+				Tag:            prevTag,
 				TransportLayer: true,
 			}
 		}
@@ -540,13 +543,14 @@ func BuildChainConfig(localType string, localPort int, chainRules []*models.Prox
 
 	config.Outbounds = outbounds
 
-	// 路由：将入站流量导向第一个节点
+	// 路由：将入站流量导向落地节点（最后一个节点）
+	lastTag := fmt.Sprintf("chain_%d", len(chainRules)-1)
 	config.Routing = &RoutingConfig{
 		Rules: []RoutingRule{
 			{
 				Type:        "field",
 				InboundTag:  []string{"inbound"},
-				OutboundTag: "chain_0",
+				OutboundTag: lastTag,
 			},
 		},
 	}
