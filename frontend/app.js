@@ -1021,8 +1021,41 @@ function renderChainSelected() {
     chainSelectedNodeIDs.forEach((node, index) => {
         const item = document.createElement('span');
         item.className = 'chain-node-item';
+        item.draggable = true;
+        item.dataset.index = index;
+        item.style.userSelect = 'none';
         const prefix = node.type === 'lb' ? '[LB] ' : '';
         item.innerHTML = `${prefix}${escapeHtml(node.name)} <span class="chain-remove" onclick="removeFromChain(${index})">×</span>`;
+
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', index.toString());
+            e.dataTransfer.effectAllowed = 'move';
+            item.style.opacity = '0.4';
+        });
+        item.addEventListener('dragend', () => {
+            item.style.opacity = '1';
+            container.querySelectorAll('.chain-node-item').forEach(el => el.classList.remove('chain-drag-over'));
+        });
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            item.classList.add('chain-drag-over');
+        });
+        item.addEventListener('dragleave', () => {
+            item.classList.remove('chain-drag-over');
+        });
+        item.addEventListener('drop', (e) => {
+            e.preventDefault();
+            item.classList.remove('chain-drag-over');
+            const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+            const toIndex = parseInt(item.dataset.index);
+            if (fromIndex !== toIndex) {
+                const [moved] = chainSelectedNodeIDs.splice(fromIndex, 1);
+                chainSelectedNodeIDs.splice(toIndex, 0, moved);
+                renderChainSelected();
+            }
+        });
+
         container.appendChild(item);
 
         if (index < chainSelectedNodeIDs.length - 1) {
