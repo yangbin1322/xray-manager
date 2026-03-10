@@ -6,6 +6,31 @@ on:
   pull_request:
 
 jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.22"
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Build Windows
+        run: wails3 task windows:build PRODUCTION=true
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-manager-windows-amd64
+          path: bin/xray-manager.exe
+
   build-macos:
     name: Build macOS ARM64
     runs-on: macos-latest
@@ -27,8 +52,17 @@ jobs:
           export CGO_ENABLED=1
           wails3 task darwin:package
 
+      - name: Create DMG
+        run: |
+          APP_NAME="xray-manager"
+          DMG_NAME="${APP_NAME}-macos-arm64.dmg"
+          hdiutil create -volname "${APP_NAME}" \
+            -srcfolder "bin/${APP_NAME}.app" \
+            -ov -format UDZO \
+            "bin/${DMG_NAME}"
+
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: xray-manager-macos-arm64
-          path: bin/
+          path: bin/xray-manager-macos-arm64.dmg
