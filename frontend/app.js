@@ -331,6 +331,7 @@ function createRuleRow(rule) {
         </td>
         <td>
             <button class="btn-edit">编辑</button>
+            <button class="btn-copy" title="复制节点" style="padding:4px 6px;margin:0 2px;border:none;background:#16a085;color:white;border-radius:3px;cursor:pointer;font-size:11px;">复制</button>
             <button class="btn-test" title="测速">测速</button>
             <button class="btn-sysproxy" title="设为系统代理" style="padding:4px 6px;margin:0 2px;border:none;background:#9b59b6;color:white;border-radius:3px;cursor:pointer;font-size:11px;">代理</button>
             <button class="btn-delete">删除</button>
@@ -348,6 +349,9 @@ function createRuleRow(rule) {
     //绑定行编辑事件
     const editBtn = row.querySelector('.btn-edit');
     editBtn.addEventListener('click', () => editRule(rule.id));
+    // 绑定复制事件
+    const copyBtn = row.querySelector('.btn-copy');
+    copyBtn.addEventListener('click', () => copyRule(rule.id));
     //绑定行删除事件
     const deleteBtn = row.querySelector('.btn-delete');
     deleteBtn.addEventListener('click', () => deleteRule(rule.id));
@@ -1543,6 +1547,37 @@ async function deleteRule(ruleId) {
     } catch (error) {
         addLog(`[错误] 删除规则失败: ${error}`);
         alert(`删除失败: ${error}`);
+    }
+}
+
+// 复制规则
+async function copyRule(ruleId) {
+    const rule = rules.find(r => r.id === ruleId);
+    if (!rule) return;
+
+    const newRule = Object.assign({}, rule);
+    delete newRule.id;
+    newRule.alias = rule.alias + ' (副本)';
+    newRule.enabled = false;
+    newRule.processId = 0;
+    newRule.realIp = '';
+    // 自动分配新端口：在当前端口基础上+1，避免冲突
+    const usedPorts = new Set(rules.map(r => r.localPort));
+    let newPort = rule.localPort + 1;
+    while (usedPorts.has(newPort) && newPort <= 65535) {
+        newPort++;
+    }
+    if (newPort <= 65535) {
+        newRule.localPort = newPort;
+    }
+
+    try {
+        await MyService.AddRule(newRule);
+        await loadRules();
+        addLog(`[复制] 已复制节点: ${rule.alias}`);
+    } catch (error) {
+        addLog(`[错误] 复制节点失败: ${error}`);
+        alert(`复制失败: ${error}`);
     }
 }
 
