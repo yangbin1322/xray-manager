@@ -36,8 +36,8 @@ export async function saveRuleOrder(orderedIDs) {
 
 // ==================== 导入导出 ====================
 
-export async function exportConfig() {
-  return await MyService.ExportConfig()
+export async function exportConfig(ruleIds = []) {
+  return await MyService.ExportConfig(ruleIds)
 }
 
 export async function importConfig() {

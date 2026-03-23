@@ -450,7 +450,8 @@ func (a *MyService) log(message string) {
 }
 
 // ExportConfig 导出配置（标准格式，包含版本信息）
-func (a *MyService) ExportConfig() (string, error) {
+// ruleIds 为空时导出全部规则，非空时仅导出选中的规则
+func (a *MyService) ExportConfig(ruleIds []int) (string, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -473,8 +474,25 @@ func (a *MyService) ExportConfig() (string, error) {
 	}
 
 	// 构建标准导出数据（清除运行时状态）
-	exportRules := make([]models.ProxyRule, len(a.config.Rules))
-	copy(exportRules, a.config.Rules)
+	var sourceRules []models.ProxyRule
+	if len(ruleIds) > 0 {
+		// 仅导出选中的规则
+		idSet := make(map[int]bool, len(ruleIds))
+		for _, id := range ruleIds {
+			idSet[id] = true
+		}
+		for _, r := range a.config.Rules {
+			if idSet[r.ID] {
+				sourceRules = append(sourceRules, r)
+			}
+		}
+	} else {
+		// 导出全部规则
+		sourceRules = a.config.Rules
+	}
+
+	exportRules := make([]models.ProxyRule, len(sourceRules))
+	copy(exportRules, sourceRules)
 	for i := range exportRules {
 		exportRules[i].Enabled = false
 		exportRules[i].ProcessID = 0

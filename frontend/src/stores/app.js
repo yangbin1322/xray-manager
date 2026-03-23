@@ -99,11 +99,12 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // === 导入导出 ===
-  async function doExportConfig() {
+  async function doExportConfig(ruleIds = []) {
     try {
-      const filePath = await api.exportConfig()
-      showToast(`配置已导出到: ${filePath}`, 'success')
-      addLog(`[系统] 配置已导出到: ${filePath}`)
+      const filePath = await api.exportConfig(ruleIds)
+      const hint = ruleIds.length > 0 ? `（已选 ${ruleIds.length} 条）` : '（全部）'
+      showToast(`配置已导出到: ${filePath}${hint}`, 'success')
+      addLog(`[系统] 配置已导出到: ${filePath}${hint}`)
     } catch (e) {
       if (e && e.toString().includes('用户取消')) return
       showToast(`导出失败: ${e}`, 'error')

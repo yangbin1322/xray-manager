@@ -9,7 +9,7 @@
     <div class="bar-right">
       <button class="btn-action" @click="showBatchImport = true">批量导入</button>
       <button class="btn-action" @click="appStore.doImportConfig().then(handleImportDone)">导入规则</button>
-      <button class="btn-action" @click="appStore.doExportConfig()">导出规则</button>
+      <button class="btn-action" @click="handleExport">导出规则</button>
       <button class="btn-primary" @click="$emit('addRule')">添加规则</button>
     </div>
 
@@ -58,6 +58,12 @@ const groupsStore = useGroupsStore()
 const showBatchImport = ref(false)
 const importText = ref('')
 const importing = ref(false)
+
+async function handleExport() {
+  // 有选中的规则时导出选中的，否则导出全部
+  const ids = rulesStore.selectedRuleIds
+  await appStore.doExportConfig(ids)
+}
 
 async function handleBatchImport() {
   if (!importText.value.trim()) {
