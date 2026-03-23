@@ -162,7 +162,6 @@ export const useRulesStore = defineStore('rules', () => {
     }
     await loadRules()
   }
-  }
 
   async function testSelectedSpeed() {
     const ids = selectedRuleIds.value
