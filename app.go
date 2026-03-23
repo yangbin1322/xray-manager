@@ -132,20 +132,18 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 启动时同步进程状态（修复崩溃后的状态不一致）
 		a.config.Rules = a.processManager.SyncState(a.config.Rules)
-		// 同步负载均衡和链式代理的状态
+		// 同步负载均衡和链式代理的状态（保留启用标记以便重启）
 		for i := range a.config.LoadBalancers {
 			lb := &a.config.LoadBalancers[i]
 			if lb.Enabled && (lb.ProcessID <= 0 || !a.processManager.IsRunning(lb.LocalPort)) {
-				a.log(fmt.Sprintf("[状态同步] 负载均衡 %s 进程不存在，重置状态", lb.Alias))
-				lb.Enabled = false
+				a.log(fmt.Sprintf("[状态同步] 负载均衡 %s 进程不存在，重置进程状态（保留启用标记以便重启）", lb.Alias))
 				lb.ProcessID = 0
 			}
 		}
 		for i := range a.config.ChainProxies {
 			chain := &a.config.ChainProxies[i]
 			if chain.Enabled && (chain.ProcessID <= 0 || !a.processManager.IsRunning(chain.LocalPort)) {
-				a.log(fmt.Sprintf("[状态同步] 链式代理 %s 进程不存在，重置状态", chain.Alias))
-				chain.Enabled = false
+				a.log(fmt.Sprintf("[状态同步] 链式代理 %s 进程不存在，重置进程状态（保留启用标记以便重启）", chain.Alias))
 				chain.ProcessID = 0
 			}
 		}
@@ -162,6 +160,33 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 				}
 			}
 		}
+
+		// 自动启动已启用的负载均衡节点
+		for i := range a.config.LoadBalancers {
+			lb := &a.config.LoadBalancers[i]
+			if lb.Enabled {
+				a.log(fmt.Sprintf("自动启动负载均衡: %s", lb.Alias))
+				if err := a.startLoadBalancerInternal(lb); err != nil {
+					a.logError(fmt.Sprintf("启动负载均衡 %s 失败", lb.Alias), err)
+					lb.Enabled = false
+				}
+			}
+		}
+
+		// 自动启动已启用的链式代理
+		for i := range a.config.ChainProxies {
+			chain := &a.config.ChainProxies[i]
+			if chain.Enabled {
+				a.log(fmt.Sprintf("自动启动链式代理: %s", chain.Alias))
+				if err := a.startChainProxyInternal(chain); err != nil {
+					a.logError(fmt.Sprintf("启动链式代理 %s 失败", chain.Alias), err)
+					chain.Enabled = false
+				}
+			}
+		}
+
+		// 保存自动启动后的状态
+		_ = a.saveConfig()
 	}
 
 	a.log("Xray 管理器已启动")
@@ -171,6 +196,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 // ServiceShutdown 在应用关闭时调用
 func (a *MyService) ServiceShutdown() error {
+	// 先保存配置（保留 Enabled 状态，以便下次启动时恢复）
+	if err := a.saveConfig(); err != nil {
+		a.logError("保存配置失败", err)
+	}
+
 	a.log("正在停止所有进程...")
 	a.processManager.StopAll()
 
@@ -182,11 +212,6 @@ func (a *MyService) ServiceShutdown() error {
 	// 停止所有订阅更新任务
 	if a.subscriptionManager != nil {
 		a.subscriptionManager.StopAll()
-	}
-
-	// 保存配置
-	if err := a.saveConfig(); err != nil {
-		a.logError("保存配置失败", err)
 	}
 
 	a.log("Xray 管理器已关闭")
@@ -1547,6 +1572,52 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 	return fmt.Errorf("负载均衡节点不存在")
 }
 
+// startLoadBalancerInternal 启动负载均衡节点（内部方法，不加锁）
+func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error {
+	// 收集子节点
+	nodes := make([]*models.ProxyRule, 0)
+	for _, nodeID := range lb.NodeIDs {
+		for j := range a.config.Rules {
+			if a.config.Rules[j].ID == nodeID {
+				nodes = append(nodes, &a.config.Rules[j])
+				break
+			}
+		}
+	}
+
+	if len(nodes) == 0 {
+		return fmt.Errorf("未找到有效的子节点")
+	}
+
+	// 构建负载均衡配置
+	xrayConfig, err := xray.BuildLoadBalanceConfig(lb, nodes)
+	if err != nil {
+		return err
+	}
+
+	configJSON, err := xrayConfig.ToJSON()
+	if err != nil {
+		return err
+	}
+
+	// 创建临时规则用于启动进程
+	tempRule := &models.ProxyRule{
+		ID:        lb.ID,
+		Alias:     lb.Alias,
+		LocalType: lb.LocalType,
+		LocalPort: lb.LocalPort,
+		Protocol:  "vmess", // 占位，不影响实际配置
+	}
+
+	// 使用 processManager 启动
+	if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+		return err
+	}
+
+	lb.Enabled = true
+	return nil
+}
+
 // StartLoadBalancer 启动负载均衡节点
 func (a *MyService) StartLoadBalancer(id string) error {
 	a.mu.Lock()
@@ -1559,47 +1630,10 @@ func (a *MyService) StartLoadBalancer(id string) error {
 				return fmt.Errorf("负载均衡节点已在运行")
 			}
 
-			// 收集子节点
-			nodes := make([]*models.ProxyRule, 0)
-			for _, nodeID := range lb.NodeIDs {
-				for j := range a.config.Rules {
-					if a.config.Rules[j].ID == nodeID {
-						nodes = append(nodes, &a.config.Rules[j])
-						break
-					}
-				}
-			}
-
-			if len(nodes) == 0 {
-				return fmt.Errorf("未找到有效的子节点")
-			}
-
-			// 构建负载均衡配置
-			xrayConfig, err := xray.BuildLoadBalanceConfig(lb, nodes)
-			if err != nil {
+			if err := a.startLoadBalancerInternal(lb); err != nil {
 				return err
 			}
 
-			configJSON, err := xrayConfig.ToJSON()
-			if err != nil {
-				return err
-			}
-
-			// 创建临时规则用于启动进程
-			tempRule := &models.ProxyRule{
-				ID:        lb.ID,
-				Alias:     lb.Alias,
-				LocalType: lb.LocalType,
-				LocalPort: lb.LocalPort,
-				Protocol:  "vmess", // 占位，不影响实际配置
-			}
-
-			// 使用 processManager 启动
-			if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
-				return err
-			}
-
-			lb.Enabled = true
 			return a.saveConfig()
 		}
 	}
@@ -1739,6 +1773,42 @@ func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 	return fmt.Errorf("链式代理不存在")
 }
 
+// startChainProxyInternal 启动链式代理（内部方法，不加锁）
+func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
+	// 解析链中的节点（支持负载均衡节点）
+	chainRules, err := a.resolveChainNodes(chain.ChainNodes)
+	if err != nil {
+		return err
+	}
+
+	// 构建链式代理配置
+	xrayConfig, err := xray.BuildChainConfig(chain.LocalType, chain.LocalPort, chainRules)
+	if err != nil {
+		return err
+	}
+
+	configJSON, err := xrayConfig.ToJSON()
+	if err != nil {
+		return err
+	}
+
+	// 创建临时规则用于启动进程
+	tempRule := &models.ProxyRule{
+		ID:        chain.ID,
+		Alias:     chain.Alias,
+		LocalType: chain.LocalType,
+		LocalPort: chain.LocalPort,
+		Protocol:  "vmess", // 占位
+	}
+
+	if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+		return err
+	}
+
+	chain.Enabled = true
+	return nil
+}
+
 // StartChainProxy 启动链式代理
 func (a *MyService) StartChainProxy(id string) error {
 	a.mu.Lock()
@@ -1751,37 +1821,10 @@ func (a *MyService) StartChainProxy(id string) error {
 				return fmt.Errorf("链式代理已在运行")
 			}
 
-			// 解析链中的节点（支持负载均衡节点）
-			chainRules, err := a.resolveChainNodes(chain.ChainNodes)
-			if err != nil {
+			if err := a.startChainProxyInternal(chain); err != nil {
 				return err
 			}
 
-			// 构建链式代理配置
-			xrayConfig, err := xray.BuildChainConfig(chain.LocalType, chain.LocalPort, chainRules)
-			if err != nil {
-				return err
-			}
-
-			configJSON, err := xrayConfig.ToJSON()
-			if err != nil {
-				return err
-			}
-
-			// 创建临时规则用于启动进程
-			tempRule := &models.ProxyRule{
-				ID:        chain.ID,
-				Alias:     chain.Alias,
-				LocalType: chain.LocalType,
-				LocalPort: chain.LocalPort,
-				Protocol:  "vmess", // 占位
-			}
-
-			if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
-				return err
-			}
-
-			chain.Enabled = true
 			return a.saveConfig()
 		}
 	}

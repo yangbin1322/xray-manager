@@ -88,7 +88,7 @@ func main() {
 
 		// 一键启动所有节点
 		menu.Add("启动所有节点").OnClick(func(c *application.Context) {
-			// 调用服务方法启动所有节点
+			// 调用服务方法启动所有节点（包括规则、负载均衡、链式代理）
 			go func() {
 				rules := Service.GetRules()
 				for _, rule := range rules {
@@ -96,17 +96,41 @@ func main() {
 						_ = Service.StartRule(rule.ID)
 					}
 				}
+				lbs := Service.GetLoadBalancers()
+				for _, lb := range lbs {
+					if !lb.Enabled {
+						_ = Service.StartLoadBalancer(lb.ID)
+					}
+				}
+				chains := Service.GetChainProxies()
+				for _, chain := range chains {
+					if !chain.Enabled {
+						_ = Service.StartChainProxy(chain.ID)
+					}
+				}
 			}()
 		})
 
 		// 一键停止所有节点
 		menu.Add("停止所有节点").OnClick(func(c *application.Context) {
-			// 调用服务方法停止所有节点
+			// 调用服务方法停止所有节点（包括规则、负载均衡、链式代理）
 			go func() {
 				rules := Service.GetRules()
 				for _, rule := range rules {
 					if rule.Enabled {
 						_ = Service.StopRule(rule.ID)
+					}
+				}
+				lbs := Service.GetLoadBalancers()
+				for _, lb := range lbs {
+					if lb.Enabled {
+						_ = Service.StopLoadBalancer(lb.ID)
+					}
+				}
+				chains := Service.GetChainProxies()
+				for _, chain := range chains {
+					if chain.Enabled {
+						_ = Service.StopChainProxy(chain.ID)
 					}
 				}
 			}()

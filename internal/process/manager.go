@@ -506,10 +506,10 @@ func (m *Manager) SyncState(rules []models.ProxyRule) []models.ProxyRule {
 		rule := &rules[i]
 		if rule.Enabled {
 			if rule.ProcessID <= 0 || !processExists(rule.ProcessID) {
-				m.log(fmt.Sprintf("[状态同步] 规则 %s (PID:%d) 进程不存在，重置状态", rule.Alias, rule.ProcessID))
-				rule.Enabled = false
+				m.log(fmt.Sprintf("[状态同步] 规则 %s (PID:%d) 进程不存在，重置进程状态（保留启用标记以便重启）", rule.Alias, rule.ProcessID))
 				rule.ProcessID = 0
 				rule.RealIP = ""
+				// 保留 Enabled = true，以便启动时自动恢复
 			}
 		}
 	}
