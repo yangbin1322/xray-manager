@@ -29,10 +29,26 @@
       @close="closeEditor"
     />
 
+    <!-- 订阅管理对话框 -->
+    <SubscriptionDialog
+      :visible="showSubscriptionDialog"
+      @close="showSubscriptionDialog = false"
+    />
+
+    <!-- 负载均衡对话框 -->
+    <LoadBalancerDialog
+      :visible="showLBDialog"
+      @close="showLBDialog = false"
+    />
+
+    <!-- 链式代理对话框 -->
+    <ChainProxyDialog
+      :visible="showChainDialog"
+      @close="showChainDialog = false"
+    />
+
     <!-- Toast 通知 -->
     <ToastContainer />
-
-    <!-- TODO: 订阅管理、负载均衡、链式代理 对话框可按需添加 -->
   </div>
 </template>
 
@@ -50,6 +66,9 @@ import LogPanel from './components/LogPanel.vue'
 import BottomBar from './components/BottomBar.vue'
 import NodeEditor from './components/NodeEditor.vue'
 import ToastContainer from './components/ToastContainer.vue'
+import SubscriptionDialog from './components/SubscriptionDialog.vue'
+import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
+import ChainProxyDialog from './components/ChainProxyDialog.vue'
 
 const rulesStore = useRulesStore()
 const groupsStore = useGroupsStore()
