@@ -111,10 +111,18 @@ export const useRulesStore = defineStore('rules', () => {
   async function deleteSelectedRules() {
     const ids = selectedRuleIds.value
     for (const id of ids) {
+      const node = allNodes.value.find(n => n.id === id)
+      if (!node) continue
       try {
-        await api.deleteRule(id)
+        if (node._nodeType === 'lb') {
+          await api.deleteLoadBalancer(id)
+        } else if (node._nodeType === 'chain') {
+          await api.deleteChainProxy(id)
+        } else {
+          await api.deleteRule(id)
+        }
       } catch (e) {
-        console.error('删除规则失败:', e)
+        console.error('删除失败:', e)
       }
     }
     selectedIds.value.clear()
@@ -123,20 +131,37 @@ export const useRulesStore = defineStore('rules', () => {
 
   async function startSelectedRules() {
     for (const id of selectedRuleIds.value) {
-      const rule = rules.value.find(r => r.id === id)
-      if (rule && !rule.enabled) {
-        try { await api.startRule(id) } catch (e) { console.error(e) }
-      }
+      const node = allNodes.value.find(n => n.id === id)
+      if (!node || node.enabled) continue
+      try {
+        if (node._nodeType === 'lb') {
+          await api.startLoadBalancer(id)
+        } else if (node._nodeType === 'chain') {
+          await api.startChainProxy(id)
+        } else {
+          await api.startRule(id)
+        }
+      } catch (e) { console.error(e) }
     }
+    await loadRules()
   }
 
   async function stopSelectedRules() {
     for (const id of selectedRuleIds.value) {
-      const rule = rules.value.find(r => r.id === id)
-      if (rule && rule.enabled) {
-        try { await api.stopRule(id) } catch (e) { console.error(e) }
-      }
+      const node = allNodes.value.find(n => n.id === id)
+      if (!node || !node.enabled) continue
+      try {
+        if (node._nodeType === 'lb') {
+          await api.stopLoadBalancer(id)
+        } else if (node._nodeType === 'chain') {
+          await api.stopChainProxy(id)
+        } else {
+          await api.stopRule(id)
+        }
+      } catch (e) { console.error(e) }
     }
+    await loadRules()
+  }
   }
 
   async function testSelectedSpeed() {
