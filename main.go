@@ -13,6 +13,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIcon []byte
+
 func main() {
 	// 从嵌入的 frontend/dist 中提取子文件系统
 	distFS, err := fs.Sub(assets, "frontend/dist")
@@ -73,7 +76,8 @@ func main() {
 	// 创建系统托盘
 	systemTray := app.SystemTray.New()
 	if systemTray != nil {
-		// 设置托盘图标提示
+		// 设置托盘图标（macOS 使用模板图标，自动适配亮色/暗色模式）
+		systemTray.SetTemplateIcon(appIcon)
 		systemTray.SetTooltip("Xray 管理器")
 		// 创建托盘菜单
 		menu := app.Menu.New()
@@ -88,7 +92,7 @@ func main() {
 
 		// 一键启动所有节点
 		menu.Add("启动所有节点").OnClick(func(c *application.Context) {
-			// 调用服务方法启动所有节点
+			// 调用服务方法启动所有节点（包括规则、负载均衡、链式代理）
 			go func() {
 				rules := Service.GetRules()
 				for _, rule := range rules {
@@ -96,17 +100,41 @@ func main() {
 						_ = Service.StartRule(rule.ID)
 					}
 				}
+				lbs := Service.GetLoadBalancers()
+				for _, lb := range lbs {
+					if !lb.Enabled {
+						_ = Service.StartLoadBalancer(lb.ID)
+					}
+				}
+				chains := Service.GetChainProxies()
+				for _, chain := range chains {
+					if !chain.Enabled {
+						_ = Service.StartChainProxy(chain.ID)
+					}
+				}
 			}()
 		})
 
 		// 一键停止所有节点
 		menu.Add("停止所有节点").OnClick(func(c *application.Context) {
-			// 调用服务方法停止所有节点
+			// 调用服务方法停止所有节点（包括规则、负载均衡、链式代理）
 			go func() {
 				rules := Service.GetRules()
 				for _, rule := range rules {
 					if rule.Enabled {
 						_ = Service.StopRule(rule.ID)
+					}
+				}
+				lbs := Service.GetLoadBalancers()
+				for _, lb := range lbs {
+					if lb.Enabled {
+						_ = Service.StopLoadBalancer(lb.ID)
+					}
+				}
+				chains := Service.GetChainProxies()
+				for _, chain := range chains {
+					if chain.Enabled {
+						_ = Service.StopChainProxy(chain.ID)
 					}
 				}
 			}()
