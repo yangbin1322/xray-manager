@@ -13,7 +13,8 @@
 
 # Wails build directory
 
-frontend/dist/
+frontend/dist/*
+!frontend/dist/.gitkeep
 frontend/node_modules/
 
 # Go workspace file

@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "My Product Description",
-			"LegalCopyright": "© now, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "xray-manager",
+			"FileDescription": "Xray 代理管理工具，支持多规则配置与一键切换",
+			"LegalCopyright": "© 2025, xray-manager",
+			"ProductName": "xray-manager",
+			"Comments": "Xray 代理管理工具"
 		}
 	}
 }

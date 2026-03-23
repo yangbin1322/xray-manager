@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 	"xray-manager/internal/config"
@@ -127,6 +129,27 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 				a.subscriptionManager.RestartAutoUpdate(sub)
 			}
 		}
+
+		// 启动时同步进程状态（修复崩溃后的状态不一致）
+		a.config.Rules = a.processManager.SyncState(a.config.Rules)
+		// 同步负载均衡和链式代理的状态
+		for i := range a.config.LoadBalancers {
+			lb := &a.config.LoadBalancers[i]
+			if lb.Enabled && (lb.ProcessID <= 0 || !a.processManager.IsRunning(lb.LocalPort)) {
+				a.log(fmt.Sprintf("[状态同步] 负载均衡 %s 进程不存在，重置状态", lb.Alias))
+				lb.Enabled = false
+				lb.ProcessID = 0
+			}
+		}
+		for i := range a.config.ChainProxies {
+			chain := &a.config.ChainProxies[i]
+			if chain.Enabled && (chain.ProcessID <= 0 || !a.processManager.IsRunning(chain.LocalPort)) {
+				a.log(fmt.Sprintf("[状态同步] 链式代理 %s 进程不存在，重置状态", chain.Alias))
+				chain.Enabled = false
+				chain.ProcessID = 0
+			}
+		}
+		_ = a.saveConfig()
 
 		// 自动启动已启用的规则
 		for i := range a.config.Rules {
@@ -355,15 +378,18 @@ func (a *MyService) StopRule(id string) error {
 		rule := &a.config.Rules[i]
 		if rule.ID == id {
 			if !rule.Enabled {
-				return fmt.Errorf("规则 %s 未运行", rule.Alias)
+				// 已经停止，不报错
+				return nil
 			}
 
+			// Stop 方法已做容错处理，进程不存在不会报错
 			if err := a.processManager.Stop(rule.LocalPort); err != nil {
-				rule.Enabled = false
-				return err
+				a.logError(fmt.Sprintf("停止规则 %s 时出现警告", rule.Alias), err)
 			}
 
 			rule.Enabled = false
+			rule.ProcessID = 0
+			rule.RealIP = ""
 
 			if err := a.saveConfig(); err != nil {
 				return err
@@ -403,8 +429,11 @@ func (a *MyService) SetAutoStart(enabled bool) error {
 	return a.saveConfig()
 }
 
-// GetAutoStart 获取开机自启状态
+// GetAutoStart 获取开机自启状态（从系统配置读取）
 func (a *MyService) GetAutoStart() bool {
+	if a.autostartManager != nil {
+		return a.autostartManager.IsEnabled()
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.AutoStart
@@ -423,8 +452,9 @@ func (a *MyService) log(message string) {
 	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: fmt.Sprintf("[系统] %s", message)})
 }
 
-// ExportConfig 导出配置
-func (a *MyService) ExportConfig() (string, error) {
+// ExportConfig 导出配置（标准格式，包含版本信息）
+// ruleIds 为空时导出全部规则，非空时仅导出选中的规则
+func (a *MyService) ExportConfig(ruleIds []string) (string, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -446,145 +476,264 @@ func (a *MyService) ExportConfig() (string, error) {
 		return "", fmt.Errorf("用户取消操作")
 	}
 
-	// 导出配置到文件
-	if err := a.configManager.SaveTo(a.config, filePath); err != nil {
-		return "", fmt.Errorf("导出配置失败: %v", err)
+	// 构建标准导出数据（清除运行时状态）
+	var sourceRules []models.ProxyRule
+	if len(ruleIds) > 0 {
+		// 仅导出选中的规则
+		idSet := make(map[string]bool, len(ruleIds))
+		for _, id := range ruleIds {
+			idSet[id] = true
+		}
+		for _, r := range a.config.Rules {
+			if idSet[r.ID] {
+				sourceRules = append(sourceRules, r)
+			}
+		}
+	} else {
+		// 导出全部规则
+		sourceRules = a.config.Rules
 	}
 
-	a.log(fmt.Sprintf("配置已导出到: %s", filePath))
+	exportRules := make([]models.ProxyRule, len(sourceRules))
+	copy(exportRules, sourceRules)
+	for i := range exportRules {
+		exportRules[i].Enabled = false
+		exportRules[i].ProcessID = 0
+		exportRules[i].RealIP = ""
+		exportRules[i].TestStatus = ""
+		exportRules[i].Latency = 0
+		exportRules[i].DownloadSpeed = 0
+		exportRules[i].LastTestTime = ""
+	}
+
+	exportLBs := make([]models.LoadBalanceNode, len(a.config.LoadBalancers))
+	copy(exportLBs, a.config.LoadBalancers)
+	for i := range exportLBs {
+		exportLBs[i].Enabled = false
+		exportLBs[i].ProcessID = 0
+	}
+
+	exportChains := make([]models.ChainProxy, len(a.config.ChainProxies))
+	copy(exportChains, a.config.ChainProxies)
+	for i := range exportChains {
+		exportChains[i].Enabled = false
+		exportChains[i].ProcessID = 0
+	}
+
+	exportData := models.ExportData{
+		Version:       "1.0",
+		ExportTime:    time.Now().Format("2006-01-02 15:04:05"),
+		Rules:         exportRules,
+		Groups:        a.config.Groups,
+		Subscriptions: a.config.Subscriptions,
+		LoadBalancers: exportLBs,
+		ChainProxies:  exportChains,
+	}
+
+	data, err := json.MarshalIndent(exportData, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("序列化导出数据失败: %v", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return "", fmt.Errorf("写入导出文件失败: %v", err)
+	}
+
+	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个）", filePath, len(exportRules), len(a.config.Groups)))
 	return filePath, nil
 }
 
-// ImportConfig 导入配置
-func (a *MyService) ImportConfig() error {
-	// 选择导入文件
+// ImportConfig 导入配置（支持标准导出格式和旧格式，含重复检测和校验）
+func (a *MyService) ImportConfig() (*models.ImportResult, error) {
+	result := &models.ImportResult{Success: true}
 
+	// 选择导入文件
 	filePath, err := a.app.Dialog.OpenFile().PromptForSingleSelection()
 	if err != nil {
-		return fmt.Errorf("选择文件失败: %v", err)
+		return nil, fmt.Errorf("选择文件失败: %v", err)
+	}
+	if filePath == "" {
+		return nil, fmt.Errorf("用户取消操作")
 	}
 
-	if filePath == "" {
-		return fmt.Errorf("用户取消操作")
+	// 读取文件内容
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %v", err)
+	}
+
+	// 尝试解析为新版 ExportData 格式
+	var exportData models.ExportData
+	var importedRules []models.ProxyRule
+	var importedGroups []models.Group
+	var importedSubs []models.Subscription
+	var importedLBs []models.LoadBalanceNode
+	var importedChains []models.ChainProxy
+
+	if err := json.Unmarshal(data, &exportData); err == nil && exportData.Version != "" {
+		// 新版格式
+		importedRules = exportData.Rules
+		importedGroups = exportData.Groups
+		importedSubs = exportData.Subscriptions
+		importedLBs = exportData.LoadBalancers
+		importedChains = exportData.ChainProxies
+	} else {
+		// 尝试解析为旧版 Config 格式（向后兼容）
+		var oldConfig models.Config
+		if err := json.Unmarshal(data, &oldConfig); err != nil {
+			return nil, fmt.Errorf("无法识别的文件格式: %v", err)
+		}
+		importedRules = oldConfig.Rules
+		importedGroups = oldConfig.Groups
+		importedSubs = oldConfig.Subscriptions
+		importedLBs = oldConfig.LoadBalancers
+		importedChains = oldConfig.ChainProxies
+		result.Warnings = append(result.Warnings, "检测到旧版格式，已自动兼容")
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 加载配置文件
-	importedConfig, err := a.configManager.LoadFrom(filePath)
-	if err != nil {
-		return fmt.Errorf("导入配置失败: %v", err)
-	}
-
-	// 建立分组ID映射（旧ID -> 新ID）
-	groupIDMap := make(map[string]string)
-	importedGroupsCount := 0
-
-	// 先导入分组
-	for _, group := range importedConfig.Groups {
-		// 检查分组名称是否已存在
+	// === 导入分组 ===
+	groupIDMap := make(map[string]string) // 旧ID -> 新ID
+	for _, grp := range importedGroups {
 		exists := false
-		for _, existingGroup := range a.config.Groups {
-			if existingGroup.Name == group.Name && existingGroup.Source == group.Source {
-				// 分组已存在，使用现有分组ID
-				groupIDMap[group.ID] = existingGroup.ID
+		for _, existing := range a.config.Groups {
+			if existing.Name == grp.Name && existing.Source == grp.Source {
+				groupIDMap[grp.ID] = existing.ID
 				exists = true
 				break
 			}
 		}
-		fmt.Println(exists, group.ID, group.Source, group.Name)
-
 		if !exists {
-			// 分组不存在，创建新分组
-			oldID := group.ID
-			group.ID = fmt.Sprintf("group_%d", time.Now().UnixNano())
-			group.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
-			groupIDMap[oldID] = group.ID
-			a.config.Groups = append(a.config.Groups, group)
-			importedGroupsCount++
+			oldID := grp.ID
+			grp.ID = fmt.Sprintf("group_%d", time.Now().UnixNano())
+			grp.CreatedAt = time.Now().Format("2006-01-02 15:04:05")
+			groupIDMap[oldID] = grp.ID
+			a.config.Groups = append(a.config.Groups, grp)
+			result.GroupsImported++
+			time.Sleep(time.Nanosecond) // 确保 ID 唯一
 		}
 	}
 
-	// 建立订阅ID映射（旧ID -> 新ID）
-	subscriptionIDMap := make(map[string]string)
-	importedSubscriptionsCount := 0
-
-	// 再导入订阅
-	for _, sub := range importedConfig.Subscriptions {
-		// 更新订阅的分组ID
-		if newGroupID, ok := groupIDMap[sub.GroupID]; ok {
-			sub.GroupID = newGroupID
+	// === 导入订阅 ===
+	subIDMap := make(map[string]string)
+	for _, sub := range importedSubs {
+		if newGID, ok := groupIDMap[sub.GroupID]; ok {
+			sub.GroupID = newGID
 		}
-
-		// 检查订阅URL是否已存在
 		exists := false
-		for _, existingSub := range a.config.Subscriptions {
-			if existingSub.URL == sub.URL {
-				// 订阅已存在，使用现有订阅ID
-				subscriptionIDMap[sub.ID] = existingSub.ID
+		for _, existing := range a.config.Subscriptions {
+			if existing.URL == sub.URL {
+				subIDMap[sub.ID] = existing.ID
 				exists = true
+				result.Warnings = append(result.Warnings, fmt.Sprintf("订阅已存在，跳过: %s", sub.Name))
 				break
 			}
 		}
-
 		if !exists {
-			// 订阅不存在，创建新订阅
 			oldID := sub.ID
 			sub.ID = fmt.Sprintf("sub_%d", time.Now().UnixNano())
-			subscriptionIDMap[oldID] = sub.ID
+			subIDMap[oldID] = sub.ID
 			a.config.Subscriptions = append(a.config.Subscriptions, sub)
-			importedSubscriptionsCount++
+			result.SubsImported++
+			time.Sleep(time.Nanosecond)
 		}
 	}
 
-	// 合并规则（追加到现有规则）
-	existingPortMap := make(map[int]bool)
-	for _, rule := range a.config.Rules {
-		existingPortMap[rule.LocalPort] = true
-	}
+	// === 导入规则（含重复检测和校验） ===
+	for _, rule := range importedRules {
+		// 校验字段合法性
+		if err := rule.Validate(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("规则校验失败 [%s]: %v", rule.Alias, err))
+			continue
+		}
 
-	importedCount := 0
-	for _, rule := range importedConfig.Rules {
-		// 更新规则的分组ID
-		if newGroupID, ok := groupIDMap[rule.GroupID]; ok {
-			rule.GroupID = newGroupID
-			// 更新分组名称
-			for _, group := range a.config.Groups {
-				if group.ID == newGroupID {
-					rule.GroupName = group.Name
+		// 检查是否与现有规则重复
+		isDuplicate := false
+		for j := range a.config.Rules {
+			if rule.IsDuplicateOf(&a.config.Rules[j]) {
+				isDuplicate = true
+				result.RulesSkipped++
+				result.Warnings = append(result.Warnings, fmt.Sprintf("规则重复，跳过: %s (%s:%d)", rule.Alias, rule.ServerAddr, rule.ServerPort))
+				break
+			}
+		}
+		if isDuplicate {
+			continue
+		}
+
+		// 更新分组ID映射
+		if newGID, ok := groupIDMap[rule.GroupID]; ok {
+			rule.GroupID = newGID
+			for _, grp := range a.config.Groups {
+				if grp.ID == newGID {
+					rule.GroupName = grp.Name
 					break
 				}
 			}
 		}
 
-		// 生成新的唯一 ID
+		// 重置运行时状态
 		rule.ID = generateUniqueRuleID(a.config.Rules)
 		rule.Enabled = false
 		rule.ProcessID = 0
 		rule.RealIP = ""
 
+		// 分配可用端口（如果端口已被使用）
+		if rule.LocalPort <= 0 || !utils.CheckPortAvailable(rule.LocalPort) {
+			rule.LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		}
+
 		a.config.Rules = append(a.config.Rules, rule)
-		existingPortMap[rule.LocalPort] = true
-		importedCount++
+		result.RulesImported++
 	}
 
-	// 同步更新分组管理器的缓存
+	// === 导入负载均衡 ===
+	for _, lb := range importedLBs {
+		lb.ID = fmt.Sprintf("lb_%d", time.Now().UnixNano())
+		lb.Enabled = false
+		lb.ProcessID = 0
+		if newGID, ok := groupIDMap[lb.GroupID]; ok {
+			lb.GroupID = newGID
+		}
+		a.config.LoadBalancers = append(a.config.LoadBalancers, lb)
+		result.LBImported++
+		time.Sleep(time.Nanosecond)
+	}
+
+	// === 导入链式代理 ===
+	for _, chain := range importedChains {
+		chain.ID = fmt.Sprintf("chain_%d", time.Now().UnixNano())
+		chain.Enabled = false
+		chain.ProcessID = 0
+		if newGID, ok := groupIDMap[chain.GroupID]; ok {
+			chain.GroupID = newGID
+		}
+		a.config.ChainProxies = append(a.config.ChainProxies, chain)
+		result.ChainImported++
+		time.Sleep(time.Nanosecond)
+	}
+
+	// 同步分组管理器缓存
 	a.groupManager.LoadGroups(a.config.Groups)
 
-	// 同步更新订阅管理器
+	// 重启订阅自动更新
 	for i := range a.config.Subscriptions {
 		if a.config.Subscriptions[i].AutoUpdate {
 			a.subscriptionManager.RestartAutoUpdate(&a.config.Subscriptions[i])
 		}
 	}
 
-	// 保存合并后的配置
+	// 保存配置
 	if err := a.saveConfig(); err != nil {
-		return err
+		return nil, fmt.Errorf("保存配置失败: %v", err)
 	}
-	a.log(fmt.Sprintf("导入完成: 分组 %d 个，订阅 %d 个，规则 %d 条", importedGroupsCount, importedSubscriptionsCount, importedCount))
-	return nil
+
+	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，负载均衡 %d 个，链式代理 %d 个",
+		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported))
+
+	return result, nil
 }
 
 // logError 输出错误日志
@@ -1109,40 +1258,54 @@ func (a *MyService) SaveRuleOrder(orderedIDs []string) error {
 
 // ==================== 批量导入 API (Feature 4) ====================
 
-// ImportShareLinks 批量导入分享链接
-func (a *MyService) ImportShareLinks(text string) (int, error) {
+// ImportShareLinks 批量导入分享链接（返回详细结果）
+func (a *MyService) ImportShareLinks(text string) (*models.ImportShareResult, error) {
 	p := parser.NewShareLinkParser()
-	rules, errors := p.ParseMultipleLinks(text)
+	rules, parseErrors := p.ParseMultipleLinks(text)
 
-	// 记录解析错误
-	for _, errMsg := range errors {
+	result := &models.ImportShareResult{
+		FailCount: len(parseErrors),
+		Errors:    parseErrors,
+	}
+
+	// 记录解析错误到日志
+	for _, errMsg := range parseErrors {
 		a.log(fmt.Sprintf("[导入] %s", errMsg))
 	}
 
+	if len(rules) == 0 && len(parseErrors) > 0 {
+		return result, fmt.Errorf("未解析到有效的代理链接")
+	}
 	if len(rules) == 0 {
-		return 0, fmt.Errorf("未解析到有效的代理链接")
+		return result, fmt.Errorf("输入内容为空")
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	count := 0
 	for i := range rules {
+		// 校验
+		if err := rules[i].Validate(); err != nil {
+			result.FailCount++
+			result.Errors = append(result.Errors, fmt.Sprintf("校验失败 [%s]: %v", rules[i].Alias, err))
+			continue
+		}
+
 		rules[i].ID = generateUniqueRuleID(a.config.Rules)
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].Source = "manual"
 		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
 		a.config.Rules = append(a.config.Rules, rules[i])
-		count++
+		result.SuccessCount++
 	}
 
 	if err := a.saveConfig(); err != nil {
-		return count, err
+		return result, err
 	}
 
-	a.log(fmt.Sprintf("[导入] 批量导入完成，成功 %d 个节点，失败 %d 个", count, len(errors)))
-	return count, nil
+	a.log(fmt.Sprintf("[导入] 批量导入完成，成功 %d 个节点，失败 %d 个", result.SuccessCount, result.FailCount))
+	return result, nil
 }
 
 // ==================== 系统代理 API (Feature 5) ====================

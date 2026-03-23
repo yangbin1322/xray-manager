@@ -3,21 +3,28 @@ package main
 import (
 	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
-//go:embed all:frontend
+//go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	// 从嵌入的 frontend/dist 中提取子文件系统
+	distFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		log.Fatalf("无法加载前端资源: %v", err)
+	}
+
 	// 创建应用实例
 	app := application.New(application.Options{
 		Name: "Xray Manager",
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler: application.AssetFileServerFS(distFS),
 		},
 	})
 
@@ -126,9 +133,7 @@ func main() {
 		})
 	}
 
-	err := app.Run()
-
-	if err != nil {
+	if err = app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

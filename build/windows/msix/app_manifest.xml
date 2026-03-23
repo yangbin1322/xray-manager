@@ -7,14 +7,14 @@
   
   <Identity 
     Name="com.wails..xray-manager"
-    Publisher="CN=My Company"
+    Publisher="CN=xray-manager"
     Version="0.1.0.0" 
     ProcessorArchitecture="x64" />
   
   <Properties>
-    <DisplayName>My Product</DisplayName>
-    <PublisherDisplayName>My Company</PublisherDisplayName>
-    <Description>My Product Description</Description>
+    <DisplayName>xray-manager</DisplayName>
+    <PublisherDisplayName>xray-manager</PublisherDisplayName>
+    <Description>Xray 代理管理工具，支持多规则配置与一键切换</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   
@@ -29,8 +29,8 @@
   <Applications>
     <Application Id="com.wails..xray-manager" Executable=".xray-manager.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="My Product"
-        Description="My Product Description"
+        DisplayName="xray-manager"
+        Description="Xray 代理管理工具，支持多规则配置与一键切换"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

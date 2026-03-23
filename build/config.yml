@@ -5,12 +5,12 @@ version: '3'
 
 # This information is used to generate the build assets.
 info:
-  companyName: "My Company" # The name of the company
-  productName: "My Product" # The name of the application
-  productIdentifier: "com.mycompany.myproduct" # The unique product identifier
-  description: "A program that does X" # The application description
-  copyright: "(c) 2025, My Company" # Copyright text
-  comments: "Some Product Comments" # Comments
+  companyName: "xray-manager" # The name of the company
+  productName: "xray-manager" # The name of the application
+  productIdentifier: "com.xraymanager.xraymanager" # The unique product identifier
+  description: "Xray 代理管理工具，支持多规则配置与一键切换" # The application description
+  copyright: "(c) 2025, xray-manager" # Copyright text
+  comments: "Xray 代理管理工具" # Comments
   version: "0.0.1" # The application version
 
 # Dev mode configuration

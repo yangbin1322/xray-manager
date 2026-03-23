@@ -10,15 +10,15 @@
     <Installer
         Path=".xray-manager.exe"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\My Product">
+        InstallLocation="C:\Program Files\xray-manager\xray-manager">
     </Installer>
     <PackageInformation
-        PackageName="My Product"
-        PackageDisplayName="My Product"
-        PublisherName="CN=My Company"
-        PublisherDisplayName="My Company"
+        PackageName="xray-manager"
+        PackageDisplayName="xray-manager"
+        PublisherName="CN=xray-manager"
+        PublisherDisplayName="xray-manager"
         Version="0.1.0.0"
-        PackageDescription="My Product Description">
+        PackageDescription="Xray 代理管理工具，支持多规则配置与一键切换">
         <Capabilities>
             <Capability Name="runFullTrust" />
             
@@ -26,8 +26,8 @@
         <Applications>
             <Application
                 Id="com.wails..xray-manager"
-                Description="My Product Description"
-                DisplayName="My Product"
+                Description="Xray 代理管理工具，支持多规则配置与一键切换"
+                DisplayName="xray-manager"
                 ExecutableName=".xray-manager.exe"
                 EntryPoint="Windows.FullTrustApplication">
                 
@@ -41,9 +41,9 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>My Product</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
-            <Description>My Product Description</Description>
+            <DisplayName>xray-manager</DisplayName>
+            <PublisherDisplayName>xray-manager</PublisherDisplayName>
+            <Description>Xray 代理管理工具，支持多规则配置与一键切换</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>

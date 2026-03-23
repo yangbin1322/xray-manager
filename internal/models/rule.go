@@ -1,5 +1,7 @@
 package models
 
+import "fmt"
+
 // ProxyRule 代理规则结构
 type ProxyRule struct {
 	ID         string        `json:"id"`         // 唯一标识
@@ -25,6 +27,53 @@ type ProxyRule struct {
 	GroupName    string `json:"groupName"`    // 所属分组名称
 	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
 	Source       string `json:"source"`       // 来源: manual（手动添加）, subscription（订阅导入）
+}
+
+// Validate 校验规则字段合法性，缺失字段给默认值
+func (r *ProxyRule) Validate() error {
+	// 校验协议
+	validProtocols := map[string]bool{
+		"shadowsocks": true, "vmess": true, "vless": true,
+		"trojan": true, "http": true, "socks": true,
+	}
+	if r.Protocol == "" {
+		return fmt.Errorf("协议类型不能为空")
+	}
+	if !validProtocols[r.Protocol] {
+		return fmt.Errorf("不支持的协议类型: %s", r.Protocol)
+	}
+
+	// 校验服务器地址
+	if r.ServerAddr == "" {
+		return fmt.Errorf("服务器地址不能为空")
+	}
+
+	// 校验端口范围
+	if r.ServerPort <= 0 || r.ServerPort > 65535 {
+		return fmt.Errorf("服务器端口无效: %d", r.ServerPort)
+	}
+
+	// 默认值填充
+	if r.LocalType == "" {
+		r.LocalType = "socks"
+	}
+	if r.Source == "" {
+		r.Source = "manual"
+	}
+	if r.Alias == "" {
+		r.Alias = fmt.Sprintf("%s-%s:%d", r.Protocol, r.ServerAddr, r.ServerPort)
+	}
+
+	return nil
+}
+
+// IsDuplicateOf 判断是否与另一个规则重复（别名+协议+服务器地址+服务器端口+本地端口 完全相同）
+func (r *ProxyRule) IsDuplicateOf(other *ProxyRule) bool {
+	return r.Alias == other.Alias &&
+		r.Protocol == other.Protocol &&
+		r.ServerAddr == other.ServerAddr &&
+		r.ServerPort == other.ServerPort &&
+		r.LocalPort == other.LocalPort
 }
 
 // ProxySettings 代理协议设置（根据协议类型使用不同字段）
@@ -96,6 +145,37 @@ type Config struct {
 	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
 	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 负载均衡节点列表
 	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
+}
+
+// ExportData 导出数据结构（包含版本信息）
+type ExportData struct {
+	Version       string            `json:"version"`       // 导出格式版本
+	ExportTime    string            `json:"exportTime"`    // 导出时间
+	Rules         []ProxyRule       `json:"rules"`         // 代理规则列表
+	Groups        []Group           `json:"groups"`        // 分组列表
+	Subscriptions []Subscription    `json:"subscriptions"` // 订阅列表
+	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 负载均衡节点列表
+	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
+}
+
+// ImportResult 导入结果
+type ImportResult struct {
+	Success       bool     `json:"success"`
+	RulesImported int      `json:"rulesImported"` // 导入的规则数
+	RulesSkipped  int      `json:"rulesSkipped"`  // 跳过的重复规则数
+	GroupsImported int     `json:"groupsImported"`
+	SubsImported  int      `json:"subsImported"`
+	ChainImported int      `json:"chainImported"`
+	LBImported    int      `json:"lbImported"`
+	Errors        []string `json:"errors"`        // 错误信息列表
+	Warnings      []string `json:"warnings"`      // 警告信息列表
+}
+
+// ImportShareResult 批量导入分享链接结果
+type ImportShareResult struct {
+	SuccessCount int      `json:"successCount"` // 成功数
+	FailCount    int      `json:"failCount"`    // 失败数
+	Errors       []string `json:"errors"`       // 每条失败的详细信息
 }
 
 // Group 节点分组

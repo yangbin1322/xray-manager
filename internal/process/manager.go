@@ -211,7 +211,9 @@ func (m *Manager) Stop(localPort int) error {
 
 	processInfo, exists := m.processes[localPort]
 	if !exists {
-		return fmt.Errorf("端口 %d 未找到对应进程", localPort)
+		// 进程不存在（可能已崩溃或被外部终止），不报错，直接认为已停止
+		m.log(fmt.Sprintf("[停止] 端口 %d 无对应进程，视为已停止", localPort))
+		return nil
 	}
 
 	return m.stopProcessLocked(localPort, processInfo)
@@ -492,6 +494,41 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	m.log(fmt.Sprintf("[警告] %s 无法获取真实IP", rule.Alias))
 	rule.RealIP = "获取失败"
 	m.loadRules()
+}
+
+// SyncState 同步进程状态，检查配置中标记为运行的规则其进程是否真的存在
+// 在应用启动时调用，修复崩溃后的状态不一致问题
+func (m *Manager) SyncState(rules []models.ProxyRule) []models.ProxyRule {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range rules {
+		rule := &rules[i]
+		if rule.Enabled {
+			if rule.ProcessID <= 0 || !processExists(rule.ProcessID) {
+				m.log(fmt.Sprintf("[状态同步] 规则 %s (PID:%d) 进程不存在，重置状态", rule.Alias, rule.ProcessID))
+				rule.Enabled = false
+				rule.ProcessID = 0
+				rule.RealIP = ""
+			}
+		}
+	}
+
+	return rules
+}
+
+// processExists 检查指定 PID 的进程是否存在
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// 发送信号 0 检查进程是否存在（不会真正发送信号）
+	err = process.Signal(syscall.Signal(0))
+	return err == nil
 }
 
 // log 输出日志
