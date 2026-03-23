@@ -13,6 +13,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIcon []byte
+
 func main() {
 	// 从嵌入的 frontend/dist 中提取子文件系统
 	distFS, err := fs.Sub(assets, "frontend/dist")
@@ -73,7 +76,8 @@ func main() {
 	// 创建系统托盘
 	systemTray := app.SystemTray.New()
 	if systemTray != nil {
-		// 设置托盘图标提示
+		// 设置托盘图标（macOS 使用模板图标，自动适配亮色/暗色模式）
+		systemTray.SetTemplateIcon(appIcon)
 		systemTray.SetTooltip("Xray 管理器")
 		// 创建托盘菜单
 		menu := app.Menu.New()
