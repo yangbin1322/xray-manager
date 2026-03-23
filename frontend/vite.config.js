@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
+  plugins: [vue()],
   build: {
     rollupOptions: {
       external: ['@wailsio/runtime'],
       output: {
-        // 保留原始的 import 语句，由 importmap 处理
         format: 'es'
       }
     }

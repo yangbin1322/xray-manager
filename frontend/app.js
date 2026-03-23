@@ -69,7 +69,6 @@ function bindEventListeners() {
     document.getElementById('importConfigBtn').addEventListener('click', importConfig);
     document.getElementById('exportConfigBtn').addEventListener('click', exportConfig);
     document.getElementById('testSelectedSpeedBtn').addEventListener('click', testSelectedRulesSpeed);
-    document.getElementById('exportSpeedReportBtn').addEventListener('click', exportSpeedReport);
     document.getElementById('batchImportBtn').addEventListener('click', openBatchImportDialog);
 
     // 新功能按钮
@@ -780,11 +779,22 @@ window.doBatchImport = async function() {
     }
 
     try {
-        const count = await MyService.ImportShareLinks(text);
+        const result = await MyService.ImportShareLinks(text);
         closeBatchImportDialog();
         await loadRules();
-        addLog(`[导入] 成功导入 ${count} 个节点`);
-        alert(`成功导入 ${count} 个节点`);
+
+        let msg = `成功导入 ${result.successCount} 个节点`;
+        if (result.failCount > 0) {
+            msg += `，失败 ${result.failCount} 个`;
+        }
+        addLog(`[导入] ${msg}`);
+
+        // 显示失败详情
+        if (result.errors && result.errors.length > 0) {
+            result.errors.forEach(e => addLog(`[导入错误] ${e}`));
+        }
+
+        alert(msg);
     } catch (error) {
         addLog(`[错误] 批量导入失败: ${error}`);
         alert(`导入失败: ${error}`);
@@ -1723,74 +1733,6 @@ async function deleteSelectedRules() {
     await loadRules();
 }
 
-// 导出测速报告
-function exportSpeedReport() {
-    // 过滤出有测速数据的规则
-    const testedRules = rules.filter(rule => rule.latency > 0 || rule.downloadSpeed > 0);
-
-    if (testedRules.length === 0) {
-        alert('没有可导出的测速数据，请先进行测速');
-        return;
-    }
-
-    // 生成CSV内容
-    const headers = ['别名', '分组', '协议', '服务器地址', '服务器端口', '延迟(ms)', '速度(MB/s)', '测试时间', '状态'];
-    const csvRows = [headers.join(',')];
-
-    testedRules.forEach(rule => {
-        const row = [
-            escapeCSV(rule.alias || '-'),
-            escapeCSV(rule.groupName || '无分组'),
-            escapeCSV(rule.protocol || '-'),
-            escapeCSV(rule.serverAddr || '-'),
-            rule.serverPort || '-',
-            rule.latency || 0,
-            rule.downloadSpeed ? rule.downloadSpeed.toFixed(2) : 0,
-            escapeCSV(rule.lastTestTime || '-'),
-            escapeCSV(getSpeedStatus(rule.latency))
-        ];
-        csvRows.push(row.join(','));
-    });
-
-    const csvContent = csvRows.join('\n');
-
-    // 添加BOM以支持中文
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-
-    // 生成文件名（包含当前时间）
-    const now = new Date();
-    const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    const filename = `测速报告_${timestamp}.csv`;
-
-    // 触发下载
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = filename;
-    link.click();
-
-    addLog(`[系统] 测速报告已导出: ${filename}`);
-}
-
-// CSV转义辅助函数
-function escapeCSV(str) {
-    if (str === null || str === undefined) return '';
-    const s = String(str);
-    // 如果包含逗号、引号或换行符，需要用引号包裹并转义引号
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-        return '"' + s.replace(/"/g, '""') + '"';
-    }
-    return s;
-}
-
-// 根据延迟获取状态描述
-function getSpeedStatus(latency) {
-    if (!latency || latency === 0) return '未测试';
-    if (latency < 100) return '优秀';
-    if (latency < 300) return '一般';
-    return '较差';
-}
-
 // 添加日志
 function addLog(message) {
     const logTextarea = document.getElementById('logTextarea');
@@ -1821,13 +1763,30 @@ async function exportConfig() {
 // 导入配置
 async function importConfig() {
     try {
-        await MyService.ImportConfig();
-        await loadRules(); // 重新加载规则列表
-        await Extended.loadGroups(); // 重新加载分组列表
-        addLog('[系统] 配置导入成功');
+        const result = await MyService.ImportConfig();
+        await loadRules();
+        await Extended.loadGroups();
+
+        // 显示详细导入结果
+        let msg = `导入完成：规则 ${result.rulesImported} 条`;
+        if (result.rulesSkipped > 0) msg += `，跳过重复 ${result.rulesSkipped} 条`;
+        if (result.groupsImported > 0) msg += `，分组 ${result.groupsImported} 个`;
+        if (result.subsImported > 0) msg += `，订阅 ${result.subsImported} 个`;
+        if (result.lbImported > 0) msg += `，负载均衡 ${result.lbImported} 个`;
+        if (result.chainImported > 0) msg += `，链式代理 ${result.chainImported} 个`;
+
+        addLog(`[系统] ${msg}`);
+
+        if (result.warnings && result.warnings.length > 0) {
+            result.warnings.forEach(w => addLog(`[警告] ${w}`));
+        }
+        if (result.errors && result.errors.length > 0) {
+            result.errors.forEach(e => addLog(`[错误] ${e}`));
+        }
+
+        alert(msg);
     } catch (error) {
         if (error && error.toString().includes('用户取消')) {
-            // 用户取消操作，不显示错误
             return;
         }
         addLog(`[错误] 导入配置失败: ${error}`);
