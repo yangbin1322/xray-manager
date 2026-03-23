@@ -15,9 +15,17 @@ export const useRulesStore = defineStore('rules', () => {
   const sortDirection = ref('asc')
   const loading = ref(false)
 
+  // === 合并所有节点（规则 + 负载均衡 + 链式代理） ===
+  const allNodes = computed(() => {
+    const ruleNodes = rules.value.map(r => ({ ...r, _nodeType: 'rule' }))
+    const lbNodes = loadBalancers.value.map(lb => ({ ...lb, _nodeType: 'lb', protocol: 'loadbalance' }))
+    const chainNodes = chainProxies.value.map(c => ({ ...c, _nodeType: 'chain', protocol: 'chain' }))
+    return [...ruleNodes, ...lbNodes, ...chainNodes]
+  })
+
   // === 计算属性 ===
   const filteredRules = computed(() => {
-    let result = rules.value
+    let result = allNodes.value
 
     // 分组过滤
     if (groupFilter.value !== null) {
@@ -57,8 +65,8 @@ export const useRulesStore = defineStore('rules', () => {
 
   const selectedRuleIds = computed(() => Array.from(selectedIds.value))
 
-  const runningCount = computed(() => rules.value.filter(r => r.enabled).length)
-  const totalCount = computed(() => rules.value.length)
+  const runningCount = computed(() => allNodes.value.filter(r => r.enabled).length)
+  const totalCount = computed(() => allNodes.value.length)
 
   // === 动作 ===
   async function loadRules() {

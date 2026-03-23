@@ -40,7 +40,7 @@
         <tr
           v-for="rule in rulesStore.filteredRules"
           :key="rule.id"
-          :class="{ 'row-running': rule.enabled, 'row-testing': rule.testStatus === 'testing' }"
+          :class="rowClass(rule)"
         >
           <td class="col-check">
             <input
@@ -49,26 +49,47 @@
               @change="rulesStore.toggleSelect(rule.id)"
             />
           </td>
-          <td class="col-alias" :title="rule.alias">{{ rule.alias || '-' }}</td>
+          <td class="col-alias" :title="rule.alias">
+            <span v-if="rule._nodeType === 'lb'" class="type-badge badge-lb">LB</span>
+            <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain">链</span>
+            {{ rule.alias || '-' }}
+          </td>
           <td class="col-protocol">
             <span :class="['protocol-badge', `protocol-${rule.protocol}`]">{{ rule.protocol }}</span>
           </td>
-          <td class="col-server" :title="rule.serverAddr">{{ rule.serverAddr || '-' }}</td>
-          <td class="col-sport">{{ rule.serverPort || '-' }}</td>
+          <!-- 普通节点显示服务器信息，LB/链显示节点数 -->
+          <td class="col-server" :title="rule.serverAddr">
+            <template v-if="rule._nodeType === 'rule'">{{ rule.serverAddr || '-' }}</template>
+            <template v-else-if="rule._nodeType === 'lb'">{{ (rule.nodeIds || []).length }} 个子节点</template>
+            <template v-else>{{ (rule.chainNodes || []).length }} 节点链</template>
+          </td>
+          <td class="col-sport">
+            <template v-if="rule._nodeType === 'rule'">{{ rule.serverPort || '-' }}</template>
+            <template v-else>-</template>
+          </td>
           <td class="col-local">{{ rule.localType || 'socks' }}</td>
           <td class="col-lport">{{ rule.localPort || '-' }}</td>
           <td class="col-latency">
-            <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
-            <span v-else-if="rule.latency > 0" :class="latencyClass(rule.latency)">
-              {{ rule.latency }}ms
-            </span>
+            <template v-if="rule._nodeType === 'rule'">
+              <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
+              <span v-else-if="rule.latency > 0" :class="latencyClass(rule.latency)">
+                {{ rule.latency }}ms
+              </span>
+              <span v-else class="no-data">-</span>
+            </template>
             <span v-else class="no-data">-</span>
           </td>
           <td class="col-speed">
-            <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
+            <template v-if="rule._nodeType === 'rule'">
+              <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
+              <span v-else class="no-data">-</span>
+            </template>
             <span v-else class="no-data">-</span>
           </td>
-          <td class="col-ip" :title="rule.realIp">{{ rule.realIp || '-' }}</td>
+          <td class="col-ip" :title="rule.realIp">
+            <template v-if="rule._nodeType === 'rule'">{{ rule.realIp || '-' }}</template>
+            <template v-else>-</template>
+          </td>
           <td class="col-status">
             <span :class="['status-dot', statusClass(rule)]"></span>
           </td>
@@ -84,8 +105,10 @@
               class="btn-action-sm btn-stop"
               @click="handleStop(rule)"
             >停止</button>
-            <button class="btn-action-sm" @click="$emit('editRule', rule)">编辑</button>
-            <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
+            <button v-if="rule._nodeType === 'rule'" class="btn-action-sm" @click="$emit('editRule', rule)">编辑</button>
+            <button v-if="rule._nodeType === 'lb'" class="btn-action-sm" @click="$emit('editLB', rule)">编辑</button>
+            <button v-if="rule._nodeType === 'chain'" class="btn-action-sm" @click="$emit('editChain', rule)">编辑</button>
+            <button v-if="rule._nodeType === 'rule'" class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -105,7 +128,7 @@ import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
-const emit = defineEmits(['editRule'])
+const emit = defineEmits(['editRule', 'editLB', 'editChain'])
 
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
@@ -115,6 +138,15 @@ const allSelected = computed(() => {
   const filtered = rulesStore.filteredRules
   return filtered.length > 0 && filtered.every(r => rulesStore.selectedIds.has(r.id))
 })
+
+function rowClass(rule) {
+  if (rule._nodeType === 'lb' && rule.enabled) return 'row-lb-running'
+  if (rule._nodeType === 'chain' && rule.enabled) return 'row-chain-running'
+  return {
+    'row-running': rule.enabled && rule._nodeType === 'rule',
+    'row-testing': rule.testStatus === 'testing',
+  }
+}
 
 function latencyClass(latency) {
   if (latency < 100) return 'latency-good'
@@ -131,7 +163,13 @@ function statusClass(rule) {
 async function handleStart(rule) {
   startingIds.value.add(rule.id)
   try {
-    await rulesStore.startRule(rule.id)
+    if (rule._nodeType === 'lb') {
+      await api.startLoadBalancer(rule.id)
+    } else if (rule._nodeType === 'chain') {
+      await api.startChainProxy(rule.id)
+    } else {
+      await rulesStore.startRule(rule.id)
+    }
     await rulesStore.loadRules()
   } catch (e) {
     appStore.showToast(`启动失败: ${e}`, 'error')
@@ -142,7 +180,13 @@ async function handleStart(rule) {
 
 async function handleStop(rule) {
   try {
-    await rulesStore.stopRule(rule.id)
+    if (rule._nodeType === 'lb') {
+      await api.stopLoadBalancer(rule.id)
+    } else if (rule._nodeType === 'chain') {
+      await api.stopChainProxy(rule.id)
+    } else {
+      await rulesStore.stopRule(rule.id)
+    }
     await rulesStore.loadRules()
   } catch (e) {
     appStore.showToast(`停止失败: ${e}`, 'error')
@@ -158,11 +202,21 @@ async function handleTest(rule) {
   }
 }
 
-function handleDelete(rule) {
-  if (confirm(`确定要删除规则「${rule.alias}」吗?`)) {
-    rulesStore.deleteRule(rule.id).catch(e => {
-      appStore.showToast(`删除失败: ${e}`, 'error')
-    })
+async function handleDelete(rule) {
+  const typeLabel = rule._nodeType === 'lb' ? '负载均衡' : (rule._nodeType === 'chain' ? '链式代理' : '规则')
+  if (!confirm(`确定要删除${typeLabel}「${rule.alias}」吗?`)) return
+  try {
+    if (rule._nodeType === 'lb') {
+      await api.deleteLoadBalancer(rule.id)
+    } else if (rule._nodeType === 'chain') {
+      await api.deleteChainProxy(rule.id)
+    } else {
+      await api.deleteRule(rule.id)
+    }
+    rulesStore.selectedIds.delete(rule.id)
+    await rulesStore.loadRules()
+  } catch (e) {
+    appStore.showToast(`删除失败: ${e}`, 'error')
   }
 }
 </script>
@@ -226,6 +280,8 @@ function handleDelete(rule) {
 .rules-table tr:hover { background: var(--bg-hover); }
 
 .row-running { background: rgba(39, 174, 96, 0.05) !important; }
+.row-lb-running { background: rgba(155, 89, 182, 0.08) !important; }
+.row-chain-running { background: rgba(52, 152, 219, 0.08) !important; }
 .row-testing { background: rgba(243, 156, 18, 0.05) !important; }
 
 .col-check { width: 36px; text-align: center; }
@@ -265,6 +321,20 @@ function handleDelete(rule) {
 .protocol-trojan { background: #fde8e8; color: #e74c3c; }
 .protocol-http { background: #f0f0f0; color: #555; }
 .protocol-socks { background: #f0f0f0; color: #555; }
+.protocol-loadbalance { background: #f3e8fd; color: #9b59b6; }
+.protocol-chain { background: #e8f4fd; color: #2980b9; }
+
+.type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  margin-right: 4px;
+}
+.badge-lb { background: #9b59b6; }
+.badge-chain { background: #2980b9; }
 
 .status-dot {
   display: inline-block;

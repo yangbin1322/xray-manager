@@ -3,8 +3,8 @@
     <!-- 侧边栏 -->
     <Sidebar
       @showSubDialog="showSubscriptionDialog = true"
-      @showLBDialog="showLBDialog = true"
-      @showChainDialog="showChainDialog = true"
+      @showLBDialog="editingLB = null; showLBDialog = true"
+      @showChainDialog="editingChain = null; showChainDialog = true"
     />
 
     <!-- 主内容区 -->
@@ -13,7 +13,11 @@
       <Toolbar />
 
       <!-- 节点列表 -->
-      <NodeList @editRule="handleEditRule" />
+      <NodeList
+        @editRule="handleEditRule"
+        @editLB="handleEditLB"
+        @editChain="handleEditChain"
+      />
 
       <!-- 日志面板 -->
       <LogPanel />
@@ -38,13 +42,15 @@
     <!-- 负载均衡对话框 -->
     <LoadBalancerDialog
       :visible="showLBDialog"
-      @close="showLBDialog = false"
+      :editingLB="editingLB"
+      @close="showLBDialog = false; editingLB = null"
     />
 
     <!-- 链式代理对话框 -->
     <ChainProxyDialog
       :visible="showChainDialog"
-      @close="showChainDialog = false"
+      :editingChain="editingChain"
+      @close="showChainDialog = false; editingChain = null"
     />
 
     <!-- Toast 通知 -->
@@ -80,6 +86,8 @@ const editingRule = ref(null)
 const showSubscriptionDialog = ref(false)
 const showLBDialog = ref(false)
 const showChainDialog = ref(false)
+const editingLB = ref(null)
+const editingChain = ref(null)
 
 function handleAddRule() {
   editingRule.value = null
@@ -94,6 +102,16 @@ function handleEditRule(rule) {
 function closeEditor() {
   showEditor.value = false
   editingRule.value = null
+}
+
+function handleEditLB(lb) {
+  editingLB.value = lb
+  showLBDialog.value = true
+}
+
+function handleEditChain(chain) {
+  editingChain.value = chain
+  showChainDialog.value = true
 }
 
 // 监听后端事件
