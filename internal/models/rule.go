@@ -67,11 +67,13 @@ func (r *ProxyRule) Validate() error {
 	return nil
 }
 
-// IsDuplicateOf 判断是否与另一个规则重复（相同协议+服务器+端口）
+// IsDuplicateOf 判断是否与另一个规则重复（别名+协议+服务器地址+服务器端口+本地端口 完全相同）
 func (r *ProxyRule) IsDuplicateOf(other *ProxyRule) bool {
-	return r.Protocol == other.Protocol &&
+	return r.Alias == other.Alias &&
+		r.Protocol == other.Protocol &&
 		r.ServerAddr == other.ServerAddr &&
-		r.ServerPort == other.ServerPort
+		r.ServerPort == other.ServerPort &&
+		r.LocalPort == other.LocalPort
 }
 
 // ProxySettings 代理协议设置（根据协议类型使用不同字段）
