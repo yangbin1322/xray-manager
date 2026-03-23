@@ -55,6 +55,46 @@ func (m *AutoStartManager) Disable() error {
 	}
 }
 
+// IsEnabled 检查系统是否已启用开机自启
+func (m *AutoStartManager) IsEnabled() bool {
+	switch runtime.GOOS {
+	case "windows":
+		return m.isEnabledWindows()
+	case "linux":
+		return m.isEnabledLinux()
+	case "darwin":
+		return m.isEnabledMacOS()
+	default:
+		return false
+	}
+}
+
+func (m *AutoStartManager) isEnabledWindows() bool {
+	regPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
+	cmd := exec.Command("reg", "query", fmt.Sprintf("HKCU\\%s", regPath), "/v", m.appName)
+	return cmd.Run() == nil
+}
+
+func (m *AutoStartManager) isEnabledLinux() bool {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	desktopFile := filepath.Join(homeDir, ".config", "autostart", fmt.Sprintf("%s.desktop", m.appName))
+	_, err = os.Stat(desktopFile)
+	return err == nil
+}
+
+func (m *AutoStartManager) isEnabledMacOS() bool {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	plistFile := filepath.Join(homeDir, "Library", "LaunchAgents", fmt.Sprintf("com.%s.plist", m.appName))
+	_, err = os.Stat(plistFile)
+	return err == nil
+}
+
 // Windows 开机自启实现
 func (m *AutoStartManager) enableWindows() error {
 	// 使用注册表添加开机自启

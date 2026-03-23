@@ -429,8 +429,11 @@ func (a *MyService) SetAutoStart(enabled bool) error {
 	return a.saveConfig()
 }
 
-// GetAutoStart 获取开机自启状态
+// GetAutoStart 获取开机自启状态（从系统配置读取）
 func (a *MyService) GetAutoStart() bool {
+	if a.autostartManager != nil {
+		return a.autostartManager.IsEnabled()
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.AutoStart
