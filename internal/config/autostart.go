@@ -69,10 +69,21 @@ func (m *AutoStartManager) IsEnabled() bool {
 	}
 }
 
+func (m *AutoStartManager) windowsStartupLink() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", fmt.Sprintf("%s.lnk", m.appName)), nil
+}
+
 func (m *AutoStartManager) isEnabledWindows() bool {
-	regPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "query", fmt.Sprintf("HKCU\\%s", regPath), "/v", m.appName)
-	return cmd.Run() == nil
+	linkPath, err := m.windowsStartupLink()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(linkPath)
+	return err == nil
 }
 
 func (m *AutoStartManager) isEnabledLinux() bool {
@@ -95,19 +106,31 @@ func (m *AutoStartManager) isEnabledMacOS() bool {
 	return err == nil
 }
 
-// Windows 开机自启实现
+// Windows 开机自启实现（使用 Startup 目录快捷方式）
 func (m *AutoStartManager) enableWindows() error {
-	// 使用注册表添加开机自启
-	regPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "add", fmt.Sprintf("HKCU\\%s", regPath), "/v", m.appName, "/t", "REG_SZ", "/d", m.exePath, "/f")
+	linkPath, err := m.windowsStartupLink()
+	if err != nil {
+		return err
+	}
+
+	// 使用 PowerShell 创建快捷方式
+	script := fmt.Sprintf(
+		`$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%s'); $s.TargetPath = '%s'; $s.WorkingDirectory = '%s'; $s.Save()`,
+		linkPath, m.exePath, filepath.Dir(m.exePath),
+	)
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
 	return cmd.Run()
 }
 
 func (m *AutoStartManager) disableWindows() error {
-	// 从注册表删除开机自启
-	regPath := `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-	cmd := exec.Command("reg", "delete", fmt.Sprintf("HKCU\\%s", regPath), "/v", m.appName, "/f")
-	return cmd.Run()
+	linkPath, err := m.windowsStartupLink()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(linkPath); err == nil {
+		return os.Remove(linkPath)
+	}
+	return nil
 }
 
 // Linux 开机自启实现（使用 systemd 或 .desktop 文件）
