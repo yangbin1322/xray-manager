@@ -14,6 +14,7 @@ export const useRulesStore = defineStore('rules', () => {
   const sortColumn = ref(null)
   const sortDirection = ref('asc')
   const loading = ref(false)
+  const clipboard = ref([]) // 复制的节点数据
 
   // === 合并所有节点（规则 + 负载均衡 + 链式代理） ===
   const allNodes = computed(() => {
@@ -176,11 +177,53 @@ export const useRulesStore = defineStore('rules', () => {
     }
   }
 
+  function copySelected() {
+    if (selectedIds.value.size === 0) return 0
+    clipboard.value = allNodes.value
+      .filter(n => selectedIds.value.has(n.id))
+      .map(n => JSON.parse(JSON.stringify(n)))
+    return clipboard.value.length
+  }
+
+  async function pasteNodes() {
+    if (clipboard.value.length === 0) return 0
+    let count = 0
+    for (const node of clipboard.value) {
+      const copy = JSON.parse(JSON.stringify(node))
+      copy.alias = (copy.alias || '') + ' (副本)'
+      // 清除运行时状态
+      delete copy.id
+      delete copy.enabled
+      delete copy.processId
+      delete copy.latency
+      delete copy.downloadSpeed
+      delete copy.realIp
+      delete copy.testStatus
+      delete copy._nodeType
+      try {
+        if (node._nodeType === 'lb') {
+          delete copy.protocol
+          await api.addLoadBalancer(copy)
+        } else if (node._nodeType === 'chain') {
+          delete copy.protocol
+          await api.addChainProxy(copy)
+        } else {
+          await api.addRule(copy)
+        }
+        count++
+      } catch (e) {
+        console.error('粘贴节点失败:', e)
+      }
+    }
+    if (count > 0) await loadRules()
+    return count
+  }
+
   return {
     // State
     rules, loadBalancers, chainProxies,
     selectedIds, statusFilter, searchKeyword,
-    groupFilter, sortColumn, sortDirection, loading,
+    groupFilter, sortColumn, sortDirection, loading, clipboard,
     // Computed
     filteredRules, selectedRuleIds, runningCount, totalCount,
     // Actions
@@ -188,5 +231,6 @@ export const useRulesStore = defineStore('rules', () => {
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, setSort,
+    copySelected, pasteNodes,
   }
 })

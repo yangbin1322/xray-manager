@@ -123,7 +123,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
@@ -133,6 +133,37 @@ const emit = defineEmits(['editRule', 'editLB', 'editChain'])
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
 const startingIds = ref(new Set())
+
+// 快捷键：Ctrl+C 复制 / Ctrl+V 粘贴
+function handleKeydown(e) {
+  // 忽略输入框内的按键
+  const tag = e.target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+    e.preventDefault()
+    const count = rulesStore.copySelected()
+    if (count > 0) {
+      appStore.showToast(`已复制 ${count} 个节点`, 'success')
+    }
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    e.preventDefault()
+    if (rulesStore.clipboard.length === 0) {
+      appStore.showToast('剪贴板为空，请先选中节点并按 Ctrl+C 复制', 'warning')
+      return
+    }
+    rulesStore.pasteNodes().then(count => {
+      if (count > 0) {
+        appStore.showToast(`已粘贴 ${count} 个节点`, 'success')
+      }
+    })
+  }
+}
+
+onMounted(() => { window.addEventListener('keydown', handleKeydown) })
+onUnmounted(() => { window.removeEventListener('keydown', handleKeydown) })
 
 const allSelected = computed(() => {
   const filtered = rulesStore.filteredRules
