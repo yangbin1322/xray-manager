@@ -451,7 +451,7 @@ func (a *MyService) log(message string) {
 
 // ExportConfig 导出配置（标准格式，包含版本信息）
 // ruleIds 为空时导出全部规则，非空时仅导出选中的规则
-func (a *MyService) ExportConfig(ruleIds []int) (string, error) {
+func (a *MyService) ExportConfig(ruleIds []string) (string, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -477,7 +477,7 @@ func (a *MyService) ExportConfig(ruleIds []int) (string, error) {
 	var sourceRules []models.ProxyRule
 	if len(ruleIds) > 0 {
 		// 仅导出选中的规则
-		idSet := make(map[int]bool, len(ruleIds))
+		idSet := make(map[string]bool, len(ruleIds))
 		for _, id := range ruleIds {
 			idSet[id] = true
 		}
