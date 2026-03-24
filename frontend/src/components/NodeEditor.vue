@@ -139,8 +139,45 @@
           </div>
         </div>
 
+        <!-- HTTP 代理配置 -->
+        <div v-if="form.protocol === 'http'" class="form-section">
+          <h4>HTTP 代理配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>用户名（可选）：</label>
+              <input v-model="form.settings.httpUsername" type="text" placeholder="用户名" />
+            </div>
+            <div class="form-group">
+              <label>密码（可选）：</label>
+              <input v-model="form.settings.httpPassword" type="text" placeholder="密码" />
+            </div>
+          </div>
+        </div>
+
+        <!-- SOCKS 代理配置 -->
+        <div v-if="form.protocol === 'socks'" class="form-section">
+          <h4>SOCKS 代理配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>SOCKS 版本：</label>
+              <select v-model="form.settings.socksVersion">
+                <option value="socks5">SOCKS5</option>
+                <option value="socks4">SOCKS4</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>用户名（可选）：</label>
+              <input v-model="form.settings.socksUsername" type="text" placeholder="用户名" />
+            </div>
+            <div class="form-group">
+              <label>密码（可选）：</label>
+              <input v-model="form.settings.socksPassword" type="text" placeholder="密码" />
+            </div>
+          </div>
+        </div>
+
         <!-- 传输层配置 -->
-        <div v-if="['vmess','vless','trojan'].includes(form.protocol)" class="form-section">
+        <div v-if="['shadowsocks','vmess','vless','trojan'].includes(form.protocol)" class="form-section">
           <h4>传输层配置</h4>
           <div class="form-row">
             <div class="form-group">
@@ -243,6 +280,11 @@ function defaultForm() {
       vlessFlow: '',
       vlessEncryption: 'none',
       trojanPassword: '',
+      httpUsername: '',
+      httpPassword: '',
+      socksUsername: '',
+      socksPassword: '',
+      socksVersion: 'socks5',
       network: 'tcp',
       security: 'none',
       tls: null,
