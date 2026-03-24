@@ -209,6 +209,12 @@
               <label>ALPN：</label>
               <input v-model="tlsAlpn" type="text" placeholder="h2,http/1.1" />
             </div>
+            <div class="form-group form-group-checkbox">
+              <label>
+                <input type="checkbox" v-model="tlsAllowInsecure" />
+                允许不安全连接（跳过证书验证）
+              </label>
+            </div>
           </div>
 
           <!-- WebSocket 配置 -->
@@ -311,6 +317,14 @@ const tlsAlpn = computed({
   set: (v) => {
     if (!form.value.settings.tls) form.value.settings.tls = {}
     form.value.settings.tls.alpn = v ? v.split(',').map(s => s.trim()) : []
+  },
+})
+
+const tlsAllowInsecure = computed({
+  get: () => form.value.settings.tls?.allowInsecure || false,
+  set: (v) => {
+    if (!form.value.settings.tls) form.value.settings.tls = {}
+    form.value.settings.tls.allowInsecure = v
   },
 })
 
@@ -500,6 +514,26 @@ function close() {
 .form-group {
   flex: 1;
   min-width: 150px;
+}
+
+.form-group-checkbox {
+  display: flex;
+  align-items: flex-end;
+  min-width: 150px;
+}
+
+.form-group-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.form-group-checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
 
 .form-group label {
