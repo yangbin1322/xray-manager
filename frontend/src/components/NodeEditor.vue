@@ -139,8 +139,45 @@
           </div>
         </div>
 
+        <!-- HTTP 代理配置 -->
+        <div v-if="form.protocol === 'http'" class="form-section">
+          <h4>HTTP 代理配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>用户名（可选）：</label>
+              <input v-model="form.settings.httpUsername" type="text" placeholder="用户名" />
+            </div>
+            <div class="form-group">
+              <label>密码（可选）：</label>
+              <input v-model="form.settings.httpPassword" type="text" placeholder="密码" />
+            </div>
+          </div>
+        </div>
+
+        <!-- SOCKS 代理配置 -->
+        <div v-if="form.protocol === 'socks'" class="form-section">
+          <h4>SOCKS 代理配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>SOCKS 版本：</label>
+              <select v-model="form.settings.socksVersion">
+                <option value="socks5">SOCKS5</option>
+                <option value="socks4">SOCKS4</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>用户名（可选）：</label>
+              <input v-model="form.settings.socksUsername" type="text" placeholder="用户名" />
+            </div>
+            <div class="form-group">
+              <label>密码（可选）：</label>
+              <input v-model="form.settings.socksPassword" type="text" placeholder="密码" />
+            </div>
+          </div>
+        </div>
+
         <!-- 传输层配置 -->
-        <div v-if="['vmess','vless','trojan'].includes(form.protocol)" class="form-section">
+        <div v-if="['shadowsocks','vmess','vless','trojan'].includes(form.protocol)" class="form-section">
           <h4>传输层配置</h4>
           <div class="form-row">
             <div class="form-group">
@@ -171,6 +208,12 @@
             <div class="form-group">
               <label>ALPN：</label>
               <input v-model="tlsAlpn" type="text" placeholder="h2,http/1.1" />
+            </div>
+            <div class="form-group form-group-checkbox">
+              <label>
+                <input type="checkbox" v-model="tlsAllowInsecure" />
+                允许不安全连接（跳过证书验证）
+              </label>
             </div>
           </div>
 
@@ -243,6 +286,11 @@ function defaultForm() {
       vlessFlow: '',
       vlessEncryption: 'none',
       trojanPassword: '',
+      httpUsername: '',
+      httpPassword: '',
+      socksUsername: '',
+      socksPassword: '',
+      socksVersion: 'socks5',
       network: 'tcp',
       security: 'none',
       tls: null,
@@ -269,6 +317,14 @@ const tlsAlpn = computed({
   set: (v) => {
     if (!form.value.settings.tls) form.value.settings.tls = {}
     form.value.settings.tls.alpn = v ? v.split(',').map(s => s.trim()) : []
+  },
+})
+
+const tlsAllowInsecure = computed({
+  get: () => form.value.settings.tls?.allowInsecure || false,
+  set: (v) => {
+    if (!form.value.settings.tls) form.value.settings.tls = {}
+    form.value.settings.tls.allowInsecure = v
   },
 })
 
@@ -458,6 +514,26 @@ function close() {
 .form-group {
   flex: 1;
   min-width: 150px;
+}
+
+.form-group-checkbox {
+  display: flex;
+  align-items: flex-end;
+  min-width: 150px;
+}
+
+.form-group-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.form-group-checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
 
 .form-group label {
