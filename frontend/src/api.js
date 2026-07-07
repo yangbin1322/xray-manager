@@ -34,6 +34,15 @@ export async function saveRuleOrder(orderedIDs) {
   return await MyService.SaveRuleOrder(orderedIDs)
 }
 
+// 批量启动/停止节点（后端并发处理，只保存一次配置）
+export async function startNodes(ids) {
+  return await MyService.StartNodes(ids)
+}
+
+export async function stopNodes(ids) {
+  return await MyService.StopNodes(ids)
+}
+
 // ==================== 导入导出 ====================
 
 export async function exportConfig(ruleIds = [], includeSubscriptions = false) {
@@ -82,6 +91,10 @@ export async function addSubscription(name, url, autoUpdate, updateInterval, upd
 
 export async function setSubscriptionUpdateMode(subID, mode, proxyID) {
   return await MyService.SetSubscriptionUpdateMode(subID, mode, proxyID)
+}
+
+export async function editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+  return await MyService.EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
 }
 
 export async function updateSubscriptionByID(subID) {

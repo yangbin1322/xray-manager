@@ -28,6 +28,11 @@ func EnsurePortFree(port int, logFunc func(string)) error {
 		}
 	}
 
+	// 快速路径：端口本就空闲（绝大多数情况），无需 fork netstat 查 PID
+	if CheckPortAvailable(port) {
+		return nil
+	}
+
 	pids := GetPortPIDs(port)
 	if len(pids) == 0 {
 		return nil
@@ -45,19 +50,21 @@ func EnsurePortFree(port int, logFunc func(string)) error {
 		}
 	}
 
-	// 等待端口释放（最多 3 秒）
-	for i := 0; i < 15; i++ {
-		if len(GetPortPIDs(port)) == 0 {
+	// 等待端口释放（最多 3 秒），用轻量的 net.Listen 探测
+	for i := 0; i < 30; i++ {
+		if CheckPortAvailable(port) {
 			log(fmt.Sprintf("[端口清理] 端口 %d 已释放", port))
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return fmt.Errorf("端口 %d 清理后仍被占用", port)
 }
 
-// WaitPortReleased 等待端口释放，超时后强制终止残留的内核进程并再次确认
+// WaitPortReleased 等待端口释放，超时后强制终止残留的内核进程并再次确认。
+// 优先使用轻量的 net.Listen 探测（纳秒级），仅在超时后才回退到较慢的 netstat 查 PID，
+// 避免在停止流程中反复 fork netstat 子进程导致批量操作卡顿。
 func WaitPortReleased(port int, timeout time.Duration, logFunc func(string)) {
 	log := func(msg string) {
 		if logFunc != nil {
@@ -67,13 +74,13 @@ func WaitPortReleased(port int, timeout time.Duration, logFunc func(string)) {
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if len(GetPortPIDs(port)) == 0 {
+		if CheckPortAvailable(port) {
 			return
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 超时仍有进程占用，强制终止内核进程
+	// 超时端口仍不可用，用 netstat 查 PID 并强制终止残留内核进程
 	for _, pid := range GetPortPIDs(port) {
 		name := GetProcessName(pid)
 		if name == "" || isCoreProcess(name) {

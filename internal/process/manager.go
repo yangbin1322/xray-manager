@@ -39,6 +39,7 @@ type Manager struct {
 
 	trafficFunc func(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) // 流量统计回调
 	pollerStop  chan struct{}
+	stopOnce    sync.Once // 确保 pollerStop 只关闭一次
 }
 
 // ProcessInfo 进程信息
@@ -279,7 +280,20 @@ func (m *Manager) Stop(localPort int) error {
 }
 
 // stopProcessLocked 停止进程（内部方法，需要已持有锁）
+// 从 map 中移除记录后，在锁内调用 terminateProcess 完成实际终止。
 func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) error {
+	delete(m.processes, localPort)
+	processInfo.Rule.ProcessID = 0
+	processInfo.Rule.RealIP = ""
+	processInfo.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+
+	m.terminateProcess(localPort, processInfo, true)
+	return nil
+}
+
+// terminateProcess 实际终止进程并清理（不涉及 m.processes，可在锁外并发调用）。
+// waitPort 为 true 时会确认端口释放（供单个停止后重启用）；关窗批量停止传 false 跳过等待。
+func (m *Manager) terminateProcess(localPort int, processInfo *ProcessInfo, waitPort bool) {
 	m.log(fmt.Sprintf("[停止] %s - 端口:%d", processInfo.Rule.Alias, localPort))
 
 	// 关闭日志读取协程 - 使用 sync.Once 确保只关闭一次
@@ -287,89 +301,14 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 		close(processInfo.Cancel)
 	})
 
-	// 终止进程
+	// 终止进程。
+	// Windows 上子进程不支持 os.Interrupt 优雅关闭（返回 "not supported"），
+	// 直接强制终止即可；Unix 上先 SIGTERM 优雅退出，超时再 SIGKILL。
 	if processInfo.Cmd.Process != nil {
-		killed := false
-
-		// 尝试优雅关闭（发送中断信号）
 		if runtime.GOOS == "windows" {
-			// Windows: 尝试发送 CTRL+BREAK 信号
-			m.log(fmt.Sprintf("[停止] 尝试发送中断信号到进程 %d", processInfo.Cmd.Process.Pid))
-			if err := processInfo.Cmd.Process.Signal(os.Interrupt); err != nil {
-				m.log(fmt.Sprintf("[警告] 发送中断信号失败: %v", err))
-			} else {
-				// 等待进程优雅退出
-				done := make(chan error, 1)
-				go func() {
-					done <- processInfo.Cmd.Wait()
-				}()
-				select {
-				case <-done:
-					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
-					killed = true
-				case <-time.After(3 * time.Second):
-					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
-				}
-			}
+			m.killWindows(processInfo)
 		} else {
-			// Linux/Mac: 发送 SIGTERM
-			if err := processInfo.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
-				m.log(fmt.Sprintf("[警告] 发送 SIGTERM 失败: %v", err))
-			} else {
-				// 等待进程优雅退出
-				done := make(chan error, 1)
-				go func() {
-					done <- processInfo.Cmd.Wait()
-				}()
-				select {
-				case <-done:
-					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
-					killed = true
-				case <-time.After(3 * time.Second):
-					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
-				}
-			}
-		}
-
-		// 如果优雅关闭失败，尝试强制终止
-		if !killed {
-			m.log(fmt.Sprintf("[停止] 强制终止进程 %d", processInfo.Cmd.Process.Pid))
-
-			if runtime.GOOS == "windows" {
-				// Windows: 使用 taskkill 命令强制终止进程树
-				killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
-				// 隐藏 taskkill 的控制台窗口
-				hideConsoleWindow(killCmd) // 调用平台特定函数
-
-				if err := killCmd.Run(); err != nil {
-					m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
-					// 回退到 Kill()
-					if err := processInfo.Cmd.Process.Kill(); err != nil {
-						m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
-					}
-				} else {
-					m.log(fmt.Sprintf("[成功] 使用 taskkill 终止进程"))
-				}
-			} else {
-				// Linux/Mac: 发送 SIGKILL
-				if err := processInfo.Cmd.Process.Signal(syscall.SIGKILL); err != nil {
-					m.log(fmt.Sprintf("[警告] 发送 SIGKILL 失败: %v (进程可能已结束)", err))
-				} else {
-					m.log(fmt.Sprintf("[成功] 使用 SIGKILL 终止进程"))
-				}
-			}
-
-			// 等待进程结束（带超时）
-			done := make(chan error, 1)
-			go func() {
-				done <- processInfo.Cmd.Wait()
-			}()
-			select {
-			case <-done:
-				// 进程已结束
-			case <-time.After(2 * time.Second):
-				m.log(fmt.Sprintf("[警告] 等待进程强制终止超时"))
-			}
+			m.killUnix(processInfo)
 		}
 	}
 
@@ -378,18 +317,65 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 		m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
 	}
 
-	// 清理进程信息
-	delete(m.processes, localPort)
 	processInfo.Rule.ProcessID = 0
 	processInfo.Rule.RealIP = ""
-	processInfo.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 
-	// 确认端口已释放，若仍有残留内核进程则强制终止（避免僵尸进程导致下次启动失败）
-	utils.WaitPortReleased(localPort, 3*time.Second, m.log)
+	// 确认端口已释放（轻量探测），若仍被残留内核进程占用则强制终止
+	if waitPort {
+		utils.WaitPortReleased(localPort, 3*time.Second, m.log)
+	}
 
 	m.log(fmt.Sprintf("[成功] %s 已停止", processInfo.Rule.Alias))
+}
 
-	return nil
+// killWindows Windows 平台强制终止进程树
+func (m *Manager) killWindows(processInfo *ProcessInfo) {
+	pid := processInfo.Cmd.Process.Pid
+	killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
+	hideConsoleWindow(killCmd)
+
+	if err := killCmd.Run(); err != nil {
+		m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
+		if err := processInfo.Cmd.Process.Kill(); err != nil {
+			m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
+		}
+	}
+
+	// 回收进程，避免僵尸
+	done := make(chan error, 1)
+	go func() { done <- processInfo.Cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		m.log("[警告] 等待进程退出超时")
+	}
+}
+
+// killUnix Unix 平台优雅关闭，超时后强制终止
+func (m *Manager) killUnix(processInfo *ProcessInfo) {
+	proc := processInfo.Cmd.Process
+
+	done := make(chan error, 1)
+	go func() { done <- processInfo.Cmd.Wait() }()
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		m.log(fmt.Sprintf("[警告] 发送 SIGTERM 失败: %v", err))
+	} else {
+		select {
+		case <-done:
+			return
+		case <-time.After(3 * time.Second):
+			m.log("[警告] 等待进程优雅退出超时，将强制终止")
+		}
+	}
+
+	// 强制终止
+	_ = proc.Signal(syscall.SIGKILL)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		m.log("[警告] 等待进程强制终止超时")
+	}
 }
 
 // IsRunning 检查端口是否正在运行
@@ -434,20 +420,38 @@ func (m *Manager) isProcessAlive(processInfo *ProcessInfo) bool {
 	}
 }
 
-// StopAll 停止所有进程
+// StopAll 停止所有进程（并发执行，加速关窗/批量停止）
 func (m *Manager) StopAll() {
+	// 停止流量轮询，避免关窗时还在 fork statsquery 子进程
+	m.stopOnce.Do(func() { close(m.pollerStop) })
+
+	// 锁内摘出所有进程并清空 map，避免并发终止时的 map 竞争
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 创建副本以避免在迭代时修改 map
-	processesToStop := make(map[int]*ProcessInfo)
+	toStop := make(map[int]*ProcessInfo, len(m.processes))
 	for port, info := range m.processes {
-		processesToStop[port] = info
+		toStop[port] = info
+		info.Rule.ProcessID = 0
+		info.Rule.RealIP = ""
+		info.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	m.processes = make(map[int]*ProcessInfo)
+	m.mu.Unlock()
+
+	if len(toStop) == 0 {
+		return
 	}
 
-	for localPort, processInfo := range processesToStop {
-		_ = m.stopProcessLocked(localPort, processInfo)
+	// 锁外并发终止各进程（终止是慢操作，串行会导致关窗卡顿）。
+	// 关窗场景不等待端口释放（应用即将退出，无需为下次启动预留端口）。
+	var wg sync.WaitGroup
+	for localPort, processInfo := range toStop {
+		wg.Add(1)
+		go func(port int, info *ProcessInfo) {
+			defer wg.Done()
+			m.terminateProcess(port, info, false)
+		}(localPort, processInfo)
 	}
+	wg.Wait()
 
 	m.log("[系统] 所有进程已停止")
 }

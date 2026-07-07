@@ -167,6 +167,23 @@ export function DisableSystemProxy() {
 }
 
 /**
+ * EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式）。
+ * 不触发订阅内容更新，只修改元数据；改名会同步分组名和该订阅下节点的分组名，
+ * 改 URL 会同步节点的订阅链接，最后按新配置重设自动更新定时任务。
+ * @param {string} subID
+ * @param {string} name
+ * @param {string} url
+ * @param {boolean} autoUpdate
+ * @param {number} updateInterval
+ * @param {string} updateMode
+ * @param {string} updateProxyID
+ * @returns {$CancellablePromise<void>}
+ */
+export function EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID) {
+    return $Call.ByID(1363501906, subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID);
+}
+
+/**
  * EnableSystemProxy 设置系统代理（支持普通节点、链式代理、负载均衡）
  * @param {string} ruleID
  * @returns {$CancellablePromise<void>}
@@ -403,6 +420,16 @@ export function StartLoadBalancer(id) {
 }
 
 /**
+ * StartNodes 批量启动节点（普通节点/负载均衡/链式代理），并发执行、只保存一次配置。
+ * 相比前端逐个调用 StartRule，避免了 N 次串行的进程启动 + N 次写盘导致的卡顿。
+ * @param {string[]} ids
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartNodes(ids) {
+    return $Call.ByID(2356274542, ids);
+}
+
+/**
  * StartRule 启动规则
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -436,6 +463,15 @@ export function StopChainProxy(id) {
  */
 export function StopLoadBalancer(id) {
     return $Call.ByID(3297196641, id);
+}
+
+/**
+ * StopNodes 批量停止节点，并发执行、只保存一次配置。
+ * @param {string[]} ids
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopNodes(ids) {
+    return $Call.ByID(904660584, ids);
 }
 
 /**

@@ -131,36 +131,27 @@ export const useRulesStore = defineStore('rules', () => {
   }
 
   async function startSelectedRules() {
-    for (const id of selectedRuleIds.value) {
+    // 只启动当前未运行的选中节点，交给后端并发处理、只保存一次配置
+    const ids = selectedRuleIds.value.filter(id => {
       const node = allNodes.value.find(n => n.id === id)
-      if (!node || node.enabled) continue
-      try {
-        if (node._nodeType === 'lb') {
-          await api.startLoadBalancer(id)
-        } else if (node._nodeType === 'chain') {
-          await api.startChainProxy(id)
-        } else {
-          await api.startRule(id)
-        }
-      } catch (e) { console.error(e) }
-    }
+      return node && !node.enabled
+    })
+    if (ids.length === 0) return
+    try {
+      await api.startNodes(ids)
+    } catch (e) { console.error(e) }
     await loadRules()
   }
 
   async function stopSelectedRules() {
-    for (const id of selectedRuleIds.value) {
+    const ids = selectedRuleIds.value.filter(id => {
       const node = allNodes.value.find(n => n.id === id)
-      if (!node || !node.enabled) continue
-      try {
-        if (node._nodeType === 'lb') {
-          await api.stopLoadBalancer(id)
-        } else if (node._nodeType === 'chain') {
-          await api.stopChainProxy(id)
-        } else {
-          await api.stopRule(id)
-        }
-      } catch (e) { console.error(e) }
-    }
+      return node && node.enabled
+    })
+    if (ids.length === 0) return
+    try {
+      await api.stopNodes(ids)
+    } catch (e) { console.error(e) }
     await loadRules()
   }
 
