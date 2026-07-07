@@ -54,9 +54,10 @@ type ProcessInfo struct {
 	ApiPort    int    // 流量统计 API 端口，0 表示未启用
 
 	// 流量统计累计值（进程启动以来）
-	lastUp     int64
-	lastDown   int64
-	lastSample time.Time
+	lastUp           int64
+	lastDown         int64
+	lastSample       time.Time
+	trafficErrLogged bool // 是否已记录过流量查询失败日志（避免刷屏）
 }
 
 // StartOptions 使用自定义配置启动的选项
@@ -480,8 +481,14 @@ func (m *Manager) pollTraffic() {
 			for _, info := range infos {
 				up, down, err := queryTraffic(info)
 				if err != nil {
+					// 仅首次失败记录日志，避免每 3 秒刷屏
+					if !info.trafficErrLogged {
+						info.trafficErrLogged = true
+						m.log(fmt.Sprintf("[流量统计] %s 查询失败（后续不再重复提示）: %v", info.Rule.Alias, err))
+					}
 					continue
 				}
+				info.trafficErrLogged = false
 
 				now := time.Now()
 				elapsed := now.Sub(info.lastSample).Seconds()

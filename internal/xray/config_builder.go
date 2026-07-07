@@ -10,12 +10,17 @@ import (
 type XrayConfig struct {
 	Log       *LogConfig             `json:"log,omitempty"`
 	API       *APIConfig             `json:"api,omitempty"`
-	Stats     map[string]interface{} `json:"stats,omitempty"`
+	Stats     *StatsConfig           `json:"stats,omitempty"`
 	Policy    map[string]interface{} `json:"policy,omitempty"`
 	Inbounds  []InboundConfig        `json:"inbounds"`
 	Outbounds []OutboundConfig       `json:"outbounds"`
 	Routing   *RoutingConfig         `json:"routing,omitempty"`
 }
+
+// StatsConfig 流量统计配置。Xray 要求顶层存在 "stats": {} 对象才会初始化
+// stats.Manager，否则 statsquery 会报 "QueryStats only works its own stats.Manager"。
+// 使用独立结构体（而非空 map）确保序列化为 {} 而不会被 omitempty 省略。
+type StatsConfig struct{}
 
 // APIConfig Xray API 配置（用于流量统计查询）
 type APIConfig struct {
@@ -141,7 +146,7 @@ func AddStatsAPI(config *XrayConfig, apiPort int) {
 		Tag:      "api",
 		Services: []string{"StatsService"},
 	}
-	config.Stats = map[string]interface{}{}
+	config.Stats = &StatsConfig{}
 	config.Policy = map[string]interface{}{
 		"system": map[string]interface{}{
 			"statsOutboundUplink":   true,
