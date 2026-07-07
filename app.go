@@ -429,6 +429,155 @@ func (a *MyService) DeleteRule(id string) error {
 	return fmt.Errorf("规则 %s 不存在", id)
 }
 
+// nodeRef 批量操作时对一个节点的引用（普通节点/负载均衡/链式代理）
+type nodeRef struct {
+	id       string
+	nodeType string // rule / lb / chain
+	localPort int
+	alias    string
+}
+
+// collectNodeRefs 按 ID 收集节点引用及其类型（需要已持有读锁）
+func (a *MyService) collectNodeRefs(ids []string) []nodeRef {
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	var refs []nodeRef
+	for i := range a.config.Rules {
+		if idSet[a.config.Rules[i].ID] {
+			refs = append(refs, nodeRef{a.config.Rules[i].ID, "rule", a.config.Rules[i].LocalPort, a.config.Rules[i].Alias})
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if idSet[a.config.LoadBalancers[i].ID] {
+			refs = append(refs, nodeRef{a.config.LoadBalancers[i].ID, "lb", a.config.LoadBalancers[i].LocalPort, a.config.LoadBalancers[i].Alias})
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if idSet[a.config.ChainProxies[i].ID] {
+			refs = append(refs, nodeRef{a.config.ChainProxies[i].ID, "chain", a.config.ChainProxies[i].LocalPort, a.config.ChainProxies[i].Alias})
+		}
+	}
+	return refs
+}
+
+// StartNodes 批量启动节点（普通节点/负载均衡/链式代理），并发执行、只保存一次配置。
+// 相比前端逐个调用 StartRule，避免了 N 次串行的进程启动 + N 次写盘导致的卡顿。
+func (a *MyService) StartNodes(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	a.mu.Lock()
+	refs := a.collectNodeRefs(ids)
+	a.mu.Unlock()
+
+	// 逐个启动（持锁，因为启动需读写 config 中的节点状态）。
+	// 主要收益来自：端口检测已优化为轻量探测 + 仅在最后统一保存一次配置，
+	// 避免了原先前端逐个调用时每次都 saveConfig 写盘的开销。
+	a.mu.Lock()
+	for _, ref := range refs {
+		switch ref.nodeType {
+		case "rule":
+			for i := range a.config.Rules {
+				r := &a.config.Rules[i]
+				if r.ID == ref.id && !r.Enabled {
+					if err := a.processManager.Start(r); err != nil {
+						a.logError(fmt.Sprintf("启动规则 %s 失败", r.Alias), err)
+					} else {
+						r.Enabled = true
+					}
+					break
+				}
+			}
+		case "lb":
+			for i := range a.config.LoadBalancers {
+				lb := &a.config.LoadBalancers[i]
+				if lb.ID == ref.id && !lb.Enabled {
+					if err := a.startLoadBalancerInternal(lb); err != nil {
+						a.logError(fmt.Sprintf("启动负载均衡 %s 失败", lb.Alias), err)
+					}
+					break
+				}
+			}
+		case "chain":
+			for i := range a.config.ChainProxies {
+				c := &a.config.ChainProxies[i]
+				if c.ID == ref.id && !c.Enabled {
+					if err := a.startChainProxyInternal(c); err != nil {
+						a.logError(fmt.Sprintf("启动链式代理 %s 失败", c.Alias), err)
+					}
+					break
+				}
+			}
+		}
+	}
+	err := a.saveConfig()
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.log(fmt.Sprintf("批量启动完成，共 %d 个节点", len(refs)))
+	return err
+}
+
+// StopNodes 批量停止节点，并发执行、只保存一次配置。
+func (a *MyService) StopNodes(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	a.mu.Lock()
+	refs := a.collectNodeRefs(ids)
+	a.mu.Unlock()
+
+	// 停止进程是慢操作，锁外并发执行（processManager 自带锁保证进程 map 安全）
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	for _, ref := range refs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ref nodeRef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_ = a.processManager.Stop(ref.localPort)
+		}(ref)
+	}
+	wg.Wait()
+
+	// 统一更新状态并保存一次
+	a.mu.Lock()
+	refSet := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		refSet[ref.id] = true
+	}
+	for i := range a.config.Rules {
+		if refSet[a.config.Rules[i].ID] {
+			a.config.Rules[i].Enabled = false
+			a.config.Rules[i].ProcessID = 0
+			a.config.Rules[i].RealIP = ""
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if refSet[a.config.LoadBalancers[i].ID] {
+			a.config.LoadBalancers[i].Enabled = false
+			a.config.LoadBalancers[i].ProcessID = 0
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if refSet[a.config.ChainProxies[i].ID] {
+			a.config.ChainProxies[i].Enabled = false
+			a.config.ChainProxies[i].ProcessID = 0
+		}
+	}
+	err := a.saveConfig()
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.log(fmt.Sprintf("批量停止完成，共 %d 个节点", len(refs)))
+	return err
+}
+
 // StartRule 启动规则
 func (a *MyService) StartRule(id string) error {
 	a.mu.Lock()
@@ -1230,6 +1379,93 @@ func (a *MyService) UpdateSubscriptionByID(subID string) error {
 
 	a.log(fmt.Sprintf("订阅更新完成: %s，节点数: %d", subCopy.Name, len(rules)))
 	return a.saveConfig()
+}
+
+// EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式）。
+// 不触发订阅内容更新，只修改元数据；改名会同步分组名和该订阅下节点的分组名，
+// 改 URL 会同步节点的订阅链接，最后按新配置重设自动更新定时任务。
+func (a *MyService) EditSubscription(subID, name, url string, autoUpdate bool, updateInterval int, updateMode, updateProxyID string) error {
+	if name == "" {
+		return fmt.Errorf("订阅名称不能为空")
+	}
+	if url == "" {
+		return fmt.Errorf("订阅地址不能为空")
+	}
+	if autoUpdate && updateInterval < 1 {
+		return fmt.Errorf("自动更新间隔必须大于等于 1 小时")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 查找订阅
+	idx := -1
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].ID == subID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("订阅不存在")
+	}
+
+	sub := &a.config.Subscriptions[idx]
+	oldName := sub.Name
+	oldURL := sub.URL
+	groupID := sub.GroupID
+
+	// 更新订阅字段
+	sub.Name = name
+	sub.URL = url
+	sub.AutoUpdate = autoUpdate
+	sub.UpdateInterval = updateInterval
+	sub.UpdateMode = updateMode
+	sub.UpdateProxyID = updateProxyID
+
+	// 改名：同步分组名称
+	if name != oldName && groupID != "" {
+		// 分组管理器缓存
+		for _, g := range a.config.Groups {
+			if g.ID == groupID {
+				_ = a.groupManager.UpdateGroup(groupID, name, g.Description)
+				break
+			}
+		}
+		// 配置中的分组
+		for i := range a.config.Groups {
+			if a.config.Groups[i].ID == groupID {
+				a.config.Groups[i].Name = name
+				break
+			}
+		}
+		// 该订阅下所有节点的分组名
+		for i := range a.config.Rules {
+			if a.config.Rules[i].GroupID == groupID {
+				a.config.Rules[i].GroupName = name
+			}
+		}
+	}
+
+	// 改 URL：同步该订阅下节点的订阅链接
+	if url != oldURL && groupID != "" {
+		for i := range a.config.Rules {
+			if a.config.Rules[i].GroupID == groupID && a.config.Rules[i].Source == "subscription" {
+				a.config.Rules[i].SubscriptionURL = url
+			}
+		}
+	}
+
+	// 按新配置重设自动更新定时任务（传副本，避免定时协程长期持有 config 切片内部指针）
+	subCopy := *sub
+	a.subscriptionManager.ReconfigureAutoUpdate(&subCopy)
+
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log(fmt.Sprintf("[订阅] 已编辑订阅: %s", name))
+	return nil
 }
 
 // GetSubscriptions 获取所有订阅

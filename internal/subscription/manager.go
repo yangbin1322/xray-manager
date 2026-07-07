@@ -201,6 +201,16 @@ func (m *Manager) RestartAutoUpdate(sub *models.Subscription) {
 	}
 }
 
+// ReconfigureAutoUpdate 按订阅最新配置重设自动更新任务：
+// 先停掉已有任务，若启用了自动更新则按新间隔重启，否则保持停止。
+// 用于编辑订阅后同步定时任务状态。
+func (m *Manager) ReconfigureAutoUpdate(sub *models.Subscription) {
+	m.stopAutoUpdate(sub.ID)
+	if sub.AutoUpdate && sub.Enabled {
+		m.startAutoUpdate(sub)
+	}
+}
+
 // StopAll 停止所有自动更新任务
 func (m *Manager) StopAll() {
 	m.mu.Lock()

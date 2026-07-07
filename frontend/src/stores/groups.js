@@ -43,6 +43,12 @@ export const useGroupsStore = defineStore('groups', () => {
     await loadSubscriptions()
   }
 
+  async function editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+    await api.editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
+    await loadSubscriptions()
+    await loadGroups()
+  }
+
   async function deleteSubscription(subID) {
     await api.deleteSubscription(subID)
     await loadSubscriptions()
@@ -53,6 +59,6 @@ export const useGroupsStore = defineStore('groups', () => {
     groups, subscriptions,
     loadGroups, loadSubscriptions,
     createGroup, deleteGroup,
-    addSubscription, updateSubscription, deleteSubscription,
+    addSubscription, updateSubscription, editSubscription, deleteSubscription,
   }
 })

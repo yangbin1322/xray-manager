@@ -66,15 +66,16 @@
                 <button class="btn-action-sm" @click="handleUpdate(sub)" :disabled="updating === sub.id">
                   {{ updating === sub.id ? '更新中...' : '更新' }}
                 </button>
+                <button class="btn-action-sm" @click="startEdit(sub)">编辑</button>
                 <button class="btn-action-sm btn-del" @click="handleDelete(sub)">删除</button>
               </td>
             </tr>
           </tbody>
         </table>
 
-        <!-- 添加订阅表单 -->
-        <div class="form-section" style="margin-top: 16px;">
-          <h4>添加订阅</h4>
+        <!-- 添加/编辑订阅表单 -->
+        <div class="form-section" :class="{ 'editing-section': isEditing }" style="margin-top: 16px;">
+          <h4>{{ isEditing ? `编辑订阅：${editingName}` : '添加订阅' }}</h4>
           <div class="form-row">
             <div class="form-group">
               <label>订阅名称：</label>
@@ -125,10 +126,16 @@
             </div>
           </div>
           <div class="form-row">
-            <div class="form-group" style="display:flex;align-items:flex-end;">
-              <button class="btn-primary" @click="handleAdd" :disabled="adding">
+            <div class="form-group" style="display:flex;align-items:flex-end;gap:8px;">
+              <button v-if="!isEditing" class="btn-primary" @click="handleAdd" :disabled="adding">
                 {{ adding ? '添加中...' : '添加订阅' }}
               </button>
+              <template v-else>
+                <button class="btn-primary" @click="handleSaveEdit" :disabled="saving">
+                  {{ saving ? '保存中...' : '保存修改' }}
+                </button>
+                <button class="btn-secondary" @click="cancelEdit">取消</button>
+              </template>
             </div>
           </div>
         </div>
@@ -142,7 +149,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useGroupsStore } from '../stores/groups.js'
 import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
@@ -157,6 +164,11 @@ const appStore = useAppStore()
 
 const updating = ref(null)
 const adding = ref(false)
+const saving = ref(false)
+const editingId = ref(null)   // 正在编辑的订阅 ID，null 表示添加模式
+const editingName = ref('')   // 编辑时的原始名称（用于标题显示）
+
+const isEditing = computed(() => editingId.value !== null)
 
 const defaultForm = () => ({ name: '', url: '', autoUpdate: true, updateInterval: 6, updateMode: 'direct', updateProxyId: '' })
 const form = ref(defaultForm())
@@ -165,8 +177,56 @@ watch(() => props.visible, (v) => {
   if (v) {
     groupsStore.loadSubscriptions()
     rulesStore.loadRules()
+  } else {
+    cancelEdit()
   }
 })
+
+function startEdit(sub) {
+  editingId.value = sub.id
+  editingName.value = sub.name
+  form.value = {
+    name: sub.name || '',
+    url: sub.url || '',
+    autoUpdate: !!sub.autoUpdate,
+    updateInterval: sub.updateInterval || 6,
+    updateMode: sub.updateMode || 'direct',
+    updateProxyId: sub.updateProxyId || '',
+  }
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editingName.value = ''
+  form.value = defaultForm()
+}
+
+async function handleSaveEdit() {
+  if (!form.value.name.trim()) { appStore.showToast('请输入订阅名称', 'warning'); return }
+  if (!form.value.url.trim()) { appStore.showToast('请输入订阅地址', 'warning'); return }
+  if (form.value.autoUpdate && (!form.value.updateInterval || form.value.updateInterval < 1)) {
+    appStore.showToast('请输入有效的更新间隔', 'warning'); return
+  }
+  if (form.value.updateMode === 'proxy' && !form.value.updateProxyId) {
+    appStore.showToast('请选择更新代理节点', 'warning'); return
+  }
+
+  saving.value = true
+  try {
+    await groupsStore.editSubscription(
+      editingId.value, form.value.name.trim(), form.value.url.trim(),
+      form.value.autoUpdate, form.value.updateInterval,
+      form.value.updateMode, form.value.updateProxyId
+    )
+    await rulesStore.loadRules()
+    cancelEdit()
+    appStore.showToast('订阅已保存', 'success')
+  } catch (e) {
+    appStore.showToast(`保存订阅失败: ${e}`, 'error')
+  } finally {
+    saving.value = false
+  }
+}
 
 async function handleAdd() {
   if (!form.value.name.trim()) { appStore.showToast('请输入订阅名称', 'warning'); return }
@@ -334,6 +394,13 @@ function close() { emit('close') }
 .update-hint {
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.editing-section {
+  border: 1px solid var(--primary-color);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--primary-light);
 }
 
 .btn-primary {
