@@ -44,3 +44,9 @@ xray-bin/
 # Wails generated files
 wailsjs/
 frontend/wailsjs/
+
+# Build output (compiled binaries should not be committed)
+bin/
+
+# Taskfile checksum cache (local build state, not source)
+.task/
