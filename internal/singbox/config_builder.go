@@ -1,6 +1,6 @@
 // Package singbox 生成 sing-box 内核配置。
 // Xray-core 不支持 Hysteria2 / TUIC 协议，凡是涉及这两种协议的节点
-//（普通节点、链式代理、负载均衡）统一改用 sing-box 内核运行。
+//（普通节点、链式代理、故障转移）统一改用 sing-box 内核运行。
 package singbox
 
 import (
@@ -301,10 +301,10 @@ func BuildChainConfig(localPort int, chainRules []*models.ProxyRule) (*Config, e
 	return config, nil
 }
 
-// BuildLoadBalanceConfig 构建负载均衡配置（urltest 自动选择延迟最低的节点）
+// BuildLoadBalanceConfig 构建故障转移配置（urltest 自动选择延迟最低的节点）
 func BuildLoadBalanceConfig(localPort int, nodes []*models.ProxyRule) (*Config, error) {
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("负载均衡节点需要至少一个子节点")
+		return nil, fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
 
 	config := newBaseConfig(localPort)

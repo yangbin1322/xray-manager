@@ -57,12 +57,12 @@
             />
           </td>
           <td class="col-alias" :title="rule.alias">
-            <span v-if="rule._nodeType === 'lb'" class="type-badge badge-lb">LB</span>
-            <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain">链</span>
+            <span v-if="rule._nodeType === 'lb'" class="type-badge badge-lb" title="故障转移">转</span>
+            <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain" title="链式代理">链</span>
             {{ rule.alias || '-' }}
           </td>
           <td class="col-protocol">
-            <span :class="['protocol-badge', `protocol-${rule.protocol}`]">{{ rule.protocol }}</span>
+            <span :class="['protocol-badge', `protocol-${rule.protocol}`]">{{ protocolLabel(rule.protocol) }}</span>
           </td>
           <!-- 普通节点显示服务器信息，LB/链显示节点数 -->
           <td class="col-server" :title="rule.serverAddr">
@@ -76,29 +76,20 @@
           </td>
           <td class="col-lport">{{ rule.localPort || '-' }}</td>
           <td class="col-health">
-            <template v-if="rule._nodeType === 'rule'">
-              <span
-                :class="['health-badge', `health-${rule.healthStatus || 'unknown'}`]"
-                :title="healthTitle(rule)"
-              >{{ healthLabel(rule) }}</span>
-            </template>
-            <span v-else class="no-data">-</span>
+            <span
+              :class="['health-badge', `health-${rule.healthStatus || 'unknown'}`]"
+              :title="healthTitle(rule)"
+            >{{ healthLabel(rule) }}</span>
           </td>
           <td class="col-latency">
-            <template v-if="rule._nodeType === 'rule'">
-              <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
-              <span v-else-if="rule.latency > 0" :class="latencyClass(rule.latency)">
-                {{ rule.latency }}ms
-              </span>
-              <span v-else class="no-data">-</span>
-            </template>
+            <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
+            <span v-else-if="rule.latency > 0" :class="latencyClass(rule.latency)">
+              {{ rule.latency }}ms
+            </span>
             <span v-else class="no-data">-</span>
           </td>
           <td class="col-speed">
-            <template v-if="rule._nodeType === 'rule'">
-              <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
-              <span v-else class="no-data">-</span>
-            </template>
+            <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
             <span v-else class="no-data">-</span>
           </td>
           <td class="col-traffic">
@@ -108,10 +99,7 @@
             <span v-else class="no-data">-</span>
           </td>
           <td class="col-traffic-total" :title="trafficTitle(rule)">
-            <template v-if="rule._nodeType === 'rule'">
-              <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
-            </template>
-            <span v-else class="no-data">-</span>
+            <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
           </td>
           <td class="col-ip" :title="rule.realIp">
             <template v-if="rule._nodeType === 'rule'">{{ rule.realIp || '-' }}</template>
@@ -135,8 +123,8 @@
             <button v-if="rule._nodeType === 'rule'" class="btn-action-sm" @click="$emit('editRule', rule)">编辑</button>
             <button v-if="rule._nodeType === 'lb'" class="btn-action-sm" @click="$emit('editLB', rule)">编辑</button>
             <button v-if="rule._nodeType === 'chain'" class="btn-action-sm" @click="$emit('editChain', rule)">编辑</button>
-            <button v-if="rule._nodeType === 'rule'" class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
-            <button v-if="rule._nodeType === 'rule'" class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
+            <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
+            <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -213,6 +201,12 @@ function latencyClass(latency) {
   return 'latency-bad'
 }
 
+// 协议显示名映射：组合节点显示中文，其余协议原样显示
+const protocolLabels = { loadbalance: '故障转移', chain: '链式代理' }
+function protocolLabel(protocol) {
+  return protocolLabels[protocol] || protocol
+}
+
 // ===== 健康检查展示 =====
 const healthLabels = {
   checking: '检测中',
@@ -285,6 +279,11 @@ function formatSpeed(bytesPerSec) {
 }
 
 async function handleHealthCheck(rule) {
+  // 故障转移/链式代理经本地代理端口检测，需先启动
+  if (rule._nodeType !== 'rule' && !rule.enabled) {
+    appStore.showToast(`请先启动「${rule.alias}」再检测`, 'warning')
+    return
+  }
   try {
     await api.checkNodeHealth(rule.id)
     appStore.showToast(`正在检测: ${rule.alias}`, 'info')
@@ -333,8 +332,19 @@ async function handleStop(rule) {
 }
 
 async function handleTest(rule) {
+  // 故障转移/链式代理需先启动（通过本地代理端口测速）
+  if (rule._nodeType !== 'rule' && !rule.enabled) {
+    appStore.showToast(`请先启动「${rule.alias}」再测速`, 'warning')
+    return
+  }
   try {
-    await api.testRuleSpeed(rule.id)
+    if (rule._nodeType === 'lb') {
+      await api.testLoadBalancerSpeed(rule.id)
+    } else if (rule._nodeType === 'chain') {
+      await api.testChainProxySpeed(rule.id)
+    } else {
+      await api.testRuleSpeed(rule.id)
+    }
     appStore.showToast(`正在测速: ${rule.alias}`, 'info')
   } catch (e) {
     appStore.showToast(`测速失败: ${e}`, 'error')
@@ -342,7 +352,7 @@ async function handleTest(rule) {
 }
 
 async function handleDelete(rule) {
-  const typeLabel = rule._nodeType === 'lb' ? '负载均衡' : (rule._nodeType === 'chain' ? '链式代理' : '规则')
+  const typeLabel = rule._nodeType === 'lb' ? '故障转移' : (rule._nodeType === 'chain' ? '链式代理' : '规则')
   if (!confirm(`确定要删除${typeLabel}「${rule.alias}」吗?`)) return
   try {
     if (rule._nodeType === 'lb') {

@@ -204,7 +204,7 @@ type Config struct {
 	Rules          []ProxyRule       `json:"rules"`          // 代理规则列表
 	Groups         []Group           `json:"groups"`         // 分组列表
 	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
-	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 负载均衡节点列表
+	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 故障转移节点列表
 	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
 	HealthCheck    HealthCheckConfig `json:"healthCheck"`    // 健康检查配置
 }
@@ -216,7 +216,7 @@ type ExportData struct {
 	Rules         []ProxyRule       `json:"rules"`         // 代理规则列表
 	Groups        []Group           `json:"groups"`        // 分组列表
 	Subscriptions []Subscription    `json:"subscriptions"` // 订阅列表
-	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 负载均衡节点列表
+	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
 }
 
@@ -263,8 +263,8 @@ type Subscription struct {
 	LastUpdate  string `json:"lastUpdate"`  // 最后更新时间
 	NextUpdate  string `json:"nextUpdate"`  // 下次更新时间
 	NodeCount   int    `json:"nodeCount"`   // 节点数量
-	UpdateMode  string `json:"updateMode"`  // 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/负载均衡）
-	UpdateProxyID string `json:"updateProxyId,omitempty"` // UpdateMode 为 proxy 时使用的节点/链式代理/负载均衡 ID
+	UpdateMode  string `json:"updateMode"`  // 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/故障转移）
+	UpdateProxyID string `json:"updateProxyId,omitempty"` // UpdateMode 为 proxy 时使用的节点/链式代理/故障转移 ID
 }
 
 // SpeedTestResult 测速结果
@@ -277,17 +277,33 @@ type SpeedTestResult struct {
 	Timestamp     string  `json:"timestamp"`
 }
 
-// LoadBalanceNode 负载均衡节点
+// LoadBalanceNode 故障转移节点
 type LoadBalanceNode struct {
 	ID        string   `json:"id"`        // 唯一标识
 	Alias     string   `json:"alias"`     // 别名
-	LocalType string   `json:"localType"` // 本地代理类型: socks 或 http
+	LocalType string   `json:"localType"` // 本地代理类型: mixed（同时支持 HTTP/SOCKS5）
 	LocalPort int      `json:"localPort"` // 本地代理端口
 	NodeIDs   []string `json:"nodeIds"`   // 子节点 ID 列表
 	Enabled   bool     `json:"enabled"`   // 启动状态
 	ProcessID int      `json:"processId"` // 进程ID
 	GroupID   string   `json:"groupId"`   // 所属分组ID
 	GroupName string   `json:"groupName"` // 所属分组名称
+
+	// 测速相关字段（通过本地代理端口测试）
+	Latency       int     `json:"latency"`       // 延迟（毫秒）
+	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）
+	LastTestTime  string  `json:"lastTestTime"`  // 最后测速时间
+	TestStatus    string  `json:"testStatus"`    // 测速状态: idle, testing, success, failed
+
+	// 健康检查相关字段（通过本地代理端口检测，需已启动）
+	HealthStatus    string `json:"healthStatus"`    // online, high_latency, timeout, checking
+	HealthLatency   int    `json:"healthLatency"`   // 健康检查延迟（毫秒）
+	LastHealthCheck string `json:"lastHealthCheck"` // 最后健康检查时间
+
+	// 流量统计相关字段
+	Traffic       TrafficStats `json:"traffic"`       // 累计流量统计
+	LastStartTime string       `json:"lastStartTime"` // 最近启动时间
+	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
 }
 
 // ChainProxy 链式代理配置
@@ -301,4 +317,20 @@ type ChainProxy struct {
 	ProcessID  int      `json:"processId"`  // 进程ID
 	GroupID    string   `json:"groupId"`    // 所属分组ID
 	GroupName  string   `json:"groupName"`  // 所属分组名称
+
+	// 测速相关字段（通过本地代理端口测试）
+	Latency       int     `json:"latency"`       // 延迟（毫秒）
+	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）
+	LastTestTime  string  `json:"lastTestTime"`  // 最后测速时间
+	TestStatus    string  `json:"testStatus"`    // 测速状态: idle, testing, success, failed
+
+	// 健康检查相关字段（通过本地代理端口检测，需已启动）
+	HealthStatus    string `json:"healthStatus"`    // online, high_latency, timeout, checking
+	HealthLatency   int    `json:"healthLatency"`   // 健康检查延迟（毫秒）
+	LastHealthCheck string `json:"lastHealthCheck"` // 最后健康检查时间
+
+	// 流量统计相关字段
+	Traffic       TrafficStats `json:"traffic"`       // 累计流量统计
+	LastStartTime string       `json:"lastStartTime"` // 最近启动时间
+	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
 }

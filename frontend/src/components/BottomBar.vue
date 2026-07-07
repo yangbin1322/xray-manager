@@ -23,7 +23,7 @@
         <div class="dialog-body">
           <p class="import-hint">
             {{ selectedCount > 0
-              ? `将导出选中的 ${selectedCount} 个节点，并自动包含其完整所属的链式代理、负载均衡及相关分组。`
+              ? `将导出选中的 ${selectedCount} 个节点，并自动包含其完整所属的链式代理、故障转移及相关分组。`
               : '未选中任何节点，将导出全部节点与配置。' }}
           </p>
           <label class="export-check">
@@ -91,7 +91,7 @@ const selectedCount = computed(() =>
 )
 
 async function handleExport() {
-  // 仅统计普通节点的选中项（链式/负载均衡会按关联关系自动带出）
+  // 仅统计普通节点的选中项（链式/故障转移会按关联关系自动带出）
   const ids = rulesStore.selectedRuleIds.filter(id => rulesStore.rules.some(r => r.id === id))
   showExportDialog.value = false
   await appStore.doExportConfig(ids, includeSubscriptions.value)

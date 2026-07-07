@@ -40,7 +40,7 @@
     </div>
 
     <div class="sidebar-footer">
-      <button class="btn-small btn-block" @click="$emit('showLBDialog')">添加负载均衡</button>
+      <button class="btn-small btn-block" @click="$emit('showLBDialog')">添加故障转移</button>
       <button class="btn-small btn-block" @click="$emit('showChainDialog')">添加链式代理</button>
       <button class="btn-small btn-block" @click="$emit('showSubDialog')">订阅管理</button>
     </div>

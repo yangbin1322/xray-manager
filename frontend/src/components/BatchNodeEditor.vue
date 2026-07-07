@@ -1,7 +1,7 @@
 <!--
   BatchNodeEditor 批量编辑节点。
   多选普通节点后打开，每个节点一张可折叠卡片，卡片内嵌完整编辑表单，
-  底部“全部保存”统一提交。仅处理普通节点（rule），忽略负载均衡/链式代理。
+  底部“全部保存”统一提交。仅处理普通节点（rule），忽略故障转移/链式代理。
 -->
 <template>
   <div v-if="visible" class="dialog-overlay" @click.self="close">
@@ -15,7 +15,7 @@
         <button class="btn-small" @click="expandAll(true)">全部展开</button>
         <button class="btn-small" @click="expandAll(false)">全部折叠</button>
         <span v-if="skippedCount > 0" class="skip-hint">
-          已忽略 {{ skippedCount }} 个非普通节点（负载均衡/链式代理不支持批量编辑）
+          已忽略 {{ skippedCount }} 个非普通节点（故障转移/链式代理不支持批量编辑）
         </span>
       </div>
 

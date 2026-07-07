@@ -110,7 +110,7 @@ export async function deleteSubscription(subID) {
   return await MyService.DeleteSubscription(subID)
 }
 
-// ==================== 负载均衡 ====================
+// ==================== 故障转移 ====================
 
 export async function getLoadBalancers() {
   return await MyService.GetLoadBalancers()
@@ -174,6 +174,14 @@ export async function testAllRulesSpeed() {
 
 export async function testSelectedRulesSpeed(ruleIDs) {
   return await MyService.TestSelectedRulesSpeed(ruleIDs)
+}
+
+export async function testLoadBalancerSpeed(id) {
+  return await MyService.TestLoadBalancerSpeed(id)
+}
+
+export async function testChainProxySpeed(id) {
+  return await MyService.TestChainProxySpeed(id)
 }
 
 // ==================== 健康检查 ====================

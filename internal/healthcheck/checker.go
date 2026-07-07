@@ -8,7 +8,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"sync"
 	"time"
 	"xray-manager/internal/models"
@@ -235,6 +238,60 @@ func CheckRule(rule *models.ProxyRule, cfg models.HealthCheckConfig) models.Heal
 	}
 
 	// 5. 延迟分级
+	if latency > cfg.LatencyThreshold {
+		result.Status = StatusHighLatency
+	} else {
+		result.Status = StatusOnline
+	}
+	return result
+}
+
+// CheckProxyPort 通过本地代理端口检测健康状态（用于故障转移/链式代理这类组合节点）。
+// 先确认代理端口在监听，再经 SOCKS5 代理做一次 HTTP 探测测整条链路延迟。
+// id 用于回填结果，cfg 提供超时与延迟阈值。
+func CheckProxyPort(id string, proxyPort int, cfg models.HealthCheckConfig) models.HealthCheckResult {
+	cfg = normalizeConfig(cfg)
+	timeout := time.Duration(cfg.TimeoutSec) * time.Second
+
+	result := models.HealthCheckResult{
+		RuleID:    id,
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	// 1. 确认本地代理端口在监听
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), timeout)
+	if err != nil {
+		result.Status = StatusTimeout
+		result.Error = fmt.Sprintf("本地代理端口不可达（可能未启动）: %v", err)
+		return result
+	}
+	conn.Close()
+
+	// 2. 经代理做 HTTP 探测，测整条链路往返延迟
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", proxyPort))
+	if err != nil {
+		result.Status = StatusTimeout
+		result.Error = fmt.Sprintf("构建代理地址失败: %v", err)
+		return result
+	}
+	client := &http.Client{
+		Timeout:   timeout + 3*time.Second, // 链路探测比本地连接留更多余量
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+
+	start := time.Now()
+	req, _ := http.NewRequest("GET", "https://www.gstatic.com/generate_204", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Status = StatusTimeout
+		result.Error = fmt.Sprintf("经代理连通性测试失败: %v", err)
+		return result
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	latency := int(time.Since(start).Milliseconds())
+	result.Latency = latency
 	if latency > cfg.LatencyThreshold {
 		result.Status = StatusHighLatency
 	} else {

@@ -106,8 +106,8 @@ func (m *Manager) SetTrafficCallback(fn func(ruleID string, deltaUp, deltaDown i
 	m.trafficFunc = fn
 }
 
-// findApiPort 为流量统计 API 查找可用端口
-func findApiPort(localPort int) int {
+// FindApiPort 为流量统计 API 查找可用端口（基于本地端口偏移，避免与代理端口冲突）
+func FindApiPort(localPort int) int {
 	start := localPort + 20000
 	if start >= 65000 || start <= 0 {
 		start = 20000
@@ -126,7 +126,7 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	}
 
 	// 根据协议选择内核并生成配置
-	apiPort := findApiPort(rule.LocalPort)
+	apiPort := FindApiPort(rule.LocalPort)
 	var configJSON string
 	coreType := CoreXray
 

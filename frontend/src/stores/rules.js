@@ -17,7 +17,7 @@ export const useRulesStore = defineStore('rules', () => {
   const clipboard = ref([]) // 复制的节点数据
   const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
-  // === 合并所有节点（规则 + 负载均衡 + 链式代理） ===
+  // === 合并所有节点（规则 + 故障转移 + 链式代理） ===
   const allNodes = computed(() => {
     const ruleNodes = rules.value.map(r => ({ ...r, _nodeType: 'rule' }))
     const lbNodes = loadBalancers.value.map(lb => ({ ...lb, _nodeType: 'lb', protocol: 'loadbalance' }))
@@ -182,19 +182,24 @@ export const useRulesStore = defineStore('rules', () => {
   // 应用健康检查结果（healthCheckResult 事件）
   function applyHealthCheckResult(result) {
     if (!result || !result.ruleId) return
-    const idx = rules.value.findIndex(r => r.id === result.ruleId)
-    if (idx >= 0) {
-      rules.value[idx] = {
-        ...rules.value[idx],
-        healthStatus: result.status,
-        healthLatency: result.latency,
-        lastHealthCheck: result.timestamp,
+    const patch = {
+      healthStatus: result.status,
+      healthLatency: result.latency,
+      lastHealthCheck: result.timestamp,
+    }
+    // 结果 ID 可能属于普通节点/故障转移/链式代理，逐个数组查找
+    for (const list of [rules, loadBalancers, chainProxies]) {
+      const idx = list.value.findIndex(r => r.id === result.ruleId)
+      if (idx >= 0) {
+        list.value[idx] = { ...list.value[idx], ...patch }
+        return
       }
     }
   }
 
   async function checkSelectedHealth() {
-    const ids = selectedRuleIds.value.filter(id => rules.value.some(r => r.id === id))
+    // 普通节点直连检测，已启动的故障转移/链式代理经代理端口检测
+    const ids = selectedRuleIds.value.filter(id => allNodes.value.some(n => n.id === id))
     if (ids.length === 0) return false
     await api.checkSelectedNodesHealth(ids)
     return true

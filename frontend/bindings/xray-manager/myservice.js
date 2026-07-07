@@ -28,7 +28,7 @@ export function AddChainProxy(chain) {
 }
 
 /**
- * AddLoadBalancer 添加负载均衡节点
+ * AddLoadBalancer 添加故障转移节点
  * @param {models$0.LoadBalanceNode} lb
  * @returns {$CancellablePromise<void>}
  */
@@ -87,7 +87,7 @@ export function CheckPortAvailable(port) {
 }
 
 /**
- * CheckSelectedNodesHealth 检测选中节点健康状态
+ * CheckSelectedNodesHealth 检测选中节点健康状态（普通节点直连探测，故障转移/链式代理经本地代理端口探测）
  * @param {string[]} ruleIDs
  * @returns {$CancellablePromise<void>}
  */
@@ -132,7 +132,7 @@ export function DeleteGroup(groupID) {
 }
 
 /**
- * DeleteLoadBalancer 删除负载均衡节点
+ * DeleteLoadBalancer 删除故障转移节点
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */
@@ -184,7 +184,7 @@ export function EditSubscription(subID, name, url, autoUpdate, updateInterval, u
 }
 
 /**
- * EnableSystemProxy 设置系统代理（支持普通节点、链式代理、负载均衡）
+ * EnableSystemProxy 设置系统代理（支持普通节点、链式代理、故障转移）
  * @param {string} ruleID
  * @returns {$CancellablePromise<void>}
  */
@@ -195,7 +195,7 @@ export function EnableSystemProxy(ruleID) {
 /**
  * ExportConfig 导出配置（标准格式，包含版本信息）
  * ruleIds 为空时导出全部规则，非空时仅导出选中的规则及其关联项：
- *   - 仅当链式代理/负载均衡的全部成员节点都被选中时才导出该链式代理/负载均衡
+ *   - 仅当链式代理/故障转移的全部成员节点都被选中时才导出该链式代理/故障转移
  *   - 仅导出被导出内容引用到的分组
  *   - includeSubscriptions 控制是否导出订阅及订阅分组；不导出时订阅节点转为手动节点
  * @param {string[]} ruleIds
@@ -256,7 +256,7 @@ export function GetHealthCheckConfig() {
 }
 
 /**
- * GetLoadBalancers 获取所有负载均衡节点
+ * GetLoadBalancers 获取所有故障转移节点
  * @returns {$CancellablePromise<models$0.LoadBalanceNode[]>}
  */
 export function GetLoadBalancers() {
@@ -333,7 +333,7 @@ export function RecommendPort() {
 }
 
 /**
- * ResetRuleTraffic 清零节点流量统计（ruleID 为空时清零全部节点）
+ * ResetRuleTraffic 清零流量统计（ruleID 为空时清零全部节点、故障转移与链式代理）
  * @param {string} ruleID
  * @returns {$CancellablePromise<void>}
  */
@@ -382,7 +382,7 @@ export function SetHealthCheckConfig(cfg) {
 
 /**
  * SetSubscriptionUpdateMode 设置订阅的更新方式
- * mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/负载均衡的 ID）
+ * mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/故障转移的 ID）
  * @param {string} subID
  * @param {string} mode
  * @param {string} proxyID
@@ -411,7 +411,7 @@ export function StartChainProxy(id) {
 }
 
 /**
- * StartLoadBalancer 启动负载均衡节点
+ * StartLoadBalancer 启动故障转移节点
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */
@@ -420,7 +420,7 @@ export function StartLoadBalancer(id) {
 }
 
 /**
- * StartNodes 批量启动节点（普通节点/负载均衡/链式代理），并发执行、只保存一次配置。
+ * StartNodes 批量启动节点（普通节点/故障转移/链式代理），并发执行、只保存一次配置。
  * 相比前端逐个调用 StartRule，避免了 N 次串行的进程启动 + N 次写盘导致的卡顿。
  * @param {string[]} ids
  * @returns {$CancellablePromise<void>}
@@ -457,7 +457,7 @@ export function StopChainProxy(id) {
 }
 
 /**
- * StopLoadBalancer 停止负载均衡节点
+ * StopLoadBalancer 停止故障转移节点
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */
@@ -492,6 +492,24 @@ export function TestAllRulesSpeed() {
 }
 
 /**
+ * TestChainProxySpeed 测试链式代理的速度（需已启动，通过本地代理端口测试）
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function TestChainProxySpeed(id) {
+    return $Call.ByID(1987045959, id);
+}
+
+/**
+ * TestLoadBalancerSpeed 测试故障转移节点的速度（需已启动，通过本地代理端口测试）
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function TestLoadBalancerSpeed(id) {
+    return $Call.ByID(693895864, id);
+}
+
+/**
  * TestRuleSpeed 测试单个规则的速度
  * @param {string} ruleID
  * @returns {$CancellablePromise<void>}
@@ -501,7 +519,7 @@ export function TestRuleSpeed(ruleID) {
 }
 
 /**
- * TestSelectedRulesSpeed 测试选中的规则速度
+ * TestSelectedRulesSpeed 测试选中的节点速度（普通节点直测；故障转移/链式代理经本地代理端口测，需已启动）
  * @param {string[]} ruleIDs
  * @returns {$CancellablePromise<void>}
  */
@@ -519,7 +537,7 @@ export function UpdateChainProxy(chain) {
 }
 
 /**
- * UpdateLoadBalancer 更新负载均衡节点
+ * UpdateLoadBalancer 更新故障转移节点
  * @param {models$0.LoadBalanceNode} lb
  * @returns {$CancellablePromise<void>}
  */

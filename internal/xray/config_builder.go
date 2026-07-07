@@ -420,11 +420,11 @@ func buildSOCKSSettings(rule *models.ProxyRule) map[string]interface{} {
 	}
 }
 
-// BuildLoadBalanceConfig 构建负载均衡配置
-// nodes: 子节点列表，lb: 负载均衡节点本身
+// BuildLoadBalanceConfig 构建故障转移配置
+// nodes: 子节点列表，lb: 故障转移节点本身
 func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRule) (*XrayConfig, error) {
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("负载均衡节点需要至少一个子节点")
+		return nil, fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
 
 	config := &XrayConfig{

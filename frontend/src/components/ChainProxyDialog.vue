@@ -40,7 +40,7 @@
             </div>
 
             <hr v-if="rulesStore.loadBalancers.length > 0" style="margin: 8px 0;" />
-            <strong v-if="rulesStore.loadBalancers.length > 0" style="font-size: 12px;">负载均衡节点：</strong>
+            <strong v-if="rulesStore.loadBalancers.length > 0" style="font-size: 12px;">故障转移节点：</strong>
             <div v-for="lb in rulesStore.loadBalancers" :key="lb.id" class="node-select-item">
               <button class="btn-add" @click="addToChain(lb.id, lb.alias, 'lb')">+ 添加</button>
               <span>[LB] {{ lb.alias }}</span>

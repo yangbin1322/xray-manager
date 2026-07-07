@@ -3,6 +3,7 @@ package speedtest
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -153,6 +154,75 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 	speedMBps := float64(written) / duration / 1024 / 1024
 
 	return speedMBps, nil
+}
+
+// TestProxyLatency 通过本地代理端口测延迟（HTTP 探测）。
+// 用于故障转移/链式代理这类没有单一服务器地址的组合节点：
+// 经代理请求一个轻量端点并计时，反映整条链路的往返延迟。
+func (t *Tester) TestProxyLatency(ctx context.Context, proxyPort int, timeout time.Duration) (int, error) {
+	if timeout == 0 {
+		timeout = 8 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", proxyPort))
+	if err != nil {
+		return 0, fmt.Errorf("构建代理 URL 失败: %v", err)
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+
+	// 轻量端点（204 无响应体），计时首字节到达
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.gstatic.com/generate_204", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("代理连通性测试失败: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return int(time.Since(start).Milliseconds()), nil
+}
+
+// TestProxyEndpoint 测试一个已启动的本地代理端口（延迟 + 下载速度）。
+// 适用于故障转移/链式代理（proxyType 传 "mixed" 即可，内部走 SOCKS5）。
+func (t *Tester) TestProxyEndpoint(ctx context.Context, id, alias string, proxyPort int) models.SpeedTestResult {
+	result := models.SpeedTestResult{
+		RuleID:    id,
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	t.log(fmt.Sprintf("[测速] 开始测试: %s", alias))
+
+	latency, err := t.TestProxyLatency(ctx, proxyPort, 8*time.Second)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("延迟测试失败: %v", err)
+		t.log(fmt.Sprintf("[测速] %s - 延迟测试失败: %v", alias, err))
+		return result
+	}
+	result.Latency = latency
+	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms", alias, latency))
+
+	speed, err := t.TestDownloadSpeed(ctx, "mixed", proxyPort, "", 20*time.Second)
+	if err != nil {
+		result.Success = true
+		result.DownloadSpeed = 0
+		result.Error = fmt.Sprintf("速度测试失败: %v", err)
+		t.log(fmt.Sprintf("[测速] %s - 速度测试失败: %v", alias, err))
+		return result
+	}
+	result.DownloadSpeed = speed
+	result.Success = true
+	t.log(fmt.Sprintf("[测速] %s - 下载速度: %.2f MB/s", alias, speed))
+	return result
 }
 
 // TestRule 测试单个规则（包括延迟和下载速度）

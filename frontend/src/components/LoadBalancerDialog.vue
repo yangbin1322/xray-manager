@@ -2,7 +2,7 @@
   <div v-if="visible" class="dialog-overlay" @click.self="close">
     <div class="dialog dialog-large">
       <div class="dialog-header">
-        <h3>{{ isEditing ? '编辑负载均衡' : '添加负载均衡' }}</h3>
+        <h3>{{ isEditing ? '编辑故障转移' : '添加故障转移' }}</h3>
         <button class="dialog-close" @click="close">&times;</button>
       </div>
 
@@ -12,7 +12,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>别名：</label>
-              <input v-model="form.alias" type="text" placeholder="例如：负载均衡-香港" />
+              <input v-model="form.alias" type="text" placeholder="例如：故障转移-香港" />
             </div>
             <div class="form-group">
               <label>所属分组：</label>
@@ -117,10 +117,10 @@ async function handleSave() {
     if (isEditing.value) {
       lbData.id = props.editingLB.id
       await api.updateLoadBalancer(lbData)
-      appStore.showToast('负载均衡已更新', 'success')
+      appStore.showToast('故障转移已更新', 'success')
     } else {
       await api.addLoadBalancer(lbData)
-      appStore.showToast('负载均衡已添加', 'success')
+      appStore.showToast('故障转移已添加', 'success')
     }
     await rulesStore.loadRules()
     close()

@@ -87,6 +87,89 @@ export class ChainProxy {
              */
             this["groupName"] = "";
         }
+        if (!("latency" in $$source)) {
+            /**
+             * 测速相关字段（通过本地代理端口测试）
+             * 延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["latency"] = 0;
+        }
+        if (!("downloadSpeed" in $$source)) {
+            /**
+             * 下载速度（MB/s）
+             * @member
+             * @type {number}
+             */
+            this["downloadSpeed"] = 0;
+        }
+        if (!("lastTestTime" in $$source)) {
+            /**
+             * 最后测速时间
+             * @member
+             * @type {string}
+             */
+            this["lastTestTime"] = "";
+        }
+        if (!("testStatus" in $$source)) {
+            /**
+             * 测速状态: idle, testing, success, failed
+             * @member
+             * @type {string}
+             */
+            this["testStatus"] = "";
+        }
+        if (!("healthStatus" in $$source)) {
+            /**
+             * 健康检查相关字段（通过本地代理端口检测，需已启动）
+             * online, high_latency, timeout, checking
+             * @member
+             * @type {string}
+             */
+            this["healthStatus"] = "";
+        }
+        if (!("healthLatency" in $$source)) {
+            /**
+             * 健康检查延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["healthLatency"] = 0;
+        }
+        if (!("lastHealthCheck" in $$source)) {
+            /**
+             * 最后健康检查时间
+             * @member
+             * @type {string}
+             */
+            this["lastHealthCheck"] = "";
+        }
+        if (!("traffic" in $$source)) {
+            /**
+             * 流量统计相关字段
+             * 累计流量统计
+             * @member
+             * @type {TrafficStats}
+             */
+            this["traffic"] = (new TrafficStats());
+        }
+        if (!("lastStartTime" in $$source)) {
+            /**
+             * 最近启动时间
+             * @member
+             * @type {string}
+             */
+            this["lastStartTime"] = "";
+        }
+        if (!("lastStopTime" in $$source)) {
+            /**
+             * 最近停止时间
+             * @member
+             * @type {string}
+             */
+            this["lastStopTime"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -98,9 +181,13 @@ export class ChainProxy {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
+        const $$createField16_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("chainNodes" in $$parsedSource) {
             $$parsedSource["chainNodes"] = $$createField4_0($$parsedSource["chainNodes"]);
+        }
+        if ("traffic" in $$parsedSource) {
+            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
         }
         return new ChainProxy(/** @type {Partial<ChainProxy>} */($$parsedSource));
     }
@@ -462,7 +549,7 @@ export class ImportShareResult {
 }
 
 /**
- * LoadBalanceNode 负载均衡节点
+ * LoadBalanceNode 故障转移节点
  */
 export class LoadBalanceNode {
     /**
@@ -488,7 +575,7 @@ export class LoadBalanceNode {
         }
         if (!("localType" in $$source)) {
             /**
-             * 本地代理类型: socks 或 http
+             * 本地代理类型: mixed（同时支持 HTTP/SOCKS5）
              * @member
              * @type {string}
              */
@@ -542,6 +629,89 @@ export class LoadBalanceNode {
              */
             this["groupName"] = "";
         }
+        if (!("latency" in $$source)) {
+            /**
+             * 测速相关字段（通过本地代理端口测试）
+             * 延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["latency"] = 0;
+        }
+        if (!("downloadSpeed" in $$source)) {
+            /**
+             * 下载速度（MB/s）
+             * @member
+             * @type {number}
+             */
+            this["downloadSpeed"] = 0;
+        }
+        if (!("lastTestTime" in $$source)) {
+            /**
+             * 最后测速时间
+             * @member
+             * @type {string}
+             */
+            this["lastTestTime"] = "";
+        }
+        if (!("testStatus" in $$source)) {
+            /**
+             * 测速状态: idle, testing, success, failed
+             * @member
+             * @type {string}
+             */
+            this["testStatus"] = "";
+        }
+        if (!("healthStatus" in $$source)) {
+            /**
+             * 健康检查相关字段（通过本地代理端口检测，需已启动）
+             * online, high_latency, timeout, checking
+             * @member
+             * @type {string}
+             */
+            this["healthStatus"] = "";
+        }
+        if (!("healthLatency" in $$source)) {
+            /**
+             * 健康检查延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["healthLatency"] = 0;
+        }
+        if (!("lastHealthCheck" in $$source)) {
+            /**
+             * 最后健康检查时间
+             * @member
+             * @type {string}
+             */
+            this["lastHealthCheck"] = "";
+        }
+        if (!("traffic" in $$source)) {
+            /**
+             * 流量统计相关字段
+             * 累计流量统计
+             * @member
+             * @type {TrafficStats}
+             */
+            this["traffic"] = (new TrafficStats());
+        }
+        if (!("lastStartTime" in $$source)) {
+            /**
+             * 最近启动时间
+             * @member
+             * @type {string}
+             */
+            this["lastStartTime"] = "";
+        }
+        if (!("lastStopTime" in $$source)) {
+            /**
+             * 最近停止时间
+             * @member
+             * @type {string}
+             */
+            this["lastStopTime"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -553,9 +723,13 @@ export class LoadBalanceNode {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
+        const $$createField16_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("nodeIds" in $$parsedSource) {
             $$parsedSource["nodeIds"] = $$createField4_0($$parsedSource["nodeIds"]);
+        }
+        if ("traffic" in $$parsedSource) {
+            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
         }
         return new LoadBalanceNode(/** @type {Partial<LoadBalanceNode>} */($$parsedSource));
     }
@@ -784,8 +958,8 @@ export class ProxyRule {
      * @returns {ProxyRule}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType1;
-        const $$createField18_0 = $$createType2;
+        const $$createField7_0 = $$createType2;
+        const $$createField18_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
@@ -1177,7 +1351,7 @@ export class Subscription {
         }
         if (!("updateMode" in $$source)) {
             /**
-             * 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/负载均衡）
+             * 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/故障转移）
              * @member
              * @type {string}
              */
@@ -1185,7 +1359,7 @@ export class Subscription {
         }
         if (/** @type {any} */(false)) {
             /**
-             * UpdateMode 为 proxy 时使用的节点/链式代理/负载均衡 ID
+             * UpdateMode 为 proxy 时使用的节点/链式代理/故障转移 ID
              * @member
              * @type {string | undefined}
              */
@@ -1368,8 +1542,8 @@ export class WSSettings {
 
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = ProxySettings.createFrom;
-const $$createType2 = TrafficStats.createFrom;
+const $$createType1 = TrafficStats.createFrom;
+const $$createType2 = ProxySettings.createFrom;
 const $$createType3 = TLSSettings.createFrom;
 const $$createType4 = $Create.Nullable($$createType3);
 const $$createType5 = WSSettings.createFrom;

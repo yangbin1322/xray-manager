@@ -101,7 +101,7 @@ const rulesStore = useRulesStore()
 const appStore = useAppStore()
 
 function handleBatchEdit() {
-  // 收集选中的普通节点（负载均衡/链式代理不支持批量编辑）
+  // 收集选中的普通节点（故障转移/链式代理不支持批量编辑）
   const selected = rulesStore.selectedRuleIds
   if (selected.length === 0) {
     appStore.showToast('请先选择要编辑的节点', 'warning')

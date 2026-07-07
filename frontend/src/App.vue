@@ -39,7 +39,7 @@
       @close="showSubscriptionDialog = false"
     />
 
-    <!-- 负载均衡对话框 -->
+    <!-- 故障转移对话框 -->
     <LoadBalancerDialog
       :visible="showLBDialog"
       :editingLB="editingLB"

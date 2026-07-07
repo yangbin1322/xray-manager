@@ -105,6 +105,8 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		a.getRulesSnapshot,
 		a.handleHealthCheckResult,
 		func() {
+			// 一轮普通节点检测完成后，顺带检测已启动的故障转移/链式代理
+			a.checkProxyTargets(a.collectProxyHealthTargets(nil))
 			a.mu.Lock()
 			_ = a.saveConfig()
 			a.mu.Unlock()
@@ -169,11 +171,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 启动时同步进程状态（修复崩溃后的状态不一致）
 		a.config.Rules = a.processManager.SyncState(a.config.Rules)
-		// 同步负载均衡和链式代理的状态（保留启用标记以便重启）
+		// 同步故障转移和链式代理的状态（保留启用标记以便重启）
 		for i := range a.config.LoadBalancers {
 			lb := &a.config.LoadBalancers[i]
 			if lb.Enabled && (lb.ProcessID <= 0 || !a.processManager.IsRunning(lb.LocalPort)) {
-				a.log(fmt.Sprintf("[状态同步] 负载均衡 %s 进程不存在，重置进程状态（保留启用标记以便重启）", lb.Alias))
+				a.log(fmt.Sprintf("[状态同步] 故障转移 %s 进程不存在，重置进程状态（保留启用标记以便重启）", lb.Alias))
 				lb.ProcessID = 0
 			}
 		}
@@ -198,13 +200,13 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 			}
 		}
 
-		// 自动启动已启用的负载均衡节点
+		// 自动启动已启用的故障转移节点
 		for i := range a.config.LoadBalancers {
 			lb := &a.config.LoadBalancers[i]
 			if lb.Enabled {
-				a.log(fmt.Sprintf("自动启动负载均衡: %s", lb.Alias))
+				a.log(fmt.Sprintf("自动启动故障转移: %s", lb.Alias))
 				if err := a.startLoadBalancerInternal(lb); err != nil {
-					a.logError(fmt.Sprintf("启动负载均衡 %s 失败", lb.Alias), err)
+					a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
 					lb.Enabled = false
 				}
 			}
@@ -476,7 +478,7 @@ func (a *MyService) DeleteRule(id string) error {
 	return fmt.Errorf("规则 %s 不存在", id)
 }
 
-// nodeRef 批量操作时对一个节点的引用（普通节点/负载均衡/链式代理）
+// nodeRef 批量操作时对一个节点的引用（普通节点/故障转移/链式代理）
 type nodeRef struct {
 	id       string
 	nodeType string // rule / lb / chain
@@ -509,7 +511,7 @@ func (a *MyService) collectNodeRefs(ids []string) []nodeRef {
 	return refs
 }
 
-// StartNodes 批量启动节点（普通节点/负载均衡/链式代理），并发执行、只保存一次配置。
+// StartNodes 批量启动节点（普通节点/故障转移/链式代理），并发执行、只保存一次配置。
 // 相比前端逐个调用 StartRule，避免了 N 次串行的进程启动 + N 次写盘导致的卡顿。
 func (a *MyService) StartNodes(ids []string) error {
 	if len(ids) == 0 {
@@ -543,7 +545,7 @@ func (a *MyService) StartNodes(ids []string) error {
 				lb := &a.config.LoadBalancers[i]
 				if lb.ID == ref.id && !lb.Enabled {
 					if err := a.startLoadBalancerInternal(lb); err != nil {
-						a.logError(fmt.Sprintf("启动负载均衡 %s 失败", lb.Alias), err)
+						a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
 					}
 					break
 				}
@@ -742,7 +744,7 @@ func (a *MyService) log(message string) {
 
 // ExportConfig 导出配置（标准格式，包含版本信息）
 // ruleIds 为空时导出全部规则，非空时仅导出选中的规则及其关联项：
-//   - 仅当链式代理/负载均衡的全部成员节点都被选中时才导出该链式代理/负载均衡
+//   - 仅当链式代理/故障转移的全部成员节点都被选中时才导出该链式代理/故障转移
 //   - 仅导出被导出内容引用到的分组
 //   - includeSubscriptions 控制是否导出订阅及订阅分组；不导出时订阅节点转为手动节点
 func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (string, error) {
@@ -787,7 +789,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		exportedRuleIDs[r.ID] = true
 	}
 
-	// 负载均衡：全部成员节点都被导出时才导出
+	// 故障转移：全部成员节点都被导出时才导出
 	var exportLBs []models.LoadBalanceNode
 	exportedLBIDs := make(map[string]bool)
 	for _, lb := range a.config.LoadBalancers {
@@ -810,7 +812,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		exportedLBIDs[lb.ID] = true
 	}
 
-	// 链式代理：全部成员（节点或已导出的负载均衡）都被导出时才导出
+	// 链式代理：全部成员（节点或已导出的故障转移）都被导出时才导出
 	var exportChains []models.ChainProxy
 	for _, chain := range a.config.ChainProxies {
 		if !exportAll {
@@ -943,7 +945,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		return "", fmt.Errorf("写入导出文件失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，负载均衡 %d 个，链式代理 %d 个，订阅 %d 个）",
+	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，故障转移 %d 个，链式代理 %d 个，订阅 %d 个）",
 		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(exportSubs)))
 	return filePath, nil
 }
@@ -1047,7 +1049,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	}
 
 	// === 导入规则（含重复检测和校验） ===
-	ruleIDMap := make(map[string]string) // 旧规则ID -> 新规则ID（用于修复链式代理/负载均衡的成员引用）
+	ruleIDMap := make(map[string]string) // 旧规则ID -> 新规则ID（用于修复链式代理/故障转移的成员引用）
 	for _, rule := range importedRules {
 		// 校验字段合法性
 		if err := rule.Validate(); err != nil {
@@ -1060,7 +1062,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		for j := range a.config.Rules {
 			if rule.IsDuplicateOf(&a.config.Rules[j]) {
 				isDuplicate = true
-				// 重复节点映射到现有规则，保证链式代理/负载均衡引用有效
+				// 重复节点映射到现有规则，保证链式代理/故障转移引用有效
 				ruleIDMap[rule.ID] = a.config.Rules[j].ID
 				result.RulesSkipped++
 				result.Warnings = append(result.Warnings, fmt.Sprintf("规则重复，跳过: %s (%s:%d)", rule.Alias, rule.ServerAddr, rule.ServerPort))
@@ -1103,8 +1105,8 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		result.RulesImported++
 	}
 
-	// === 导入负载均衡 ===
-	lbIDMap := make(map[string]string) // 旧负载均衡ID -> 新ID（链式代理可能引用负载均衡）
+	// === 导入故障转移 ===
+	lbIDMap := make(map[string]string) // 旧故障转移ID -> 新ID（链式代理可能引用故障转移）
 	for _, lb := range importedLBs {
 		oldLBID := lb.ID
 		lb.ID = fmt.Sprintf("lb_%d", time.Now().UnixNano())
@@ -1124,11 +1126,11 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 			if newID, ok := ruleIDMap[nodeID]; ok {
 				newNodeIDs = append(newNodeIDs, newID)
 			} else {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("负载均衡 %s 的成员节点未包含在导入数据中，已移除引用", lb.Alias))
+				result.Warnings = append(result.Warnings, fmt.Sprintf("故障转移 %s 的成员节点未包含在导入数据中，已移除引用", lb.Alias))
 			}
 		}
 		if len(newNodeIDs) == 0 {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("负载均衡 %s 没有有效的成员节点，跳过导入", lb.Alias))
+			result.Warnings = append(result.Warnings, fmt.Sprintf("故障转移 %s 没有有效的成员节点，跳过导入", lb.Alias))
 			continue
 		}
 		lb.NodeIDs = newNodeIDs
@@ -1150,7 +1152,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 			chain.GroupName = ""
 		}
 
-		// 链成员可能是普通节点或负载均衡，统一映射到新ID
+		// 链成员可能是普通节点或故障转移，统一映射到新ID
 		newChainNodes := make([]string, 0, len(chain.ChainNodes))
 		missing := false
 		for _, nodeID := range chain.ChainNodes {
@@ -1189,7 +1191,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		return nil, fmt.Errorf("保存配置失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，负载均衡 %d 个，链式代理 %d 个",
+	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，故障转移 %d 个，链式代理 %d 个",
 		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported))
 
 	return result, nil
@@ -1268,6 +1270,116 @@ func (a *MyService) TestRuleSpeed(ruleID string) error {
 
 		// 发送更新事件
 		a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: targetRule})
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "speedTestResult", Data: result})
+	}()
+
+	return nil
+}
+
+// TestLoadBalancerSpeed 测试故障转移节点的速度（需已启动，通过本地代理端口测试）
+func (a *MyService) TestLoadBalancerSpeed(id string) error {
+	a.mu.Lock()
+	var target *models.LoadBalanceNode
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == id {
+			target = &a.config.LoadBalancers[i]
+			break
+		}
+	}
+	if target == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("故障转移节点不存在")
+	}
+	if !target.Enabled || !a.processManager.IsRunning(target.LocalPort) {
+		a.mu.Unlock()
+		return fmt.Errorf("请先启动故障转移节点再测速")
+	}
+	port := target.LocalPort
+	alias := target.Alias
+	target.TestStatus = "testing"
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		result := a.speedTestManager.TestProxyEndpoint(ctx, id, alias, port)
+
+		a.mu.Lock()
+		for i := range a.config.LoadBalancers {
+			if a.config.LoadBalancers[i].ID == id {
+				lb := &a.config.LoadBalancers[i]
+				if result.Success {
+					lb.Latency = result.Latency
+					lb.DownloadSpeed = result.DownloadSpeed
+					lb.TestStatus = "success"
+				} else {
+					lb.TestStatus = "failed"
+				}
+				lb.LastTestTime = result.Timestamp
+				break
+			}
+		}
+		_ = a.saveConfig()
+		a.mu.Unlock()
+
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "speedTestResult", Data: result})
+	}()
+
+	return nil
+}
+
+// TestChainProxySpeed 测试链式代理的速度（需已启动，通过本地代理端口测试）
+func (a *MyService) TestChainProxySpeed(id string) error {
+	a.mu.Lock()
+	var target *models.ChainProxy
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == id {
+			target = &a.config.ChainProxies[i]
+			break
+		}
+	}
+	if target == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("链式代理不存在")
+	}
+	if !target.Enabled || !a.processManager.IsRunning(target.LocalPort) {
+		a.mu.Unlock()
+		return fmt.Errorf("请先启动链式代理再测速")
+	}
+	port := target.LocalPort
+	alias := target.Alias
+	target.TestStatus = "testing"
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		result := a.speedTestManager.TestProxyEndpoint(ctx, id, alias, port)
+
+		a.mu.Lock()
+		for i := range a.config.ChainProxies {
+			if a.config.ChainProxies[i].ID == id {
+				chain := &a.config.ChainProxies[i]
+				if result.Success {
+					chain.Latency = result.Latency
+					chain.DownloadSpeed = result.DownloadSpeed
+					chain.TestStatus = "success"
+				} else {
+					chain.TestStatus = "failed"
+				}
+				chain.LastTestTime = result.Timestamp
+				break
+			}
+		}
+		_ = a.saveConfig()
+		a.mu.Unlock()
+
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 		a.app.Event.EmitEvent(&application.CustomEvent{Name: "speedTestResult", Data: result})
 	}()
 
@@ -1872,7 +1984,7 @@ func (a *MyService) ImportShareLinks(text string) (*models.ImportShareResult, er
 
 // ==================== 系统代理 API (Feature 5) ====================
 
-// EnableSystemProxy 设置系统代理（支持普通节点、链式代理、负载均衡）
+// EnableSystemProxy 设置系统代理（支持普通节点、链式代理、故障转移）
 func (a *MyService) EnableSystemProxy(ruleID string) error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -1907,17 +2019,17 @@ func (a *MyService) EnableSystemProxy(ruleID string) error {
 		}
 	}
 
-	// 查找负载均衡
+	// 查找故障转移
 	for i := range a.config.LoadBalancers {
 		if a.config.LoadBalancers[i].ID == ruleID {
 			lb := &a.config.LoadBalancers[i]
 			if !lb.Enabled {
-				return fmt.Errorf("请先启动负载均衡再设置为系统代理")
+				return fmt.Errorf("请先启动故障转移再设置为系统代理")
 			}
 			if err := a.sysProxyManager.EnableSystemProxy(lb.LocalPort); err != nil {
 				return fmt.Errorf("设置系统代理失败: %v", err)
 			}
-			a.log(fmt.Sprintf("[系统代理] 已设置负载均衡 %s (端口:%d) 为系统代理", lb.Alias, lb.LocalPort))
+			a.log(fmt.Sprintf("[系统代理] 已设置故障转移 %s (端口:%d) 为系统代理", lb.Alias, lb.LocalPort))
 			return nil
 		}
 	}
@@ -1942,76 +2054,149 @@ func (a *MyService) GetSystemProxyStatus() bool {
 
 // ==================== 选中节点测速 API (Feature 6) ====================
 
-// TestSelectedRulesSpeed 测试选中的规则速度
+// TestSelectedRulesSpeed 测试选中的节点速度（普通节点直测；故障转移/链式代理经本地代理端口测，需已启动）
 func (a *MyService) TestSelectedRulesSpeed(ruleIDs []string) error {
-	a.mu.Lock()
-
-	// 收集选中的规则
-	rules := make([]*models.ProxyRule, 0)
 	idSet := make(map[string]bool)
 	for _, id := range ruleIDs {
 		idSet[id] = true
 	}
 
+	a.mu.Lock()
+	// 普通节点
+	rules := make([]*models.ProxyRule, 0)
 	for i := range a.config.Rules {
 		if idSet[a.config.Rules[i].ID] {
 			a.config.Rules[i].TestStatus = "testing"
 			rules = append(rules, &a.config.Rules[i])
 		}
 	}
+	// 组合节点（仅已启动的可测）
+	proxyTargets := make([]proxyHealthTarget, 0) // 复用 {id, localPort}
+	proxyAlias := make(map[string]string)
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if idSet[lb.ID] && lb.Enabled && a.processManager.IsRunning(lb.LocalPort) {
+			lb.TestStatus = "testing"
+			proxyTargets = append(proxyTargets, proxyHealthTarget{lb.ID, lb.LocalPort})
+			proxyAlias[lb.ID] = lb.Alias
+		}
+	}
+	for i := range a.config.ChainProxies {
+		c := &a.config.ChainProxies[i]
+		if idSet[c.ID] && c.Enabled && a.processManager.IsRunning(c.LocalPort) {
+			c.TestStatus = "testing"
+			proxyTargets = append(proxyTargets, proxyHealthTarget{c.ID, c.LocalPort})
+			proxyAlias[c.ID] = c.Alias
+		}
+	}
 	a.mu.Unlock()
 
-	if len(rules) == 0 {
-		return fmt.Errorf("未找到选中的节点")
+	if len(rules) == 0 && len(proxyTargets) == 0 {
+		return fmt.Errorf("未找到可测速的选中节点（故障转移/链式代理需先启动）")
 	}
 
-	a.log(fmt.Sprintf("开始测速选中的 %d 个节点", len(rules)))
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.log(fmt.Sprintf("开始测速选中的 %d 个节点、%d 个组合代理", len(rules), len(proxyTargets)))
 
-	// 异步执行批量测速
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		results := a.speedTestManager.TestRules(ctx, rules, 3)
+		var wg sync.WaitGroup
 
-		a.mu.Lock()
-		defer a.mu.Unlock()
-
-		for _, result := range results {
-			for i := range a.config.Rules {
-				if a.config.Rules[i].ID == result.RuleID {
-					if result.Success {
-						a.config.Rules[i].Latency = result.Latency
-						a.config.Rules[i].DownloadSpeed = result.DownloadSpeed
-						a.config.Rules[i].TestStatus = "success"
-					} else {
-						a.config.Rules[i].TestStatus = "failed"
+		// 普通节点批量测速
+		if len(rules) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results := a.speedTestManager.TestRules(ctx, rules, 3)
+				a.mu.Lock()
+				for _, result := range results {
+					for i := range a.config.Rules {
+						if a.config.Rules[i].ID == result.RuleID {
+							if result.Success {
+								a.config.Rules[i].Latency = result.Latency
+								a.config.Rules[i].DownloadSpeed = result.DownloadSpeed
+								a.config.Rules[i].TestStatus = "success"
+							} else {
+								a.config.Rules[i].TestStatus = "failed"
+							}
+							a.config.Rules[i].LastTestTime = result.Timestamp
+							break
+						}
 					}
-					a.config.Rules[i].LastTestTime = result.Timestamp
-					a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: &a.config.Rules[i]})
-					break
 				}
-			}
+				a.mu.Unlock()
+			}()
 		}
 
+		// 组合节点并发测速
+		for _, tg := range proxyTargets {
+			wg.Add(1)
+			go func(tg proxyHealthTarget) {
+				defer wg.Done()
+				result := a.speedTestManager.TestProxyEndpoint(ctx, tg.id, proxyAlias[tg.id], tg.localPort)
+				a.mu.Lock()
+				a.applySpeedResultToProxyLocked(result)
+				a.mu.Unlock()
+			}(tg)
+		}
+
+		wg.Wait()
+
+		a.mu.Lock()
 		_ = a.saveConfig()
+		a.mu.Unlock()
 		a.log("选中节点测速完成")
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 		a.app.Event.EmitEvent(&application.CustomEvent{Name: "allSpeedTestComplete"})
 	}()
 
 	return nil
 }
 
-// ==================== 负载均衡 API (Feature 7) ====================
+// applySpeedResultToProxyLocked 将测速结果写回故障转移/链式代理（需已持有锁）
+func (a *MyService) applySpeedResultToProxyLocked(result models.SpeedTestResult) {
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == result.RuleID {
+			lb := &a.config.LoadBalancers[i]
+			if result.Success {
+				lb.Latency = result.Latency
+				lb.DownloadSpeed = result.DownloadSpeed
+				lb.TestStatus = "success"
+			} else {
+				lb.TestStatus = "failed"
+			}
+			lb.LastTestTime = result.Timestamp
+			return
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == result.RuleID {
+			c := &a.config.ChainProxies[i]
+			if result.Success {
+				c.Latency = result.Latency
+				c.DownloadSpeed = result.DownloadSpeed
+				c.TestStatus = "success"
+			} else {
+				c.TestStatus = "failed"
+			}
+			c.LastTestTime = result.Timestamp
+			return
+		}
+	}
+}
 
-// GetLoadBalancers 获取所有负载均衡节点
+// ==================== 故障转移 API (Feature 7) ====================
+
+// GetLoadBalancers 获取所有故障转移节点
 func (a *MyService) GetLoadBalancers() []models.LoadBalanceNode {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.LoadBalancers
 }
 
-// AddLoadBalancer 添加负载均衡节点
+// AddLoadBalancer 添加故障转移节点
 func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2021,7 +2206,7 @@ func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 	lb.ProcessID = 0
 
 	if len(lb.NodeIDs) == 0 {
-		return fmt.Errorf("负载均衡节点需要至少一个子节点")
+		return fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
 
 	// 映射分组名称
@@ -2040,11 +2225,11 @@ func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 		return err
 	}
 
-	a.log(fmt.Sprintf("添加负载均衡节点: %s", lb.Alias))
+	a.log(fmt.Sprintf("添加故障转移节点: %s", lb.Alias))
 	return nil
 }
 
-// DeleteLoadBalancer 删除负载均衡节点
+// DeleteLoadBalancer 删除故障转移节点
 func (a *MyService) DeleteLoadBalancer(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2059,10 +2244,10 @@ func (a *MyService) DeleteLoadBalancer(id string) error {
 		}
 	}
 
-	return fmt.Errorf("负载均衡节点不存在")
+	return fmt.Errorf("故障转移节点不存在")
 }
 
-// UpdateLoadBalancer 更新负载均衡节点
+// UpdateLoadBalancer 更新故障转移节点
 func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2092,7 +2277,7 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 			}
 
 			if len(lb.NodeIDs) == 0 {
-				return fmt.Errorf("负载均衡节点需要至少一个子节点")
+				return fmt.Errorf("故障转移节点需要至少一个子节点")
 			}
 
 			a.config.LoadBalancers[i] = lb
@@ -2101,15 +2286,15 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 				return err
 			}
 
-			a.log(fmt.Sprintf("更新负载均衡节点: %s", lb.Alias))
+			a.log(fmt.Sprintf("更新故障转移节点: %s", lb.Alias))
 			return nil
 		}
 	}
 
-	return fmt.Errorf("负载均衡节点不存在")
+	return fmt.Errorf("故障转移节点不存在")
 }
 
-// startLoadBalancerInternal 启动负载均衡节点（内部方法，不加锁）
+// startLoadBalancerInternal 启动故障转移节点（内部方法，不加锁）
 func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error {
 	// 收集子节点
 	nodes := a.collectLBNodes(lb)
@@ -2117,13 +2302,14 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 		return fmt.Errorf("未找到有效的子节点")
 	}
 
-	// 构建负载均衡配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核）
-	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes)
+	// 构建故障转移配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核），附加流量统计 API
+	apiPort := process.FindApiPort(lb.LocalPort)
+	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes, apiPort)
 	if err != nil {
 		return err
 	}
 
-	// 创建临时规则用于启动进程
+	// 创建临时规则用于启动进程（ID 用 LB 的 ID，流量回调据此关联到 LB）
 	tempRule := &models.ProxyRule{
 		ID:        lb.ID,
 		Alias:     lb.Alias,
@@ -2136,15 +2322,17 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
 		ConfigJSON: configJSON,
 		CoreType:   coreType,
+		ApiPort:    apiPort,
 	}); err != nil {
 		return err
 	}
 
 	lb.Enabled = true
+	lb.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
 	return nil
 }
 
-// StartLoadBalancer 启动负载均衡节点
+// StartLoadBalancer 启动故障转移节点
 func (a *MyService) StartLoadBalancer(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2153,7 +2341,7 @@ func (a *MyService) StartLoadBalancer(id string) error {
 		lb := &a.config.LoadBalancers[i]
 		if lb.ID == id {
 			if lb.Enabled {
-				return fmt.Errorf("负载均衡节点已在运行")
+				return fmt.Errorf("故障转移节点已在运行")
 			}
 
 			if err := a.startLoadBalancerInternal(lb); err != nil {
@@ -2164,10 +2352,10 @@ func (a *MyService) StartLoadBalancer(id string) error {
 		}
 	}
 
-	return fmt.Errorf("负载均衡节点不存在")
+	return fmt.Errorf("故障转移节点不存在")
 }
 
-// StopLoadBalancer 停止负载均衡节点
+// StopLoadBalancer 停止故障转移节点
 func (a *MyService) StopLoadBalancer(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2176,20 +2364,22 @@ func (a *MyService) StopLoadBalancer(id string) error {
 		lb := &a.config.LoadBalancers[i]
 		if lb.ID == id {
 			if !lb.Enabled {
-				return fmt.Errorf("负载均衡节点未运行")
+				return fmt.Errorf("故障转移节点未运行")
 			}
 
 			if err := a.processManager.Stop(lb.LocalPort); err != nil {
 				lb.Enabled = false
+				lb.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 				return err
 			}
 
 			lb.Enabled = false
+			lb.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 			return a.saveConfig()
 		}
 	}
 
-	return fmt.Errorf("负载均衡节点不存在")
+	return fmt.Errorf("故障转移节点不存在")
 }
 
 // ==================== 链式代理 API (Feature 8, 9) ====================
@@ -2301,19 +2491,20 @@ func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 
 // startChainProxyInternal 启动链式代理（内部方法，不加锁）
 func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
-	// 解析链中的节点（支持负载均衡节点）
+	// 解析链中的节点（支持故障转移节点）
 	chainRules, err := a.resolveChainNodes(chain.ChainNodes)
 	if err != nil {
 		return err
 	}
 
-	// 构建链式代理配置（含 Hysteria2/TUIC 节点时自动切换 sing-box 内核）
-	configJSON, coreType, err := buildChainConfigJSON(chain.LocalPort, chainRules)
+	// 构建链式代理配置（含 Hysteria2/TUIC 节点时自动切换 sing-box 内核），附加流量统计 API
+	apiPort := process.FindApiPort(chain.LocalPort)
+	configJSON, coreType, err := buildChainConfigJSON(chain.LocalPort, chainRules, apiPort)
 	if err != nil {
 		return err
 	}
 
-	// 创建临时规则用于启动进程
+	// 创建临时规则用于启动进程（ID 用 Chain 的 ID，流量回调据此关联到链式代理）
 	tempRule := &models.ProxyRule{
 		ID:        chain.ID,
 		Alias:     chain.Alias,
@@ -2325,11 +2516,13 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
 		ConfigJSON: configJSON,
 		CoreType:   coreType,
+		ApiPort:    apiPort,
 	}); err != nil {
 		return err
 	}
 
 	chain.Enabled = true
+	chain.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
 	return nil
 }
 
@@ -2370,10 +2563,12 @@ func (a *MyService) StopChainProxy(id string) error {
 
 			if err := a.processManager.Stop(chain.LocalPort); err != nil {
 				chain.Enabled = false
+				chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 				return err
 			}
 
 			chain.Enabled = false
+			chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 			return a.saveConfig()
 		}
 	}
@@ -2392,20 +2587,41 @@ func (a *MyService) getRulesSnapshot() []models.ProxyRule {
 	return rules
 }
 
-// handleHealthCheckResult 处理单个节点的健康检查结果
+// handleHealthCheckResult 处理健康检查结果（普通节点/故障转移/链式代理）
 func (a *MyService) handleHealthCheckResult(result models.HealthCheckResult) {
 	a.mu.Lock()
+	a.applyHealthResultLocked(result)
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+}
+
+// applyHealthResultLocked 将健康检查结果写回对应节点（需已持有锁）
+func (a *MyService) applyHealthResultLocked(result models.HealthCheckResult) {
 	for i := range a.config.Rules {
 		if a.config.Rules[i].ID == result.RuleID {
 			a.config.Rules[i].HealthStatus = result.Status
 			a.config.Rules[i].HealthLatency = result.Latency
 			a.config.Rules[i].LastHealthCheck = result.Timestamp
-			break
+			return
 		}
 	}
-	a.mu.Unlock()
-
-	a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == result.RuleID {
+			a.config.LoadBalancers[i].HealthStatus = result.Status
+			a.config.LoadBalancers[i].HealthLatency = result.Latency
+			a.config.LoadBalancers[i].LastHealthCheck = result.Timestamp
+			return
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == result.RuleID {
+			a.config.ChainProxies[i].HealthStatus = result.Status
+			a.config.ChainProxies[i].HealthLatency = result.Latency
+			a.config.ChainProxies[i].LastHealthCheck = result.Timestamp
+			return
+		}
+	}
 }
 
 // GetHealthCheckConfig 获取健康检查配置
@@ -2448,17 +2664,94 @@ func (a *MyService) CheckNodeHealth(ruleID string) error {
 	return a.CheckSelectedNodesHealth([]string{ruleID})
 }
 
-// CheckSelectedNodesHealth 检测选中节点健康状态
+// proxyHealthTarget 需要经本地代理端口检测的组合节点（故障转移/链式代理）
+type proxyHealthTarget struct {
+	id        string
+	localPort int
+}
+
+// collectProxyHealthTargets 收集需检测的已启动 LB/链式代理（ids 为空表示全部），
+// 并将其标记为 checking。需在未持锁状态下调用。
+func (a *MyService) collectProxyHealthTargets(ruleIDs []string) []proxyHealthTarget {
+	idSet := make(map[string]bool, len(ruleIDs))
+	for _, id := range ruleIDs {
+		idSet[id] = true
+	}
+	all := len(ruleIDs) == 0
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var targets []proxyHealthTarget
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if (all || idSet[lb.ID]) && lb.Enabled && a.processManager.IsRunning(lb.LocalPort) {
+			lb.HealthStatus = "checking"
+			targets = append(targets, proxyHealthTarget{lb.ID, lb.LocalPort})
+		}
+	}
+	for i := range a.config.ChainProxies {
+		c := &a.config.ChainProxies[i]
+		if (all || idSet[c.ID]) && c.Enabled && a.processManager.IsRunning(c.LocalPort) {
+			c.HealthStatus = "checking"
+			targets = append(targets, proxyHealthTarget{c.ID, c.LocalPort})
+		}
+	}
+	return targets
+}
+
+// checkProxyTargets 并发检测组合节点（通过本地代理端口）
+func (a *MyService) checkProxyTargets(targets []proxyHealthTarget) {
+	if len(targets) == 0 {
+		return
+	}
+	cfg := a.healthCheckManager.GetConfig()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for _, tg := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(tg proxyHealthTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			result := healthcheck.CheckProxyPort(tg.id, tg.localPort, cfg)
+			a.mu.Lock()
+			a.applyHealthResultLocked(result)
+			a.mu.Unlock()
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+		}(tg)
+	}
+	wg.Wait()
+}
+
+// CheckSelectedNodesHealth 检测选中节点健康状态（普通节点直连探测，故障转移/链式代理经本地代理端口探测）
 func (a *MyService) CheckSelectedNodesHealth(ruleIDs []string) error {
 	rules := a.markRulesChecking(ruleIDs)
-	if len(rules) == 0 {
-		return fmt.Errorf("未找到需要检测的节点")
+	proxyTargets := a.collectProxyHealthTargets(ruleIDs)
+
+	if len(rules) == 0 && len(proxyTargets) == 0 {
+		return fmt.Errorf("未找到需要检测的节点（故障转移/链式代理需先启动）")
 	}
 
 	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
-	a.log(fmt.Sprintf("[健康检查] 开始检测 %d 个节点", len(rules)))
+	a.log(fmt.Sprintf("[健康检查] 开始检测 %d 个节点、%d 个组合代理", len(rules), len(proxyTargets)))
 
-	go a.healthCheckManager.CheckRules(context.Background(), rules)
+	go func() {
+		var wg sync.WaitGroup
+		if len(rules) > 0 {
+			wg.Add(1)
+			go func() { defer wg.Done(); a.healthCheckManager.CheckRules(context.Background(), rules) }()
+		}
+		if len(proxyTargets) > 0 {
+			wg.Add(1)
+			go func() { defer wg.Done(); a.checkProxyTargets(proxyTargets) }()
+		}
+		wg.Wait()
+		a.mu.Lock()
+		_ = a.saveConfig()
+		a.mu.Unlock()
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckComplete"})
+	}()
 	return nil
 }
 
@@ -2469,45 +2762,69 @@ func (a *MyService) CheckAllNodesHealth() error {
 
 // ==================== 流量统计 ====================
 
-// handleTraffic 处理进程管理器上报的流量增量
+// accumulateTraffic 将流量增量累加到 TrafficStats（跨天自动清零今日统计）
+func accumulateTraffic(t *models.TrafficStats, deltaUp, deltaDown int64, today string) {
+	if t.TodayDate != today {
+		t.TodayDate = today
+		t.TodayUp = 0
+		t.TodayDown = 0
+	}
+	t.TodayUp += deltaUp
+	t.TodayDown += deltaDown
+	t.TotalUp += deltaUp
+	t.TotalDown += deltaDown
+}
+
+// handleTraffic 处理进程管理器上报的流量增量。
+// ruleID 可能是普通节点、故障转移或链式代理的 ID（它们启动时用各自 ID 作为进程标识）。
 func (a *MyService) handleTraffic(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) {
 	today := time.Now().Format("2006-01-02")
-	var snapshot *models.TrafficSnapshot
+	var stats *models.TrafficStats
 
 	a.mu.Lock()
+	// 普通节点
 	for i := range a.config.Rules {
-		rule := &a.config.Rules[i]
-		if rule.ID != ruleID {
-			continue
+		if a.config.Rules[i].ID == ruleID {
+			stats = &a.config.Rules[i].Traffic
+			break
 		}
-
-		// 跨天自动清零今日统计
-		if rule.Traffic.TodayDate != today {
-			rule.Traffic.TodayDate = today
-			rule.Traffic.TodayUp = 0
-			rule.Traffic.TodayDown = 0
+	}
+	// 故障转移
+	if stats == nil {
+		for i := range a.config.LoadBalancers {
+			if a.config.LoadBalancers[i].ID == ruleID {
+				stats = &a.config.LoadBalancers[i].Traffic
+				break
+			}
 		}
+	}
+	// 链式代理
+	if stats == nil {
+		for i := range a.config.ChainProxies {
+			if a.config.ChainProxies[i].ID == ruleID {
+				stats = &a.config.ChainProxies[i].Traffic
+				break
+			}
+		}
+	}
 
-		rule.Traffic.TodayUp += deltaUp
-		rule.Traffic.TodayDown += deltaDown
-		rule.Traffic.TotalUp += deltaUp
-		rule.Traffic.TotalDown += deltaDown
+	var snapshot *models.TrafficSnapshot
+	if stats != nil {
+		accumulateTraffic(stats, deltaUp, deltaDown, today)
 		a.trafficDirty = true
-
 		snapshot = &models.TrafficSnapshot{
 			RuleID:    ruleID,
 			UpSpeed:   upSpeed,
 			DownSpeed: downSpeed,
-			TodayUp:   rule.Traffic.TodayUp,
-			TodayDown: rule.Traffic.TodayDown,
-			TotalUp:   rule.Traffic.TotalUp,
-			TotalDown: rule.Traffic.TotalDown,
+			TodayUp:   stats.TodayUp,
+			TodayDown: stats.TodayDown,
+			TotalUp:   stats.TotalUp,
+			TotalDown: stats.TotalDown,
 		}
-		break
 	}
 	a.mu.Unlock()
 
-	// 非普通节点（如链式代理/负载均衡的临时规则）只推送速度
+	// 未匹配到（如订阅临时代理）只推送速度
 	if snapshot == nil {
 		snapshot = &models.TrafficSnapshot{
 			RuleID:    ruleID,
@@ -2519,17 +2836,29 @@ func (a *MyService) handleTraffic(ruleID string, deltaUp, deltaDown int64, upSpe
 	a.app.Event.EmitEvent(&application.CustomEvent{Name: "trafficUpdate", Data: snapshot})
 }
 
-// ResetRuleTraffic 清零节点流量统计（ruleID 为空时清零全部节点）
+// ResetRuleTraffic 清零流量统计（ruleID 为空时清零全部节点、故障转移与链式代理）
 func (a *MyService) ResetRuleTraffic(ruleID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	today := time.Now().Format("2006-01-02")
+	empty := models.TrafficStats{TodayDate: today}
 	count := 0
 	for i := range a.config.Rules {
 		if ruleID == "" || a.config.Rules[i].ID == ruleID {
-			a.config.Rules[i].Traffic = models.TrafficStats{
-				TodayDate: time.Now().Format("2006-01-02"),
-			}
+			a.config.Rules[i].Traffic = empty
+			count++
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if ruleID == "" || a.config.LoadBalancers[i].ID == ruleID {
+			a.config.LoadBalancers[i].Traffic = empty
+			count++
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if ruleID == "" || a.config.ChainProxies[i].ID == ruleID {
+			a.config.ChainProxies[i].Traffic = empty
 			count++
 		}
 	}
@@ -2545,7 +2874,7 @@ func (a *MyService) ResetRuleTraffic(ruleID string) error {
 // ==================== 订阅更新代理 ====================
 
 // SetSubscriptionUpdateMode 设置订阅的更新方式
-// mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/负载均衡的 ID）
+// mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/故障转移的 ID）
 func (a *MyService) SetSubscriptionUpdateMode(subID, mode, proxyID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2584,7 +2913,7 @@ func (a *MyService) resolveSubscriptionProxy(sub *models.Subscription) (string, 
 	return "", nil, nil
 }
 
-// resolveNodeProxy 将节点/链式代理/负载均衡解析为可用的本地代理地址。
+// resolveNodeProxy 将节点/链式代理/故障转移解析为可用的本地代理地址。
 // 如果目标已在运行则直接复用；否则在临时端口上启动，返回的清理函数负责关闭。
 func (a *MyService) resolveNodeProxy(proxyID string) (string, func(), error) {
 	a.mu.RLock()
@@ -2644,14 +2973,14 @@ func (a *MyService) resolveNodeProxy(proxyID string) (string, func(), error) {
 		a.mu.RUnlock()
 
 		tempPort := utils.FindAvailablePort(15800)
-		configJSON, coreType, err := buildChainConfigJSON(tempPort, chainRules)
+		configJSON, coreType, err := buildChainConfigJSON(tempPort, chainRules, 0)
 		if err != nil {
 			return "", nil, err
 		}
 		return a.startTempProxy(fmt.Sprintf("订阅更新临时代理(%s)", chain.Alias), tempPort, configJSON, coreType)
 	}
 
-	// 负载均衡
+	// 故障转移
 	for i := range a.config.LoadBalancers {
 		lb := a.config.LoadBalancers[i]
 		if lb.ID != proxyID {
@@ -2666,11 +2995,11 @@ func (a *MyService) resolveNodeProxy(proxyID string) (string, func(), error) {
 		nodes := a.collectLBNodes(&lb)
 		a.mu.RUnlock()
 		if len(nodes) == 0 {
-			return "", nil, fmt.Errorf("负载均衡 %s 没有可用的子节点", lb.Alias)
+			return "", nil, fmt.Errorf("故障转移 %s 没有可用的子节点", lb.Alias)
 		}
 
 		tempPort := utils.FindAvailablePort(15800)
-		configJSON, coreType, err := buildLoadBalanceConfigJSON(&lb, tempPort, nodes)
+		configJSON, coreType, err := buildLoadBalanceConfigJSON(&lb, tempPort, nodes, 0)
 		if err != nil {
 			return "", nil, err
 		}
@@ -2710,7 +3039,7 @@ func (a *MyService) startTempProxy(alias string, tempPort int, configJSON, coreT
 	return fmt.Sprintf("socks5://127.0.0.1:%d", tempPort), cleanup, nil
 }
 
-// collectLBNodes 收集负载均衡的子节点（内部方法，需要已持有读锁）
+// collectLBNodes 收集故障转移的子节点（内部方法，需要已持有读锁）
 func (a *MyService) collectLBNodes(lb *models.LoadBalanceNode) []*models.ProxyRule {
 	nodes := make([]*models.ProxyRule, 0)
 	for _, nodeID := range lb.NodeIDs {
@@ -2728,11 +3057,15 @@ func (a *MyService) collectLBNodes(lb *models.LoadBalanceNode) []*models.ProxyRu
 
 // buildChainConfigJSON 构建链式代理配置。
 // 链中包含 Hysteria2/TUIC 节点时使用 sing-box 内核，否则使用 xray。
-func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule) (string, string, error) {
+// apiPort > 0 时附加流量统计 API。
+func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule, apiPort int) (string, string, error) {
 	if singbox.RulesNeedSingBox(chainRules) {
 		cfg, err := singbox.BuildChainConfig(localPort, chainRules)
 		if err != nil {
 			return "", "", err
+		}
+		if apiPort > 0 {
+			singbox.AddClashAPI(cfg, apiPort)
 		}
 		configJSON, err := cfg.ToJSON()
 		return configJSON, process.CoreSingBox, err
@@ -2742,17 +3075,24 @@ func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule) (string
 	if err != nil {
 		return "", "", err
 	}
+	if apiPort > 0 {
+		xray.AddStatsAPI(cfg, apiPort)
+	}
 	configJSON, err := cfg.ToJSON()
 	return configJSON, process.CoreXray, err
 }
 
-// buildLoadBalanceConfigJSON 构建负载均衡配置。
+// buildLoadBalanceConfigJSON 构建故障转移配置。
 // 子节点包含 Hysteria2/TUIC 时使用 sing-box 内核，否则使用 xray。
-func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule) (string, string, error) {
+// apiPort > 0 时附加流量统计 API。
+func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule, apiPort int) (string, string, error) {
 	if singbox.RulesNeedSingBox(nodes) {
 		cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes)
 		if err != nil {
 			return "", "", err
+		}
+		if apiPort > 0 {
+			singbox.AddClashAPI(cfg, apiPort)
 		}
 		configJSON, err := cfg.ToJSON()
 		return configJSON, process.CoreSingBox, err
@@ -2764,21 +3104,24 @@ func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes
 	if err != nil {
 		return "", "", err
 	}
+	if apiPort > 0 {
+		xray.AddStatsAPI(cfg, apiPort)
+	}
 	configJSON, err := cfg.ToJSON()
 	return configJSON, process.CoreXray, err
 }
 
-// resolveChainNodes 解析链中的节点（支持负载均衡节点）
+// resolveChainNodes 解析链中的节点（支持故障转移节点）
 func (a *MyService) resolveChainNodes(nodeIDs []string) ([]*models.ProxyRule, error) {
 	var chainRules []*models.ProxyRule
 
 	for _, nodeID := range nodeIDs {
-		// 先查找是否为负载均衡节点
+		// 先查找是否为故障转移节点
 		isLB := false
 		for _, lb := range a.config.LoadBalancers {
 			if lb.ID == nodeID {
 				isLB = true
-				// 取负载均衡中的第一个可用节点
+				// 取故障转移中的第一个可用节点
 				for _, subNodeID := range lb.NodeIDs {
 					for j := range a.config.Rules {
 						if a.config.Rules[j].ID == subNodeID {
@@ -2787,7 +3130,7 @@ func (a *MyService) resolveChainNodes(nodeIDs []string) ([]*models.ProxyRule, er
 						}
 					}
 				}
-				return nil, fmt.Errorf("负载均衡节点 %s 中没有可用的子节点", lb.Alias)
+				return nil, fmt.Errorf("故障转移节点 %s 中没有可用的子节点", lb.Alias)
 			}
 		}
 

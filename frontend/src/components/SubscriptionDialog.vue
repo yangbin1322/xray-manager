@@ -56,7 +56,7 @@
                     <optgroup label="链式代理" v-if="rulesStore.chainProxies.length">
                       <option v-for="c in rulesStore.chainProxies" :key="c.id" :value="c.id">{{ c.alias }}</option>
                     </optgroup>
-                    <optgroup label="负载均衡" v-if="rulesStore.loadBalancers.length">
+                    <optgroup label="故障转移" v-if="rulesStore.loadBalancers.length">
                       <option v-for="lb in rulesStore.loadBalancers" :key="lb.id" :value="lb.id">{{ lb.alias }}</option>
                     </optgroup>
                   </select>
@@ -109,14 +109,14 @@
             <div class="form-group" style="flex:2;">
               <label>更新代理节点：</label>
               <select v-model="form.updateProxyId">
-                <option value="">选择节点/链式代理/负载均衡</option>
+                <option value="">选择节点/链式代理/故障转移</option>
                 <optgroup label="节点" v-if="rulesStore.rules.length">
                   <option v-for="r in rulesStore.rules" :key="r.id" :value="r.id">{{ r.alias }}</option>
                 </optgroup>
                 <optgroup label="链式代理" v-if="rulesStore.chainProxies.length">
                   <option v-for="c in rulesStore.chainProxies" :key="c.id" :value="c.id">{{ c.alias }}</option>
                 </optgroup>
-                <optgroup label="负载均衡" v-if="rulesStore.loadBalancers.length">
+                <optgroup label="故障转移" v-if="rulesStore.loadBalancers.length">
                   <option v-for="lb in rulesStore.loadBalancers" :key="lb.id" :value="lb.id">{{ lb.alias }}</option>
                 </optgroup>
               </select>
