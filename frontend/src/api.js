@@ -18,6 +18,11 @@ export async function updateRule(id, rule) {
   return await MyService.UpdateRule(id, rule)
 }
 
+// 批量更新节点（后端只保存一次配置）
+export async function updateNodes(rules) {
+  return await MyService.UpdateNodes(rules)
+}
+
 export async function deleteRule(id) {
   return await MyService.DeleteRule(id)
 }

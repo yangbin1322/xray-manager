@@ -10,7 +10,7 @@
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 工具栏 -->
-      <Toolbar />
+      <Toolbar @batchEdit="handleBatchEdit" />
 
       <!-- 节点列表 -->
       <NodeList
@@ -53,6 +53,14 @@
       @close="showChainDialog = false; editingChain = null"
     />
 
+    <!-- 批量编辑对话框 -->
+    <BatchNodeEditor
+      :visible="showBatchEditor"
+      :nodes="batchNodes"
+      :skippedCount="batchSkipped"
+      @close="showBatchEditor = false; batchNodes = []"
+    />
+
     <!-- Toast 通知 -->
     <ToastContainer />
   </div>
@@ -75,6 +83,7 @@ import ToastContainer from './components/ToastContainer.vue'
 import SubscriptionDialog from './components/SubscriptionDialog.vue'
 import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
 import ChainProxyDialog from './components/ChainProxyDialog.vue'
+import BatchNodeEditor from './components/BatchNodeEditor.vue'
 
 const rulesStore = useRulesStore()
 const groupsStore = useGroupsStore()
@@ -88,6 +97,15 @@ const showLBDialog = ref(false)
 const showChainDialog = ref(false)
 const editingLB = ref(null)
 const editingChain = ref(null)
+const showBatchEditor = ref(false)
+const batchNodes = ref([])
+const batchSkipped = ref(0)
+
+function handleBatchEdit({ nodes, skippedCount }) {
+  batchNodes.value = nodes
+  batchSkipped.value = skippedCount
+  showBatchEditor.value = true
+}
 
 function handleAddRule() {
   editingRule.value = null

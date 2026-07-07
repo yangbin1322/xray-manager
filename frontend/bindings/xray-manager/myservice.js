@@ -528,6 +528,16 @@ export function UpdateLoadBalancer(lb) {
 }
 
 /**
+ * UpdateNodes 批量更新普通节点（只改配置，不重启进程；保留运行时状态）。
+ * 只保存一次配置，返回成功更新数。
+ * @param {models$0.ProxyRule[]} updatedRules
+ * @returns {$CancellablePromise<number>}
+ */
+export function UpdateNodes(updatedRules) {
+    return $Call.ByID(1822044807, updatedRules);
+}
+
+/**
  * UpdateRule 更新规则
  * @param {string} id
  * @param {models$0.ProxyRule} updatedRule

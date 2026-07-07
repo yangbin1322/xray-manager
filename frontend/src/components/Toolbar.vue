@@ -25,6 +25,7 @@
       <button class="btn-action" @click="rulesStore.startSelectedRules()" title="启动选中">启动选中</button>
       <button class="btn-action" @click="rulesStore.stopSelectedRules()" title="停止选中">停止选中</button>
       <button class="btn-action" @click="rulesStore.testSelectedSpeed()" title="测速选中">选中测速</button>
+      <button class="btn-action" @click="handleBatchEdit" title="批量编辑选中的普通节点">批量编辑</button>
       <button class="btn-action" @click="handleCheckHealth" title="健康检测选中节点，未选中时检测全部">健康检测</button>
       <button class="btn-action" @click="handleResetTraffic" title="清零选中节点流量，未选中时清零全部">流量清零</button>
       <button class="btn-action btn-danger" @click="handleDeleteSelected" title="删除选中">删除选中</button>
@@ -94,8 +95,27 @@ import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
+const emit = defineEmits(['batchEdit'])
+
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
+
+function handleBatchEdit() {
+  // 收集选中的普通节点（负载均衡/链式代理不支持批量编辑）
+  const selected = rulesStore.selectedRuleIds
+  if (selected.length === 0) {
+    appStore.showToast('请先选择要编辑的节点', 'warning')
+    return
+  }
+  const selectedSet = new Set(selected)
+  const nodes = rulesStore.rules.filter(r => selectedSet.has(r.id))
+  const skippedCount = selected.length - nodes.length
+  if (nodes.length === 0) {
+    appStore.showToast('选中的项中没有可编辑的普通节点', 'warning')
+    return
+  }
+  emit('batchEdit', { nodes, skippedCount })
+}
 
 const showHealthSettings = ref(false)
 const healthCfg = ref({ enabled: false, intervalSec: 60, timeoutSec: 5, latencyThreshold: 500 })

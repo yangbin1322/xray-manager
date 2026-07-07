@@ -353,51 +353,98 @@ func (a *MyService) AddRule(rule models.ProxyRule) error {
 	return nil
 }
 
+// applyRuleUpdateLocked 将 updatedRule 的可编辑字段应用到 index 处的规则，
+// 保留运行时状态（启用/进程/IP/流量/健康/时间）与订阅归属。需已持有锁。
+func (a *MyService) applyRuleUpdateLocked(index int, updatedRule models.ProxyRule) {
+	orig := a.config.Rules[index]
+
+	// 保留运行时状态
+	updatedRule.ID = orig.ID
+	updatedRule.Enabled = orig.Enabled
+	updatedRule.ProcessID = orig.ProcessID
+	updatedRule.RealIP = orig.RealIP
+	updatedRule.Traffic = orig.Traffic
+	updatedRule.HealthStatus = orig.HealthStatus
+	updatedRule.HealthLatency = orig.HealthLatency
+	updatedRule.LastHealthCheck = orig.LastHealthCheck
+	updatedRule.LastStartTime = orig.LastStartTime
+	updatedRule.LastStopTime = orig.LastStopTime
+	updatedRule.Latency = orig.Latency
+	updatedRule.DownloadSpeed = orig.DownloadSpeed
+	updatedRule.LastTestTime = orig.LastTestTime
+	updatedRule.TestStatus = orig.TestStatus
+
+	// 保留订阅相关字段（如果是订阅节点）
+	if orig.Source == "subscription" {
+		updatedRule.Source = orig.Source
+		updatedRule.SubscriptionURL = orig.SubscriptionURL
+	} else if updatedRule.Source == "" {
+		updatedRule.Source = "manual"
+	}
+
+	// 根据 GroupID 设置 GroupName
+	if updatedRule.GroupID != "" {
+		for _, group := range a.config.Groups {
+			if group.ID == updatedRule.GroupID {
+				updatedRule.GroupName = group.Name
+				break
+			}
+		}
+	} else {
+		updatedRule.GroupName = ""
+	}
+
+	a.config.Rules[index] = updatedRule
+}
+
 // UpdateRule 更新规则
 func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	for i, rule := range a.config.Rules {
-		if rule.ID == id {
-			// 保留原有状态
-			updatedRule.ID = rule.ID
-			updatedRule.Enabled = rule.Enabled
-			updatedRule.ProcessID = rule.ProcessID
-			updatedRule.RealIP = rule.RealIP
-
-			// 保留订阅相关字段（如果是订阅节点）
-			if rule.Source == "subscription" {
-				updatedRule.Source = rule.Source
-				updatedRule.SubscriptionURL = rule.SubscriptionURL
-			} else if updatedRule.Source == "" {
-				updatedRule.Source = "manual"
-			}
-
-			// 根据 GroupID 设置 GroupName
-			if updatedRule.GroupID != "" {
-				for _, group := range a.config.Groups {
-					if group.ID == updatedRule.GroupID {
-						updatedRule.GroupName = group.Name
-						break
-					}
-				}
-			} else {
-				updatedRule.GroupName = ""
-			}
-
-			a.config.Rules[i] = updatedRule
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == id {
+			a.applyRuleUpdateLocked(i, updatedRule)
 
 			if err := a.saveConfig(); err != nil {
 				return err
 			}
 
-			a.log(fmt.Sprintf("更新规则: %s", updatedRule.Alias))
+			a.log(fmt.Sprintf("更新规则: %s", a.config.Rules[i].Alias))
 			return nil
 		}
 	}
 
 	return fmt.Errorf("规则 %s 不存在", id)
+}
+
+// UpdateNodes 批量更新普通节点（只改配置，不重启进程；保留运行时状态）。
+// 只保存一次配置，返回成功更新数。
+func (a *MyService) UpdateNodes(updatedRules []models.ProxyRule) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 建立 ID -> 索引
+	idx := make(map[string]int, len(a.config.Rules))
+	for i := range a.config.Rules {
+		idx[a.config.Rules[i].ID] = i
+	}
+
+	count := 0
+	for _, ur := range updatedRules {
+		if i, ok := idx[ur.ID]; ok {
+			a.applyRuleUpdateLocked(i, ur)
+			count++
+		}
+	}
+
+	if err := a.saveConfig(); err != nil {
+		return count, err
+	}
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.log(fmt.Sprintf("批量更新完成，共 %d 个节点", count))
+	return count, nil
 }
 
 // DeleteRule 删除规则

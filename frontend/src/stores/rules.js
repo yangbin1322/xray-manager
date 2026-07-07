@@ -94,6 +94,11 @@ export const useRulesStore = defineStore('rules', () => {
     await loadRules()
   }
 
+  async function updateNodes(rules) {
+    await api.updateNodes(rules)
+    await loadRules()
+  }
+
   async function deleteRule(id) {
     await api.deleteRule(id)
     selectedIds.value.delete(id)
@@ -287,7 +292,7 @@ export const useRulesStore = defineStore('rules', () => {
     // Computed
     filteredRules, selectedRuleIds, runningCount, totalCount,
     // Actions
-    loadRules, addRule, updateRule, deleteRule,
+    loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, setSort,
