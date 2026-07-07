@@ -99,9 +99,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // === 导入导出 ===
-  async function doExportConfig(ruleIds = []) {
+  async function doExportConfig(ruleIds = [], includeSubscriptions = false) {
     try {
-      const filePath = await api.exportConfig(ruleIds)
+      const filePath = await api.exportConfig(ruleIds, includeSubscriptions)
       const hint = ruleIds.length > 0 ? `（已选 ${ruleIds.length} 条）` : '（全部）'
       showToast(`配置已导出到: ${filePath}${hint}`, 'success')
       addLog(`[系统] 配置已导出到: ${filePath}${hint}`)

@@ -47,14 +47,34 @@ export function AddRule(rule) {
 
 /**
  * AddSubscription 添加订阅
+ * updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
  * @param {string} name
  * @param {string} url
  * @param {boolean} autoUpdate
  * @param {number} updateInterval
+ * @param {string} updateMode
+ * @param {string} updateProxyID
  * @returns {$CancellablePromise<void>}
  */
-export function AddSubscription(name, url, autoUpdate, updateInterval) {
-    return $Call.ByID(3098545163, name, url, autoUpdate, updateInterval);
+export function AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyID) {
+    return $Call.ByID(3098545163, name, url, autoUpdate, updateInterval, updateMode, updateProxyID);
+}
+
+/**
+ * CheckAllNodesHealth 检测全部节点健康状态
+ * @returns {$CancellablePromise<void>}
+ */
+export function CheckAllNodesHealth() {
+    return $Call.ByID(2473554395);
+}
+
+/**
+ * CheckNodeHealth 检测单个节点健康状态
+ * @param {string} ruleID
+ * @returns {$CancellablePromise<void>}
+ */
+export function CheckNodeHealth(ruleID) {
+    return $Call.ByID(2461525239, ruleID);
 }
 
 /**
@@ -64,6 +84,15 @@ export function AddSubscription(name, url, autoUpdate, updateInterval) {
  */
 export function CheckPortAvailable(port) {
     return $Call.ByID(2195021613, port);
+}
+
+/**
+ * CheckSelectedNodesHealth 检测选中节点健康状态
+ * @param {string[]} ruleIDs
+ * @returns {$CancellablePromise<void>}
+ */
+export function CheckSelectedNodesHealth(ruleIDs) {
+    return $Call.ByID(543227979, ruleIDs);
 }
 
 /**
@@ -147,11 +176,17 @@ export function EnableSystemProxy(ruleID) {
 }
 
 /**
- * ExportConfig 导出配置
+ * ExportConfig 导出配置（标准格式，包含版本信息）
+ * ruleIds 为空时导出全部规则，非空时仅导出选中的规则及其关联项：
+ *   - 仅当链式代理/负载均衡的全部成员节点都被选中时才导出该链式代理/负载均衡
+ *   - 仅导出被导出内容引用到的分组
+ *   - includeSubscriptions 控制是否导出订阅及订阅分组；不导出时订阅节点转为手动节点
+ * @param {string[]} ruleIds
+ * @param {boolean} includeSubscriptions
  * @returns {$CancellablePromise<string>}
  */
-export function ExportConfig() {
-    return $Call.ByID(3058196731);
+export function ExportConfig(ruleIds, includeSubscriptions) {
+    return $Call.ByID(3058196731, ruleIds, includeSubscriptions);
 }
 
 /**
@@ -166,7 +201,7 @@ export function FilterLogsByLevel(level) {
 }
 
 /**
- * GetAutoStart 获取开机自启状态
+ * GetAutoStart 获取开机自启状态（从系统配置读取）
  * @returns {$CancellablePromise<boolean>}
  */
 export function GetAutoStart() {
@@ -194,12 +229,22 @@ export function GetGroups() {
 }
 
 /**
+ * GetHealthCheckConfig 获取健康检查配置
+ * @returns {$CancellablePromise<models$0.HealthCheckConfig>}
+ */
+export function GetHealthCheckConfig() {
+    return $Call.ByID(1768486251).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
+}
+
+/**
  * GetLoadBalancers 获取所有负载均衡节点
  * @returns {$CancellablePromise<models$0.LoadBalanceNode[]>}
  */
 export function GetLoadBalancers() {
     return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType8($result);
     }));
 }
 
@@ -219,7 +264,7 @@ export function GetLogs() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType10($result);
     }));
 }
 
@@ -229,7 +274,7 @@ export function GetRules() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType12($result);
     }));
 }
 
@@ -242,20 +287,24 @@ export function GetSystemProxyStatus() {
 }
 
 /**
- * ImportConfig 导入配置
- * @returns {$CancellablePromise<void>}
+ * ImportConfig 导入配置（支持标准导出格式和旧格式，含重复检测和校验）
+ * @returns {$CancellablePromise<models$0.ImportResult | null>}
  */
 export function ImportConfig() {
-    return $Call.ByID(3036105508);
+    return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType14($result);
+    }));
 }
 
 /**
- * ImportShareLinks 批量导入分享链接
+ * ImportShareLinks 批量导入分享链接（返回详细结果）
  * @param {string} text
- * @returns {$CancellablePromise<number>}
+ * @returns {$CancellablePromise<models$0.ImportShareResult | null>}
  */
 export function ImportShareLinks(text) {
-    return $Call.ByID(4153373042, text);
+    return $Call.ByID(4153373042, text).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType16($result);
+    }));
 }
 
 /**
@@ -264,6 +313,15 @@ export function ImportShareLinks(text) {
  */
 export function RecommendPort() {
     return $Call.ByID(1630710424);
+}
+
+/**
+ * ResetRuleTraffic 清零节点流量统计（ruleID 为空时清零全部节点）
+ * @param {string} ruleID
+ * @returns {$CancellablePromise<void>}
+ */
+export function ResetRuleTraffic(ruleID) {
+    return $Call.ByID(485055981, ruleID);
 }
 
 /**
@@ -294,6 +352,27 @@ export function SearchLogs(keyword, level) {
  */
 export function SetAutoStart(enabled) {
     return $Call.ByID(2368911042, enabled);
+}
+
+/**
+ * SetHealthCheckConfig 更新健康检查配置
+ * @param {models$0.HealthCheckConfig} cfg
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetHealthCheckConfig(cfg) {
+    return $Call.ByID(3960229671, cfg);
+}
+
+/**
+ * SetSubscriptionUpdateMode 设置订阅的更新方式
+ * mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/负载均衡的 ID）
+ * @param {string} subID
+ * @param {string} mode
+ * @param {string} proxyID
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSubscriptionUpdateMode(subID, mode, proxyID) {
+    return $Call.ByID(2451826590, subID, mode, proxyID);
 }
 
 /**
@@ -438,9 +517,14 @@ const $$createType2 = models$0.ChainProxy.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = models$0.Group.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = models$0.LoadBalanceNode.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = models$0.ProxyRule.createFrom;
-const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = models$0.Subscription.createFrom;
-const $$createType11 = $Create.Array($$createType10);
+const $$createType6 = models$0.HealthCheckConfig.createFrom;
+const $$createType7 = models$0.LoadBalanceNode.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = models$0.ProxyRule.createFrom;
+const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = models$0.Subscription.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = models$0.ImportResult.createFrom;
+const $$createType14 = $Create.Nullable($$createType13);
+const $$createType15 = models$0.ImportShareResult.createFrom;
+const $$createType16 = $Create.Nullable($$createType15);

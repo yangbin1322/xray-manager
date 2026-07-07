@@ -136,6 +136,21 @@ function listenToBackendEvents() {
     appStore.showToast('批量测速完成', 'success')
     rulesStore.loadRules()
   })
+
+  // 实时流量更新
+  Events.On('trafficUpdate', (event) => {
+    rulesStore.applyTrafficUpdate(event.data)
+  })
+
+  // 健康检查结果（单个节点）
+  Events.On('healthCheckResult', (event) => {
+    rulesStore.applyHealthCheckResult(event.data)
+  })
+
+  // 健康检查完成（一轮批量）
+  Events.On('healthCheckComplete', () => {
+    rulesStore.loadRules()
+  })
 }
 
 // 初始化

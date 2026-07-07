@@ -53,6 +53,10 @@ func (p *ShareLinkParser) ParseLink(link string) (models.ProxyRule, error) {
 		return p.ParseSS(link)
 	} else if strings.HasPrefix(link, "trojan://") {
 		return p.ParseTrojan(link)
+	} else if strings.HasPrefix(link, "hysteria2://") || strings.HasPrefix(link, "hy2://") {
+		return p.ParseHysteria2(link)
+	} else if strings.HasPrefix(link, "tuic://") {
+		return p.ParseTUIC(link)
 	}
 
 	return models.ProxyRule{}, fmt.Errorf("不支持的链接格式")
@@ -405,6 +409,146 @@ func (p *ShareLinkParser) ParseTrojan(trojanURL string) (models.ProxyRule, error
 				rule.Settings.GRPC.ServiceName = serviceName
 			}
 		}
+	}
+
+	return rule, nil
+}
+
+// ParseHysteria2 解析 hysteria2:// 或 hy2:// 链接
+// 格式: hysteria2://password@host:port/?insecure=1&obfs=salamander&obfs-password=xxx&sni=example.com&alpn=h3#别名
+func (p *ShareLinkParser) ParseHysteria2(hy2URL string) (models.ProxyRule, error) {
+	rule := models.ProxyRule{
+		Protocol:  "hysteria2",
+		LocalType: "mixed",
+		Source:    "manual",
+	}
+
+	// 统一前缀，方便 url.Parse
+	normalized := strings.Replace(hy2URL, "hy2://", "hysteria2://", 1)
+
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return rule, fmt.Errorf("解析 Hysteria2 URL 失败: %v", err)
+	}
+
+	// 认证密码（可能是 user:pass 形式，整体作为密码）
+	password := u.User.Username()
+	if pass, hasPass := u.User.Password(); hasPass {
+		password = password + ":" + pass
+	}
+	rule.Settings.Hy2Password = password
+
+	// 服务器地址和端口
+	rule.ServerAddr = u.Hostname()
+	if port, err := strconv.Atoi(u.Port()); err == nil {
+		rule.ServerPort = port
+	} else {
+		rule.ServerPort = 443 // Hysteria2 默认端口
+	}
+
+	// 别名
+	if u.Fragment != "" {
+		decoded, err := url.QueryUnescape(u.Fragment)
+		if err == nil {
+			rule.Alias = decoded
+		} else {
+			rule.Alias = u.Fragment
+		}
+	} else {
+		rule.Alias = "Hysteria2节点"
+	}
+
+	// 查询参数
+	query := u.Query()
+
+	// Hysteria2 强制 TLS
+	rule.Settings.Security = "tls"
+	rule.Settings.TLS = &models.TLSSettings{}
+	if sni := query.Get("sni"); sni != "" {
+		rule.Settings.TLS.ServerName = sni
+	}
+	if alpn := query.Get("alpn"); alpn != "" {
+		rule.Settings.TLS.ALPN = strings.Split(alpn, ",")
+	}
+	if insecure := query.Get("insecure"); insecure == "1" || insecure == "true" {
+		rule.Settings.TLS.AllowInsecure = true
+	}
+
+	// 混淆
+	if obfs := query.Get("obfs"); obfs != "" && obfs != "none" {
+		rule.Settings.Hy2Obfs = obfs
+		rule.Settings.Hy2ObfsPassword = query.Get("obfs-password")
+	}
+
+	// 带宽限制（非标准参数，部分客户端使用）
+	if up := query.Get("upmbps"); up != "" {
+		rule.Settings.Hy2UpMbps, _ = strconv.Atoi(up)
+	}
+	if down := query.Get("downmbps"); down != "" {
+		rule.Settings.Hy2DownMbps, _ = strconv.Atoi(down)
+	}
+
+	return rule, nil
+}
+
+// ParseTUIC 解析 tuic:// 链接
+// 格式: tuic://uuid:password@host:port?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni=xxx&allow_insecure=1#别名
+func (p *ShareLinkParser) ParseTUIC(tuicURL string) (models.ProxyRule, error) {
+	rule := models.ProxyRule{
+		Protocol:  "tuic",
+		LocalType: "mixed",
+		Source:    "manual",
+	}
+
+	u, err := url.Parse(tuicURL)
+	if err != nil {
+		return rule, fmt.Errorf("解析 TUIC URL 失败: %v", err)
+	}
+
+	// UUID 和密码
+	rule.Settings.TUICUserID = u.User.Username()
+	if pass, hasPass := u.User.Password(); hasPass {
+		rule.Settings.TUICPassword = pass
+	}
+
+	// 服务器地址和端口
+	rule.ServerAddr = u.Hostname()
+	if port, err := strconv.Atoi(u.Port()); err == nil {
+		rule.ServerPort = port
+	}
+
+	// 别名
+	if u.Fragment != "" {
+		decoded, err := url.QueryUnescape(u.Fragment)
+		if err == nil {
+			rule.Alias = decoded
+		} else {
+			rule.Alias = u.Fragment
+		}
+	} else {
+		rule.Alias = "TUIC节点"
+	}
+
+	// 查询参数
+	query := u.Query()
+	if congestion := query.Get("congestion_control"); congestion != "" {
+		rule.Settings.TUICCongestion = congestion
+	}
+	if udpMode := query.Get("udp_relay_mode"); udpMode != "" {
+		rule.Settings.TUICUDPRelayMode = udpMode
+	}
+
+	// TUIC 强制 TLS
+	rule.Settings.Security = "tls"
+	rule.Settings.TLS = &models.TLSSettings{}
+	if sni := query.Get("sni"); sni != "" {
+		rule.Settings.TLS.ServerName = sni
+	}
+	if alpn := query.Get("alpn"); alpn != "" {
+		rule.Settings.TLS.ALPN = strings.Split(alpn, ",")
+	}
+	if insecure := query.Get("allow_insecure"); insecure == "1" || insecure == "true" {
+		rule.Settings.TLS.AllowInsecure = true
 	}
 
 	return rule, nil

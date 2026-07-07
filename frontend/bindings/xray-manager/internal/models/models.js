@@ -255,6 +255,213 @@ export class H2Settings {
 }
 
 /**
+ * HealthCheckConfig 健康检查全局配置
+ */
+export class HealthCheckConfig {
+    /**
+     * Creates a new HealthCheckConfig instance.
+     * @param {Partial<HealthCheckConfig>} [$$source = {}] - The source object to create the HealthCheckConfig.
+     */
+    constructor($$source = {}) {
+        if (!("enabled" in $$source)) {
+            /**
+             * 是否启用后台自动检测
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("intervalSec" in $$source)) {
+            /**
+             * 检测周期（秒）
+             * @member
+             * @type {number}
+             */
+            this["intervalSec"] = 0;
+        }
+        if (!("timeoutSec" in $$source)) {
+            /**
+             * 单节点检测超时（秒）
+             * @member
+             * @type {number}
+             */
+            this["timeoutSec"] = 0;
+        }
+        if (!("latencyThreshold" in $$source)) {
+            /**
+             * 延迟较高阈值（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["latencyThreshold"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HealthCheckConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {HealthCheckConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HealthCheckConfig(/** @type {Partial<HealthCheckConfig>} */($$parsedSource));
+    }
+}
+
+/**
+ * ImportResult 导入结果
+ */
+export class ImportResult {
+    /**
+     * Creates a new ImportResult instance.
+     * @param {Partial<ImportResult>} [$$source = {}] - The source object to create the ImportResult.
+     */
+    constructor($$source = {}) {
+        if (!("success" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["success"] = false;
+        }
+        if (!("rulesImported" in $$source)) {
+            /**
+             * 导入的规则数
+             * @member
+             * @type {number}
+             */
+            this["rulesImported"] = 0;
+        }
+        if (!("rulesSkipped" in $$source)) {
+            /**
+             * 跳过的重复规则数
+             * @member
+             * @type {number}
+             */
+            this["rulesSkipped"] = 0;
+        }
+        if (!("groupsImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["groupsImported"] = 0;
+        }
+        if (!("subsImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["subsImported"] = 0;
+        }
+        if (!("chainImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["chainImported"] = 0;
+        }
+        if (!("lbImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["lbImported"] = 0;
+        }
+        if (!("errors" in $$source)) {
+            /**
+             * 错误信息列表
+             * @member
+             * @type {string[]}
+             */
+            this["errors"] = [];
+        }
+        if (!("warnings" in $$source)) {
+            /**
+             * 警告信息列表
+             * @member
+             * @type {string[]}
+             */
+            this["warnings"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ImportResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ImportResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType0;
+        const $$createField8_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("errors" in $$parsedSource) {
+            $$parsedSource["errors"] = $$createField7_0($$parsedSource["errors"]);
+        }
+        if ("warnings" in $$parsedSource) {
+            $$parsedSource["warnings"] = $$createField8_0($$parsedSource["warnings"]);
+        }
+        return new ImportResult(/** @type {Partial<ImportResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * ImportShareResult 批量导入分享链接结果
+ */
+export class ImportShareResult {
+    /**
+     * Creates a new ImportShareResult instance.
+     * @param {Partial<ImportShareResult>} [$$source = {}] - The source object to create the ImportShareResult.
+     */
+    constructor($$source = {}) {
+        if (!("successCount" in $$source)) {
+            /**
+             * 成功数
+             * @member
+             * @type {number}
+             */
+            this["successCount"] = 0;
+        }
+        if (!("failCount" in $$source)) {
+            /**
+             * 失败数
+             * @member
+             * @type {number}
+             */
+            this["failCount"] = 0;
+        }
+        if (!("errors" in $$source)) {
+            /**
+             * 每条失败的详细信息
+             * @member
+             * @type {string[]}
+             */
+            this["errors"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ImportShareResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ImportShareResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField2_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("errors" in $$parsedSource) {
+            $$parsedSource["errors"] = $$createField2_0($$parsedSource["errors"]);
+        }
+        return new ImportShareResult(/** @type {Partial<ImportShareResult>} */($$parsedSource));
+    }
+}
+
+/**
  * LoadBalanceNode 负载均衡节点
  */
 export class LoadBalanceNode {
@@ -381,7 +588,7 @@ export class ProxyRule {
         }
         if (!("localType" in $$source)) {
             /**
-             * 本地代理类型: socks 或 http
+             * 本地代理类型: mixed（同时支持 HTTP/SOCKS5），旧值 socks/http 兼容处理
              * @member
              * @type {string}
              */
@@ -397,7 +604,7 @@ export class ProxyRule {
         }
         if (!("protocol" in $$source)) {
             /**
-             * 远程协议类型: shadowsocks, vmess, vless, trojan
+             * 远程协议类型: shadowsocks, vmess, vless, trojan, hysteria2, tuic
              * @member
              * @type {string}
              */
@@ -484,6 +691,56 @@ export class ProxyRule {
              */
             this["testStatus"] = "";
         }
+        if (!("healthStatus" in $$source)) {
+            /**
+             * 健康检查相关字段
+             * 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+             * @member
+             * @type {string}
+             */
+            this["healthStatus"] = "";
+        }
+        if (!("healthLatency" in $$source)) {
+            /**
+             * 健康检查延迟（毫秒）
+             * @member
+             * @type {number}
+             */
+            this["healthLatency"] = 0;
+        }
+        if (!("lastHealthCheck" in $$source)) {
+            /**
+             * 最后健康检查时间
+             * @member
+             * @type {string}
+             */
+            this["lastHealthCheck"] = "";
+        }
+        if (!("traffic" in $$source)) {
+            /**
+             * 流量统计相关字段
+             * 累计流量统计
+             * @member
+             * @type {TrafficStats}
+             */
+            this["traffic"] = (new TrafficStats());
+        }
+        if (!("lastStartTime" in $$source)) {
+            /**
+             * 最近启动时间
+             * @member
+             * @type {string}
+             */
+            this["lastStartTime"] = "";
+        }
+        if (!("lastStopTime" in $$source)) {
+            /**
+             * 最近停止时间
+             * @member
+             * @type {string}
+             */
+            this["lastStopTime"] = "";
+        }
         if (!("groupId" in $$source)) {
             /**
              * 分组相关字段
@@ -528,9 +785,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType1;
+        const $$createField18_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
+        }
+        if ("traffic" in $$parsedSource) {
+            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }
@@ -665,6 +926,80 @@ export class ProxySettings {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Hysteria2 配置
+             * 认证密码
+             * @member
+             * @type {string | undefined}
+             */
+            this["hy2Password"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 混淆类型（salamander）
+             * @member
+             * @type {string | undefined}
+             */
+            this["hy2Obfs"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 混淆密码
+             * @member
+             * @type {string | undefined}
+             */
+            this["hy2ObfsPassword"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 上行带宽限制 (Mbps)，0 表示自动（BBR）
+             * @member
+             * @type {number | undefined}
+             */
+            this["hy2UpMbps"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 下行带宽限制 (Mbps)，0 表示自动（BBR）
+             * @member
+             * @type {number | undefined}
+             */
+            this["hy2DownMbps"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * TUIC v5 配置
+             * 用户 UUID
+             * @member
+             * @type {string | undefined}
+             */
+            this["tuicUserId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 密码
+             * @member
+             * @type {string | undefined}
+             */
+            this["tuicPassword"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 拥塞控制: bbr, cubic, new_reno
+             * @member
+             * @type {string | undefined}
+             */
+            this["tuicCongestion"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * UDP 中继模式: native, quic
+             * @member
+             * @type {string | undefined}
+             */
+            this["tuicUdpRelayMode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * 通用传输层配置
              * 传输协议: tcp, ws, grpc, h2
              * @member
@@ -722,22 +1057,22 @@ export class ProxySettings {
      * @returns {ProxySettings}
      */
     static createFrom($$source = {}) {
-        const $$createField16_0 = $$createType3;
-        const $$createField17_0 = $$createType5;
-        const $$createField18_0 = $$createType7;
-        const $$createField19_0 = $$createType9;
+        const $$createField25_0 = $$createType4;
+        const $$createField26_0 = $$createType6;
+        const $$createField27_0 = $$createType8;
+        const $$createField28_0 = $$createType10;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tls" in $$parsedSource) {
-            $$parsedSource["tls"] = $$createField16_0($$parsedSource["tls"]);
+            $$parsedSource["tls"] = $$createField25_0($$parsedSource["tls"]);
         }
         if ("ws" in $$parsedSource) {
-            $$parsedSource["ws"] = $$createField17_0($$parsedSource["ws"]);
+            $$parsedSource["ws"] = $$createField26_0($$parsedSource["ws"]);
         }
         if ("grpc" in $$parsedSource) {
-            $$parsedSource["grpc"] = $$createField18_0($$parsedSource["grpc"]);
+            $$parsedSource["grpc"] = $$createField27_0($$parsedSource["grpc"]);
         }
         if ("h2" in $$parsedSource) {
-            $$parsedSource["h2"] = $$createField19_0($$parsedSource["h2"]);
+            $$parsedSource["h2"] = $$createField28_0($$parsedSource["h2"]);
         }
         return new ProxySettings(/** @type {Partial<ProxySettings>} */($$parsedSource));
     }
@@ -840,6 +1175,22 @@ export class Subscription {
              */
             this["nodeCount"] = 0;
         }
+        if (!("updateMode" in $$source)) {
+            /**
+             * 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/负载均衡）
+             * @member
+             * @type {string}
+             */
+            this["updateMode"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * UpdateMode 为 proxy 时使用的节点/链式代理/负载均衡 ID
+             * @member
+             * @type {string | undefined}
+             */
+            this["updateProxyId"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -908,6 +1259,70 @@ export class TLSSettings {
 }
 
 /**
+ * TrafficStats 节点流量统计（字节）
+ */
+export class TrafficStats {
+    /**
+     * Creates a new TrafficStats instance.
+     * @param {Partial<TrafficStats>} [$$source = {}] - The source object to create the TrafficStats.
+     */
+    constructor($$source = {}) {
+        if (!("todayUp" in $$source)) {
+            /**
+             * 今日上传
+             * @member
+             * @type {number}
+             */
+            this["todayUp"] = 0;
+        }
+        if (!("todayDown" in $$source)) {
+            /**
+             * 今日下载
+             * @member
+             * @type {number}
+             */
+            this["todayDown"] = 0;
+        }
+        if (!("totalUp" in $$source)) {
+            /**
+             * 累计上传
+             * @member
+             * @type {number}
+             */
+            this["totalUp"] = 0;
+        }
+        if (!("totalDown" in $$source)) {
+            /**
+             * 累计下载
+             * @member
+             * @type {number}
+             */
+            this["totalDown"] = 0;
+        }
+        if (!("todayDate" in $$source)) {
+            /**
+             * 今日统计对应的日期（yyyy-mm-dd），跨天自动清零
+             * @member
+             * @type {string}
+             */
+            this["todayDate"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TrafficStats instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TrafficStats}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TrafficStats(/** @type {Partial<TrafficStats>} */($$parsedSource));
+    }
+}
+
+/**
  * WSSettings WebSocket配置
  */
 export class WSSettings {
@@ -942,7 +1357,7 @@ export class WSSettings {
      * @returns {WSSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType10;
+        const $$createField1_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField1_0($$parsedSource["headers"]);
@@ -954,12 +1369,13 @@ export class WSSettings {
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = ProxySettings.createFrom;
-const $$createType2 = TLSSettings.createFrom;
-const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = WSSettings.createFrom;
-const $$createType5 = $Create.Nullable($$createType4);
-const $$createType6 = GRPCSettings.createFrom;
-const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = H2Settings.createFrom;
-const $$createType9 = $Create.Nullable($$createType8);
-const $$createType10 = $Create.Map($Create.Any, $Create.Any);
+const $$createType2 = TrafficStats.createFrom;
+const $$createType3 = TLSSettings.createFrom;
+const $$createType4 = $Create.Nullable($$createType3);
+const $$createType5 = WSSettings.createFrom;
+const $$createType6 = $Create.Nullable($$createType5);
+const $$createType7 = GRPCSettings.createFrom;
+const $$createType8 = $Create.Nullable($$createType7);
+const $$createType9 = H2Settings.createFrom;
+const $$createType10 = $Create.Nullable($$createType9);
+const $$createType11 = $Create.Map($Create.Any, $Create.Any);

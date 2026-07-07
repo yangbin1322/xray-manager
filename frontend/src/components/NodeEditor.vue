@@ -23,14 +23,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label>本地代理类型：</label>
-              <select v-model="form.localType">
-                <option value="socks">socks</option>
-                <option value="http">http</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>本地代理端口：</label>
+              <label>本地代理端口（混合端口，同时支持 HTTP/SOCKS5）：</label>
               <div class="port-row">
                 <input v-model.number="form.localPort" type="number" placeholder="1080" min="1" max="65535" />
                 <button class="btn-small" @click="handleRecommendPort">推荐</button>
@@ -50,6 +43,8 @@
                 <option value="vmess">VMess</option>
                 <option value="vless">VLESS</option>
                 <option value="trojan">Trojan</option>
+                <option value="hysteria2">Hysteria2</option>
+                <option value="tuic">TUIC v5</option>
                 <option value="http">HTTP</option>
                 <option value="socks">SOCKS</option>
               </select>
@@ -135,6 +130,91 @@
             <div class="form-group">
               <label>密码：</label>
               <input v-model="form.settings.trojanPassword" type="text" placeholder="Trojan 密码" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Hysteria2 配置 -->
+        <div v-if="form.protocol === 'hysteria2'" class="form-section">
+          <h4>Hysteria2 配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>认证密码：</label>
+              <input v-model="form.settings.hy2Password" type="text" placeholder="密码" />
+            </div>
+            <div class="form-group">
+              <label>混淆类型：</label>
+              <select v-model="form.settings.hy2Obfs">
+                <option value="">无</option>
+                <option value="salamander">salamander</option>
+              </select>
+            </div>
+            <div class="form-group" v-if="form.settings.hy2Obfs">
+              <label>混淆密码：</label>
+              <input v-model="form.settings.hy2ObfsPassword" type="text" placeholder="混淆密码" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>上行带宽 (Mbps，0=自动)：</label>
+              <input v-model.number="form.settings.hy2UpMbps" type="number" min="0" placeholder="0" />
+            </div>
+            <div class="form-group">
+              <label>下行带宽 (Mbps，0=自动)：</label>
+              <input v-model.number="form.settings.hy2DownMbps" type="number" min="0" placeholder="0" />
+            </div>
+          </div>
+        </div>
+
+        <!-- TUIC 配置 -->
+        <div v-if="form.protocol === 'tuic'" class="form-section">
+          <h4>TUIC v5 配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>用户ID (UUID)：</label>
+              <input v-model="form.settings.tuicUserId" type="text" placeholder="UUID" />
+            </div>
+            <div class="form-group">
+              <label>密码：</label>
+              <input v-model="form.settings.tuicPassword" type="text" placeholder="密码" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>拥塞控制：</label>
+              <select v-model="form.settings.tuicCongestion">
+                <option value="bbr">bbr</option>
+                <option value="cubic">cubic</option>
+                <option value="new_reno">new_reno</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>UDP 中继模式：</label>
+              <select v-model="form.settings.tuicUdpRelayMode">
+                <option value="native">native</option>
+                <option value="quic">quic</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hysteria2 / TUIC 的 TLS 配置（强制启用 TLS） -->
+        <div v-if="form.protocol === 'hysteria2' || form.protocol === 'tuic'" class="form-section">
+          <h4>TLS 配置</h4>
+          <div class="form-row">
+            <div class="form-group">
+              <label>SNI (服务器名)：</label>
+              <input v-model="tlsServerName" type="text" placeholder="SNI" />
+            </div>
+            <div class="form-group">
+              <label>ALPN：</label>
+              <input v-model="tlsAlpn" type="text" placeholder="h3" />
+            </div>
+            <div class="form-group form-group-checkbox">
+              <label>
+                <input type="checkbox" v-model="tlsAllowInsecure" />
+                允许不安全连接（跳过证书验证）
+              </label>
             </div>
           </div>
         </div>
@@ -270,7 +350,7 @@ const isEditing = computed(() => !!props.editingRule)
 function defaultForm() {
   return {
     alias: '',
-    localType: 'socks',
+    localType: 'mixed',
     localPort: 0,
     protocol: 'shadowsocks',
     serverAddr: '',
@@ -291,6 +371,15 @@ function defaultForm() {
       socksUsername: '',
       socksPassword: '',
       socksVersion: 'socks5',
+      hy2Password: '',
+      hy2Obfs: '',
+      hy2ObfsPassword: '',
+      hy2UpMbps: 0,
+      hy2DownMbps: 0,
+      tuicUserId: '',
+      tuicPassword: '',
+      tuicCongestion: 'bbr',
+      tuicUdpRelayMode: 'native',
       network: 'tcp',
       security: 'none',
       tls: null,
@@ -411,6 +500,15 @@ async function handleSave() {
 
 function buildTransportSettings() {
   const s = form.value.settings
+
+  // 本地代理统一为混合端口
+  form.value.localType = 'mixed'
+
+  // Hysteria2 / TUIC 强制 TLS
+  if (form.value.protocol === 'hysteria2' || form.value.protocol === 'tuic') {
+    s.security = 'tls'
+    s.network = ''
+  }
 
   // TLS
   if (s.security === 'tls' || s.security === 'reality') {

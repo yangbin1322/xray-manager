@@ -14,8 +14,13 @@
           <th class="col-protocol">协议</th>
           <th class="col-server">服务器地址</th>
           <th class="col-sport">服务器端口</th>
-          <th class="col-local">本地代理</th>
           <th class="col-lport">本地端口</th>
+          <th class="col-health sortable" @click="rulesStore.setSort('healthLatency')">
+            健康
+            <span v-if="rulesStore.sortColumn === 'healthLatency'" class="sort-arrow">
+              {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
+            </span>
+          </th>
           <th class="col-latency sortable" @click="rulesStore.setSort('latency')">
             延迟
             <span v-if="rulesStore.sortColumn === 'latency'" class="sort-arrow">
@@ -28,6 +33,8 @@
               {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </th>
+          <th class="col-traffic">实时流量</th>
+          <th class="col-traffic-total">今日/累计</th>
           <th class="col-ip">真实IP</th>
           <th class="col-status">状态</th>
           <th class="col-actions">操作</th>
@@ -35,7 +42,7 @@
       </thead>
       <tbody>
         <tr v-if="rulesStore.filteredRules.length === 0">
-          <td colspan="12" class="empty-row">暂无节点数据</td>
+          <td colspan="14" class="empty-row">暂无节点数据</td>
         </tr>
         <tr
           v-for="rule in rulesStore.filteredRules"
@@ -67,8 +74,16 @@
             <template v-if="rule._nodeType === 'rule'">{{ rule.serverPort || '-' }}</template>
             <template v-else>-</template>
           </td>
-          <td class="col-local">{{ rule.localType || 'socks' }}</td>
           <td class="col-lport">{{ rule.localPort || '-' }}</td>
+          <td class="col-health">
+            <template v-if="rule._nodeType === 'rule'">
+              <span
+                :class="['health-badge', `health-${rule.healthStatus || 'unknown'}`]"
+                :title="healthTitle(rule)"
+              >{{ healthLabel(rule) }}</span>
+            </template>
+            <span v-else class="no-data">-</span>
+          </td>
           <td class="col-latency">
             <template v-if="rule._nodeType === 'rule'">
               <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
@@ -83,6 +98,18 @@
             <template v-if="rule._nodeType === 'rule'">
               <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
               <span v-else class="no-data">-</span>
+            </template>
+            <span v-else class="no-data">-</span>
+          </td>
+          <td class="col-traffic">
+            <template v-if="rule.enabled && trafficOf(rule)">
+              <span class="traffic-speed">↑{{ formatSpeed(trafficOf(rule).upSpeed) }} ↓{{ formatSpeed(trafficOf(rule).downSpeed) }}</span>
+            </template>
+            <span v-else class="no-data">-</span>
+          </td>
+          <td class="col-traffic-total" :title="trafficTitle(rule)">
+            <template v-if="rule._nodeType === 'rule'">
+              <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
             </template>
             <span v-else class="no-data">-</span>
           </td>
@@ -109,6 +136,7 @@
             <button v-if="rule._nodeType === 'lb'" class="btn-action-sm" @click="$emit('editLB', rule)">编辑</button>
             <button v-if="rule._nodeType === 'chain'" class="btn-action-sm" @click="$emit('editChain', rule)">编辑</button>
             <button v-if="rule._nodeType === 'rule'" class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
+            <button v-if="rule._nodeType === 'rule'" class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -183,6 +211,86 @@ function latencyClass(latency) {
   if (latency < 100) return 'latency-good'
   if (latency < 300) return 'latency-ok'
   return 'latency-bad'
+}
+
+// ===== 健康检查展示 =====
+const healthLabels = {
+  checking: '检测中',
+  online: '在线',
+  high_latency: '延迟高',
+  timeout: '超时',
+  dns_failed: 'DNS失败',
+  tls_failed: 'TLS失败',
+  reality_failed: 'Reality失败',
+}
+
+function healthLabel(rule) {
+  const status = rule.healthStatus
+  if (!status) return '未检测'
+  if (status === 'online' && rule.healthLatency > 0) return `${rule.healthLatency}ms`
+  return healthLabels[status] || status
+}
+
+function healthTitle(rule) {
+  const parts = []
+  if (rule.healthStatus) parts.push(`状态: ${healthLabels[rule.healthStatus] || rule.healthStatus}`)
+  if (rule.healthLatency > 0) parts.push(`延迟: ${rule.healthLatency}ms`)
+  if (rule.lastHealthCheck) parts.push(`检测时间: ${rule.lastHealthCheck}`)
+  return parts.join('\n') || '尚未检测'
+}
+
+// ===== 流量展示 =====
+function trafficOf(rule) {
+  return rulesStore.traffic[rule.id]
+}
+
+function todayTotal(rule) {
+  const snap = trafficOf(rule)
+  if (snap) return (snap.todayUp || 0) + (snap.todayDown || 0)
+  const t = rule.traffic
+  return t ? (t.todayUp || 0) + (t.todayDown || 0) : 0
+}
+
+function allTotal(rule) {
+  const snap = trafficOf(rule)
+  if (snap) return (snap.totalUp || 0) + (snap.totalDown || 0)
+  const t = rule.traffic
+  return t ? (t.totalUp || 0) + (t.totalDown || 0) : 0
+}
+
+function trafficTitle(rule) {
+  const snap = trafficOf(rule) || rule.traffic || {}
+  return [
+    `今日: ↑${formatBytes(snap.todayUp || 0)} ↓${formatBytes(snap.todayDown || 0)}`,
+    `累计: ↑${formatBytes(snap.totalUp || 0)} ↓${formatBytes(snap.totalDown || 0)}`,
+    rule.lastStartTime ? `最近启动: ${rule.lastStartTime}` : '',
+    rule.lastStopTime ? `最近停止: ${rule.lastStopTime}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = bytes
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)}${units[i]}`
+}
+
+function formatSpeed(bytesPerSec) {
+  return `${formatBytes(bytesPerSec)}/s`
+}
+
+async function handleHealthCheck(rule) {
+  try {
+    await api.checkNodeHealth(rule.id)
+    appStore.showToast(`正在检测: ${rule.alias}`, 'info')
+  } catch (e) {
+    appStore.showToast(`检测失败: ${e}`, 'error')
+  }
 }
 
 function statusClass(rule) {
@@ -320,13 +428,35 @@ async function handleDelete(rule) {
 .col-protocol { width: 90px; }
 .col-server { max-width: 140px; }
 .col-sport { width: 70px; }
-.col-local { width: 70px; }
 .col-lport { width: 70px; }
+.col-health { width: 80px; }
 .col-latency { width: 80px; }
-.col-speed { width: 100px; }
+.col-speed { width: 90px; }
+.col-traffic { width: 130px; }
+.col-traffic-total { width: 110px; }
 .col-ip { max-width: 100px; }
 .col-status { width: 40px; text-align: center; }
-.col-actions { width: 200px; }
+.col-actions { width: 230px; }
+
+.health-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.health-unknown { background: #f0f0f0; color: #999; }
+.health-checking { background: #fef3e2; color: #e67e22; font-style: italic; }
+.health-online { background: #e8f8f5; color: #27ae60; }
+.health-high_latency { background: #fef3e2; color: #f39c12; }
+.health-timeout { background: #fde8e8; color: #e74c3c; }
+.health-dns_failed { background: #fde8e8; color: #c0392b; }
+.health-tls_failed { background: #fde8e8; color: #c0392b; }
+.health-reality_failed { background: #fde8e8; color: #8e44ad; }
+
+.traffic-speed { font-size: 11px; color: var(--text-primary); }
+.traffic-total { font-size: 11px; color: var(--text-secondary); }
+.btn-health { color: #16a085; border-color: #16a085; }
 
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--primary-color); }
@@ -354,6 +484,8 @@ async function handleDelete(rule) {
 .protocol-socks { background: #f0f0f0; color: #555; }
 .protocol-loadbalance { background: #f3e8fd; color: #9b59b6; }
 .protocol-chain { background: #e8f4fd; color: #2980b9; }
+.protocol-hysteria2 { background: #e8fdf0; color: #16a085; }
+.protocol-tuic { background: #fdf3e8; color: #d35400; }
 
 .type-badge {
   display: inline-block;

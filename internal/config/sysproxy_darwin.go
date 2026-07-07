@@ -65,3 +65,30 @@ func platformDisableProxy() error {
 
 	return nil
 }
+
+// platformGetCurrentProxy 读取 macOS 当前生效的 HTTP 代理
+func platformGetCurrentProxy() string {
+	services := getActiveNetworkServices()
+	for _, service := range services {
+		out, err := exec.Command("networksetup", "-getwebproxy", service).Output()
+		if err != nil {
+			continue
+		}
+		var enabled bool
+		var server, port string
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Enabled:") {
+				enabled = strings.Contains(line, "Yes")
+			} else if strings.HasPrefix(line, "Server:") {
+				server = strings.TrimSpace(strings.TrimPrefix(line, "Server:"))
+			} else if strings.HasPrefix(line, "Port:") {
+				port = strings.TrimSpace(strings.TrimPrefix(line, "Port:"))
+			}
+		}
+		if enabled && server != "" && port != "" && port != "0" {
+			return fmt.Sprintf("http://%s:%s", server, port)
+		}
+	}
+	return ""
+}

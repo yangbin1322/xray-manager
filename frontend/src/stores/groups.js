@@ -32,8 +32,8 @@ export const useGroupsStore = defineStore('groups', () => {
     await loadGroups()
   }
 
-  async function addSubscription(name, url, autoUpdate, updateInterval) {
-    await api.addSubscription(name, url, autoUpdate, updateInterval)
+  async function addSubscription(name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+    await api.addSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
     await loadSubscriptions()
     await loadGroups()
   }

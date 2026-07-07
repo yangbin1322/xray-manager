@@ -41,3 +41,9 @@ func (m *SysProxyManager) IsEnabled() bool {
 func (m *SysProxyManager) GetPort() int {
 	return m.port
 }
+
+// GetCurrentSystemProxy 读取操作系统当前生效的代理地址（如 http://127.0.0.1:10808）
+// 未设置代理时返回空字符串
+func (m *SysProxyManager) GetCurrentSystemProxy() string {
+	return platformGetCurrentProxy()
+}

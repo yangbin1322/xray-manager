@@ -8,10 +8,19 @@ import (
 
 // XrayConfig Xray-core 配置结构
 type XrayConfig struct {
-	Log       *LogConfig       `json:"log,omitempty"`
-	Inbounds  []InboundConfig  `json:"inbounds"`
-	Outbounds []OutboundConfig `json:"outbounds"`
-	Routing   *RoutingConfig   `json:"routing,omitempty"`
+	Log       *LogConfig             `json:"log,omitempty"`
+	API       *APIConfig             `json:"api,omitempty"`
+	Stats     map[string]interface{} `json:"stats,omitempty"`
+	Policy    map[string]interface{} `json:"policy,omitempty"`
+	Inbounds  []InboundConfig        `json:"inbounds"`
+	Outbounds []OutboundConfig       `json:"outbounds"`
+	Routing   *RoutingConfig         `json:"routing,omitempty"`
+}
+
+// APIConfig Xray API 配置（用于流量统计查询）
+type APIConfig struct {
+	Tag      string   `json:"tag"`
+	Services []string `json:"services"`
 }
 
 // RoutingConfig 路由配置
@@ -106,27 +115,59 @@ func BuildConfig(rule *models.ProxyRule) (*XrayConfig, error) {
 
 // buildInbounds 构建入站配置
 func buildInbounds(rule *models.ProxyRule) []InboundConfig {
-	inbound := InboundConfig{
-		Listen:   "0.0.0.0",
-		Port:     rule.LocalPort,
-		Protocol: rule.LocalType,
-		Tag:      "inbound",
-	}
+	return []InboundConfig{buildMixedInbound(rule.LocalPort)}
+}
 
-	// 根据本地代理类型设置
-	switch rule.LocalType {
-	case "socks5", "socks":
-		inbound.Settings = map[string]interface{}{
+// buildMixedInbound 构建混合入站（同时支持 HTTP 和 SOCKS5）
+// Xray 新版内核的 socks 入站会自动识别 HTTP 请求，等效于 mixed 端口，
+// 因此无论历史配置的 LocalType 是 socks/socks5/http/mixed，统一生成 socks 入站。
+func buildMixedInbound(localPort int) InboundConfig {
+	return InboundConfig{
+		Listen:   "0.0.0.0",
+		Port:     localPort,
+		Protocol: "socks",
+		Tag:      "inbound",
+		Settings: map[string]interface{}{
 			"auth": "noauth",
 			"udp":  true,
-		}
-	case "http":
-		inbound.Settings = map[string]interface{}{
-			"allowTransparent": false,
-		}
+		},
 	}
+}
 
-	return []InboundConfig{inbound}
+// AddStatsAPI 为配置添加流量统计 API（监听 127.0.0.1:apiPort）
+// 之后可通过 `xray api statsquery --server=127.0.0.1:apiPort` 查询出站流量
+func AddStatsAPI(config *XrayConfig, apiPort int) {
+	config.API = &APIConfig{
+		Tag:      "api",
+		Services: []string{"StatsService"},
+	}
+	config.Stats = map[string]interface{}{}
+	config.Policy = map[string]interface{}{
+		"system": map[string]interface{}{
+			"statsOutboundUplink":   true,
+			"statsOutboundDownlink": true,
+		},
+	}
+	config.Inbounds = append(config.Inbounds, InboundConfig{
+		Listen:   "127.0.0.1",
+		Port:     apiPort,
+		Protocol: "dokodemo-door",
+		Tag:      "api",
+		Settings: map[string]interface{}{
+			"address": "127.0.0.1",
+		},
+	})
+	if config.Routing == nil {
+		config.Routing = &RoutingConfig{}
+	}
+	// API 路由规则需要放在最前面，避免被兜底规则拦截
+	config.Routing.Rules = append([]RoutingRule{
+		{
+			Type:        "field",
+			InboundTag:  []string{"api"},
+			OutboundTag: "api",
+		},
+	}, config.Routing.Rules...)
 }
 
 // buildOutbounds 构建出站配置
@@ -387,25 +428,8 @@ func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRul
 		},
 	}
 
-	// 入站
-	inbound := InboundConfig{
-		Listen:   "0.0.0.0",
-		Port:     lb.LocalPort,
-		Protocol: lb.LocalType,
-		Tag:      "inbound",
-	}
-	switch lb.LocalType {
-	case "socks5", "socks":
-		inbound.Settings = map[string]interface{}{
-			"auth": "noauth",
-			"udp":  true,
-		}
-	case "http":
-		inbound.Settings = map[string]interface{}{
-			"allowTransparent": false,
-		}
-	}
-	config.Inbounds = []InboundConfig{inbound}
+	// 入站（混合端口，同时支持 HTTP/SOCKS5）
+	config.Inbounds = []InboundConfig{buildMixedInbound(lb.LocalPort)}
 
 	// 为每个子节点创建出站
 	var outbounds []OutboundConfig
@@ -474,25 +498,8 @@ func BuildChainConfig(localType string, localPort int, chainRules []*models.Prox
 		},
 	}
 
-	// 入站
-	inbound := InboundConfig{
-		Listen:   "0.0.0.0",
-		Port:     localPort,
-		Protocol: localType,
-		Tag:      "inbound",
-	}
-	switch localType {
-	case "socks5", "socks":
-		inbound.Settings = map[string]interface{}{
-			"auth": "noauth",
-			"udp":  true,
-		}
-	case "http":
-		inbound.Settings = map[string]interface{}{
-			"allowTransparent": false,
-		}
-	}
-	config.Inbounds = []InboundConfig{inbound}
+	// 入站（混合端口，同时支持 HTTP/SOCKS5）
+	config.Inbounds = []InboundConfig{buildMixedInbound(localPort)}
 
 	// 构建出站链
 	// 用户期望顺序: chain_0(第1个) → chain_1(第2个) → ... → chain_n(落地节点)

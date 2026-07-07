@@ -6,9 +6,9 @@ import "fmt"
 type ProxyRule struct {
 	ID         string        `json:"id"`         // 唯一标识
 	Alias      string        `json:"alias"`      // 别名
-	LocalType  string        `json:"localType"`  // 本地代理类型: socks 或 http
+	LocalType  string        `json:"localType"`  // 本地代理类型: mixed（同时支持 HTTP/SOCKS5），旧值 socks/http 兼容处理
 	LocalPort  int           `json:"localPort"`  // 本地代理端口
-	Protocol   string        `json:"protocol"`   // 远程协议类型: shadowsocks, vmess, vless, trojan
+	Protocol   string        `json:"protocol"`   // 远程协议类型: shadowsocks, vmess, vless, trojan, hysteria2, tuic
 	ServerAddr string        `json:"serverAddr"` // 服务器地址
 	ServerPort int           `json:"serverPort"` // 服务器端口
 	Settings   ProxySettings `json:"settings"`   // 协议相关配置
@@ -22,11 +22,58 @@ type ProxyRule struct {
 	LastTestTime string `json:"lastTestTime"` // 最后测速时间
 	TestStatus   string `json:"testStatus"`   // 测速状态: idle, testing, success, failed
 
+	// 健康检查相关字段
+	HealthStatus    string `json:"healthStatus"`    // 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+	HealthLatency   int    `json:"healthLatency"`   // 健康检查延迟（毫秒）
+	LastHealthCheck string `json:"lastHealthCheck"` // 最后健康检查时间
+
+	// 流量统计相关字段
+	Traffic       TrafficStats `json:"traffic"`       // 累计流量统计
+	LastStartTime string       `json:"lastStartTime"` // 最近启动时间
+	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
+
 	// 分组相关字段
 	GroupID      string `json:"groupId"`      // 所属分组ID
 	GroupName    string `json:"groupName"`    // 所属分组名称
 	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
 	Source       string `json:"source"`       // 来源: manual（手动添加）, subscription（订阅导入）
+}
+
+// TrafficStats 节点流量统计（字节）
+type TrafficStats struct {
+	TodayUp   int64  `json:"todayUp"`   // 今日上传
+	TodayDown int64  `json:"todayDown"` // 今日下载
+	TotalUp   int64  `json:"totalUp"`   // 累计上传
+	TotalDown int64  `json:"totalDown"` // 累计下载
+	TodayDate string `json:"todayDate"` // 今日统计对应的日期（yyyy-mm-dd），跨天自动清零
+}
+
+// TrafficSnapshot 实时流量快照（通过事件推送给前端，不持久化速度）
+type TrafficSnapshot struct {
+	RuleID    string  `json:"ruleId"`
+	UpSpeed   float64 `json:"upSpeed"`   // 当前上传速度（字节/秒）
+	DownSpeed float64 `json:"downSpeed"` // 当前下载速度（字节/秒）
+	TodayUp   int64   `json:"todayUp"`
+	TodayDown int64   `json:"todayDown"`
+	TotalUp   int64   `json:"totalUp"`
+	TotalDown int64   `json:"totalDown"`
+}
+
+// HealthCheckConfig 健康检查全局配置
+type HealthCheckConfig struct {
+	Enabled          bool `json:"enabled"`          // 是否启用后台自动检测
+	IntervalSec      int  `json:"intervalSec"`      // 检测周期（秒）
+	TimeoutSec       int  `json:"timeoutSec"`       // 单节点检测超时（秒）
+	LatencyThreshold int  `json:"latencyThreshold"` // 延迟较高阈值（毫秒）
+}
+
+// HealthCheckResult 健康检查结果
+type HealthCheckResult struct {
+	RuleID    string `json:"ruleId"`
+	Status    string `json:"status"`  // online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+	Latency   int    `json:"latency"` // 毫秒
+	Error     string `json:"error"`
+	Timestamp string `json:"timestamp"`
 }
 
 // Validate 校验规则字段合法性，缺失字段给默认值
@@ -35,6 +82,7 @@ func (r *ProxyRule) Validate() error {
 	validProtocols := map[string]bool{
 		"shadowsocks": true, "vmess": true, "vless": true,
 		"trojan": true, "http": true, "socks": true,
+		"hysteria2": true, "tuic": true,
 	}
 	if r.Protocol == "" {
 		return fmt.Errorf("协议类型不能为空")
@@ -53,9 +101,9 @@ func (r *ProxyRule) Validate() error {
 		return fmt.Errorf("服务器端口无效: %d", r.ServerPort)
 	}
 
-	// 默认值填充
+	// 默认值填充（统一为混合端口，同时支持 HTTP/SOCKS5）
 	if r.LocalType == "" {
-		r.LocalType = "socks"
+		r.LocalType = "mixed"
 	}
 	if r.Source == "" {
 		r.Source = "manual"
@@ -104,6 +152,19 @@ type ProxySettings struct {
 	SOCKSPassword string `json:"socksPassword,omitempty"` // SOCKS 代理密码（可选）
 	SOCKSVersion  string `json:"socksVersion,omitempty"`  // SOCKS 版本 (socks4, socks5, 默认 socks5)
 
+	// Hysteria2 配置
+	Hy2Password     string `json:"hy2Password,omitempty"`     // 认证密码
+	Hy2Obfs         string `json:"hy2Obfs,omitempty"`         // 混淆类型（salamander）
+	Hy2ObfsPassword string `json:"hy2ObfsPassword,omitempty"` // 混淆密码
+	Hy2UpMbps       int    `json:"hy2UpMbps,omitempty"`       // 上行带宽限制 (Mbps)，0 表示自动（BBR）
+	Hy2DownMbps     int    `json:"hy2DownMbps,omitempty"`     // 下行带宽限制 (Mbps)，0 表示自动（BBR）
+
+	// TUIC v5 配置
+	TUICUserID       string `json:"tuicUserId,omitempty"`       // 用户 UUID
+	TUICPassword     string `json:"tuicPassword,omitempty"`     // 密码
+	TUICCongestion   string `json:"tuicCongestion,omitempty"`   // 拥塞控制: bbr, cubic, new_reno
+	TUICUDPRelayMode string `json:"tuicUdpRelayMode,omitempty"` // UDP 中继模式: native, quic
+
 	// 通用传输层配置
 	Network  string        `json:"network,omitempty"`  // 传输协议: tcp, ws, grpc, h2
 	Security string        `json:"security,omitempty"` // 传输层安全: none, tls
@@ -145,6 +206,7 @@ type Config struct {
 	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
 	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 负载均衡节点列表
 	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
+	HealthCheck    HealthCheckConfig `json:"healthCheck"`    // 健康检查配置
 }
 
 // ExportData 导出数据结构（包含版本信息）
@@ -201,6 +263,8 @@ type Subscription struct {
 	LastUpdate  string `json:"lastUpdate"`  // 最后更新时间
 	NextUpdate  string `json:"nextUpdate"`  // 下次更新时间
 	NodeCount   int    `json:"nodeCount"`   // 节点数量
+	UpdateMode  string `json:"updateMode"`  // 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/负载均衡）
+	UpdateProxyID string `json:"updateProxyId,omitempty"` // UpdateMode 为 proxy 时使用的节点/链式代理/负载均衡 ID
 }
 
 // SpeedTestResult 测速结果

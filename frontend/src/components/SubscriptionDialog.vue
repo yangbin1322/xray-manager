@@ -17,12 +17,13 @@
               <th>上次更新</th>
               <th>下次更新</th>
               <th>自动</th>
+              <th>更新方式</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="groupsStore.subscriptions.length === 0">
-              <td colspan="7" class="empty-row">暂无订阅</td>
+              <td colspan="8" class="empty-row">暂无订阅</td>
             </tr>
             <tr v-for="sub in groupsStore.subscriptions" :key="sub.id">
               <td>{{ sub.name }}</td>
@@ -31,6 +32,36 @@
               <td class="td-small">{{ sub.lastUpdate || '-' }}</td>
               <td class="td-small">{{ sub.nextUpdate || '-' }}</td>
               <td>{{ sub.autoUpdate ? '✓' : '×' }}</td>
+              <td>
+                <div class="update-mode-cell">
+                  <select
+                    :value="sub.updateMode || 'direct'"
+                    @change="handleModeChange(sub, $event.target.value, null)"
+                    class="mode-select"
+                  >
+                    <option value="direct">直连</option>
+                    <option value="system">系统代理</option>
+                    <option value="proxy">指定节点</option>
+                  </select>
+                  <select
+                    v-if="(sub.updateMode || 'direct') === 'proxy'"
+                    :value="sub.updateProxyId || ''"
+                    @change="handleModeChange(sub, 'proxy', $event.target.value)"
+                    class="mode-select"
+                  >
+                    <option value="">选择节点</option>
+                    <optgroup label="节点" v-if="rulesStore.rules.length">
+                      <option v-for="r in rulesStore.rules" :key="r.id" :value="r.id">{{ r.alias }}</option>
+                    </optgroup>
+                    <optgroup label="链式代理" v-if="rulesStore.chainProxies.length">
+                      <option v-for="c in rulesStore.chainProxies" :key="c.id" :value="c.id">{{ c.alias }}</option>
+                    </optgroup>
+                    <optgroup label="负载均衡" v-if="rulesStore.loadBalancers.length">
+                      <option v-for="lb in rulesStore.loadBalancers" :key="lb.id" :value="lb.id">{{ lb.alias }}</option>
+                    </optgroup>
+                  </select>
+                </div>
+              </td>
               <td>
                 <button class="btn-action-sm" @click="handleUpdate(sub)" :disabled="updating === sub.id">
                   {{ updating === sub.id ? '更新中...' : '更新' }}
@@ -64,6 +95,36 @@
               <label>更新间隔（小时）：</label>
               <input v-model.number="form.updateInterval" type="number" min="1" placeholder="6" />
             </div>
+            <div class="form-group">
+              <label>更新方式：</label>
+              <select v-model="form.updateMode">
+                <option value="direct">直连</option>
+                <option value="system">系统代理</option>
+                <option value="proxy">指定节点</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row" v-if="form.updateMode === 'proxy'">
+            <div class="form-group" style="flex:2;">
+              <label>更新代理节点：</label>
+              <select v-model="form.updateProxyId">
+                <option value="">选择节点/链式代理/负载均衡</option>
+                <optgroup label="节点" v-if="rulesStore.rules.length">
+                  <option v-for="r in rulesStore.rules" :key="r.id" :value="r.id">{{ r.alias }}</option>
+                </optgroup>
+                <optgroup label="链式代理" v-if="rulesStore.chainProxies.length">
+                  <option v-for="c in rulesStore.chainProxies" :key="c.id" :value="c.id">{{ c.alias }}</option>
+                </optgroup>
+                <optgroup label="负载均衡" v-if="rulesStore.loadBalancers.length">
+                  <option v-for="lb in rulesStore.loadBalancers" :key="lb.id" :value="lb.id">{{ lb.alias }}</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-group" style="display:flex;align-items:flex-end;">
+              <span class="update-hint">更新时将临时启动该节点建立代理，完成后自动关闭</span>
+            </div>
+          </div>
+          <div class="form-row">
             <div class="form-group" style="display:flex;align-items:flex-end;">
               <button class="btn-primary" @click="handleAdd" :disabled="adding">
                 {{ adding ? '添加中...' : '添加订阅' }}
@@ -85,6 +146,7 @@ import { ref, watch } from 'vue'
 import { useGroupsStore } from '../stores/groups.js'
 import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
+import * as api from '../api.js'
 
 const props = defineProps({ visible: Boolean })
 const emit = defineEmits(['close'])
@@ -96,12 +158,13 @@ const appStore = useAppStore()
 const updating = ref(null)
 const adding = ref(false)
 
-const defaultForm = () => ({ name: '', url: '', autoUpdate: true, updateInterval: 6 })
+const defaultForm = () => ({ name: '', url: '', autoUpdate: true, updateInterval: 6, updateMode: 'direct', updateProxyId: '' })
 const form = ref(defaultForm())
 
 watch(() => props.visible, (v) => {
   if (v) {
     groupsStore.loadSubscriptions()
+    rulesStore.loadRules()
   }
 })
 
@@ -109,10 +172,15 @@ async function handleAdd() {
   if (!form.value.name.trim()) { appStore.showToast('请输入订阅名称', 'warning'); return }
   if (!form.value.url.trim()) { appStore.showToast('请输入订阅地址', 'warning'); return }
   if (!form.value.updateInterval || form.value.updateInterval < 1) { appStore.showToast('请输入有效的更新间隔', 'warning'); return }
+  if (form.value.updateMode === 'proxy' && !form.value.updateProxyId) { appStore.showToast('请选择更新代理节点', 'warning'); return }
 
   adding.value = true
   try {
-    await groupsStore.addSubscription(form.value.name.trim(), form.value.url.trim(), form.value.autoUpdate, form.value.updateInterval)
+    await groupsStore.addSubscription(
+      form.value.name.trim(), form.value.url.trim(),
+      form.value.autoUpdate, form.value.updateInterval,
+      form.value.updateMode, form.value.updateProxyId
+    )
     await rulesStore.loadRules()
     form.value = defaultForm()
     appStore.showToast('订阅添加成功', 'success')
@@ -120,6 +188,17 @@ async function handleAdd() {
     appStore.showToast(`添加订阅失败: ${e}`, 'error')
   } finally {
     adding.value = false
+  }
+}
+
+async function handleModeChange(sub, mode, proxyId) {
+  // proxyId 为 null 表示只改模式，保留原有代理节点
+  const pid = proxyId === null ? (sub.updateProxyId || '') : proxyId
+  try {
+    await api.setSubscriptionUpdateMode(sub.id, mode, pid)
+    await groupsStore.loadSubscriptions()
+  } catch (e) {
+    appStore.showToast(`设置更新方式失败: ${e}`, 'error')
   }
 }
 
@@ -225,7 +304,8 @@ function close() { emit('close') }
   color: var(--text-secondary);
 }
 .form-group input[type="text"],
-.form-group input[type="number"] {
+.form-group input[type="number"],
+.form-group select {
   width: 100%;
   padding: 7px 10px;
   border: 1px solid var(--border-color);
@@ -234,6 +314,26 @@ function close() { emit('close') }
   background: var(--bg-primary);
   color: var(--text-primary);
   box-sizing: border-box;
+}
+
+.update-mode-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mode-select {
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  font-size: 11px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.update-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .btn-primary {

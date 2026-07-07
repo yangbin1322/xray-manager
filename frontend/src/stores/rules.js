@@ -15,6 +15,7 @@ export const useRulesStore = defineStore('rules', () => {
   const sortDirection = ref('asc')
   const loading = ref(false)
   const clipboard = ref([]) // 复制的节点数据
+  const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
   // === 合并所有节点（规则 + 负载均衡 + 链式代理） ===
   const allNodes = computed(() => {
@@ -176,6 +177,50 @@ export const useRulesStore = defineStore('rules', () => {
     }
   }
 
+  // 应用实时流量快照（trafficUpdate 事件）
+  function applyTrafficUpdate(snap) {
+    if (!snap || !snap.ruleId) return
+    traffic.value = { ...traffic.value, [snap.ruleId]: snap }
+  }
+
+  // 应用健康检查结果（healthCheckResult 事件）
+  function applyHealthCheckResult(result) {
+    if (!result || !result.ruleId) return
+    const idx = rules.value.findIndex(r => r.id === result.ruleId)
+    if (idx >= 0) {
+      rules.value[idx] = {
+        ...rules.value[idx],
+        healthStatus: result.status,
+        healthLatency: result.latency,
+        lastHealthCheck: result.timestamp,
+      }
+    }
+  }
+
+  async function checkSelectedHealth() {
+    const ids = selectedRuleIds.value.filter(id => rules.value.some(r => r.id === id))
+    if (ids.length === 0) return false
+    await api.checkSelectedNodesHealth(ids)
+    return true
+  }
+
+  async function checkAllHealth() {
+    await api.checkAllNodesHealth()
+  }
+
+  async function resetTraffic(ruleID = '') {
+    await api.resetRuleTraffic(ruleID)
+    if (ruleID) {
+      const snap = traffic.value[ruleID]
+      if (snap) {
+        traffic.value = { ...traffic.value, [ruleID]: { ...snap, todayUp: 0, todayDown: 0, totalUp: 0, totalDown: 0 } }
+      }
+    } else {
+      traffic.value = {}
+    }
+    await loadRules()
+  }
+
   function toggleSelect(id) {
     if (selectedIds.value.has(id)) {
       selectedIds.value.delete(id)
@@ -247,7 +292,7 @@ export const useRulesStore = defineStore('rules', () => {
     // State
     rules, loadBalancers, chainProxies,
     selectedIds, statusFilter, searchKeyword,
-    groupFilter, sortColumn, sortDirection, loading, clipboard,
+    groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
     filteredRules, selectedRuleIds, runningCount, totalCount,
     // Actions
@@ -256,5 +301,7 @@ export const useRulesStore = defineStore('rules', () => {
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, setSort,
     copySelected, pasteNodes,
+    applyTrafficUpdate, applyHealthCheckResult,
+    checkSelectedHealth, checkAllHealth, resetTraffic,
   }
 })

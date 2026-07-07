@@ -24,14 +24,7 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>本地代理类型：</label>
-              <select v-model="form.localType">
-                <option value="socks">socks</option>
-                <option value="http">http</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>本地代理端口：</label>
+              <label>本地代理端口（混合端口，同时支持 HTTP/SOCKS5）：</label>
               <input v-model.number="form.localPort" type="number" placeholder="1080" min="1" max="65535" />
             </div>
           </div>
@@ -81,7 +74,7 @@ const isEditing = computed(() => !!props.editingLB)
 
 const defaultForm = () => ({
   alias: '',
-  localType: 'socks',
+  localType: 'mixed',
   localPort: 0,
   groupId: '',
   nodeIds: [],
@@ -93,7 +86,7 @@ watch(() => props.visible, (v) => {
     if (props.editingLB) {
       form.value = {
         alias: props.editingLB.alias || '',
-        localType: props.editingLB.localType || 'socks',
+        localType: 'mixed',
         localPort: props.editingLB.localPort || 0,
         groupId: props.editingLB.groupId || '',
         nodeIds: props.editingLB.nodeIds ? [...props.editingLB.nodeIds] : [],

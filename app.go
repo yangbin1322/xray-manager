@@ -9,10 +9,12 @@ import (
 	"time"
 	"xray-manager/internal/config"
 	"xray-manager/internal/group"
+	"xray-manager/internal/healthcheck"
 	"xray-manager/internal/logger"
 	"xray-manager/internal/models"
 	"xray-manager/internal/parser"
 	"xray-manager/internal/process"
+	"xray-manager/internal/singbox"
 	"xray-manager/internal/speedtest"
 	"xray-manager/internal/subscription"
 	"xray-manager/internal/utils"
@@ -30,10 +32,13 @@ type MyService struct {
 	speedTestManager    *speedtest.Tester
 	subscriptionManager *subscription.Manager
 	groupManager        *group.Manager
+	healthCheckManager  *healthcheck.Manager
 	logFilter           *logger.Filter
 	sysProxyManager     *config.SysProxyManager
 	config              *models.Config
 	mu                  sync.RWMutex
+
+	trafficDirty bool // 流量统计有未保存的变更
 }
 
 func NewMyService() *MyService {
@@ -85,6 +90,27 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		},
 		a.handleSubscriptionUpdate,
 	)
+	// 订阅更新代理解析器（支持直连/系统代理/指定节点）
+	a.subscriptionManager.SetProxyResolver(a.resolveSubscriptionProxy)
+
+	// 流量统计回调
+	a.processManager.SetTrafficCallback(a.handleTraffic)
+
+	// 初始化健康检查管理器
+	a.healthCheckManager = healthcheck.NewManager(
+		func(message string) {
+			a.logFilter.AddLog(message)
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: message})
+		},
+		a.getRulesSnapshot,
+		a.handleHealthCheckResult,
+		func() {
+			a.mu.Lock()
+			_ = a.saveConfig()
+			a.mu.Unlock()
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckComplete"})
+		},
+	)
 
 	// 初始化系统代理管理器
 	a.sysProxyManager = config.NewSysProxyManager()
@@ -104,6 +130,17 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 	} else {
 		a.config = loadedConfig
 		a.log("配置加载成功")
+
+		// 迁移历史配置：本地代理类型统一为混合端口（同时支持 HTTP/SOCKS5）
+		for i := range a.config.Rules {
+			a.config.Rules[i].LocalType = "mixed"
+		}
+		for i := range a.config.LoadBalancers {
+			a.config.LoadBalancers[i].LocalType = "mixed"
+		}
+		for i := range a.config.ChainProxies {
+			a.config.ChainProxies[i].LocalType = "mixed"
+		}
 
 		// 初始化分组数据
 		if a.config.Groups == nil {
@@ -187,15 +224,45 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 保存自动启动后的状态
 		_ = a.saveConfig()
+
+		// 启动后台健康检查（按配置）
+		a.healthCheckManager.Configure(a.config.HealthCheck)
 	}
+
+	// 定期保存流量统计（避免每次流量更新都写盘）
+	go a.trafficSaveLoop(ctx)
 
 	a.log("Xray 管理器已启动")
 
 	return nil
 }
 
+// trafficSaveLoop 定期落盘流量统计
+func (a *MyService) trafficSaveLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.mu.Lock()
+			if a.trafficDirty {
+				_ = a.saveConfig()
+				a.trafficDirty = false
+			}
+			a.mu.Unlock()
+		}
+	}
+}
+
 // ServiceShutdown 在应用关闭时调用
 func (a *MyService) ServiceShutdown() error {
+	// 停止健康检查
+	if a.healthCheckManager != nil {
+		a.healthCheckManager.Stop()
+	}
+
 	// 先保存配置（保留 Enabled 状态，以便下次启动时恢复）
 	if err := a.saveConfig(); err != nil {
 		a.logError("保存配置失败", err)
@@ -478,8 +545,11 @@ func (a *MyService) log(message string) {
 }
 
 // ExportConfig 导出配置（标准格式，包含版本信息）
-// ruleIds 为空时导出全部规则，非空时仅导出选中的规则
-func (a *MyService) ExportConfig(ruleIds []string) (string, error) {
+// ruleIds 为空时导出全部规则，非空时仅导出选中的规则及其关联项：
+//   - 仅当链式代理/负载均衡的全部成员节点都被选中时才导出该链式代理/负载均衡
+//   - 仅导出被导出内容引用到的分组
+//   - includeSubscriptions 控制是否导出订阅及订阅分组；不导出时订阅节点转为手动节点
+func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (string, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -501,58 +571,171 @@ func (a *MyService) ExportConfig(ruleIds []string) (string, error) {
 		return "", fmt.Errorf("用户取消操作")
 	}
 
-	// 构建标准导出数据（清除运行时状态）
-	var sourceRules []models.ProxyRule
-	if len(ruleIds) > 0 {
-		// 仅导出选中的规则
-		idSet := make(map[string]bool, len(ruleIds))
-		for _, id := range ruleIds {
-			idSet[id] = true
+	exportAll := len(ruleIds) == 0
+
+	// 选中的规则集合
+	selectedIDs := make(map[string]bool, len(ruleIds))
+	for _, id := range ruleIds {
+		selectedIDs[id] = true
+	}
+
+	var exportRules []models.ProxyRule
+	for _, r := range a.config.Rules {
+		if exportAll || selectedIDs[r.ID] {
+			exportRules = append(exportRules, r)
 		}
-		for _, r := range a.config.Rules {
-			if idSet[r.ID] {
-				sourceRules = append(sourceRules, r)
+	}
+
+	exportedRuleIDs := make(map[string]bool, len(exportRules))
+	for _, r := range exportRules {
+		exportedRuleIDs[r.ID] = true
+	}
+
+	// 负载均衡：全部成员节点都被导出时才导出
+	var exportLBs []models.LoadBalanceNode
+	exportedLBIDs := make(map[string]bool)
+	for _, lb := range a.config.LoadBalancers {
+		if !exportAll {
+			if len(lb.NodeIDs) == 0 {
+				continue
+			}
+			allIncluded := true
+			for _, nodeID := range lb.NodeIDs {
+				if !exportedRuleIDs[nodeID] {
+					allIncluded = false
+					break
+				}
+			}
+			if !allIncluded {
+				continue
 			}
 		}
-	} else {
-		// 导出全部规则
-		sourceRules = a.config.Rules
+		exportLBs = append(exportLBs, lb)
+		exportedLBIDs[lb.ID] = true
 	}
 
-	exportRules := make([]models.ProxyRule, len(sourceRules))
-	copy(exportRules, sourceRules)
-	for i := range exportRules {
-		exportRules[i].Enabled = false
-		exportRules[i].ProcessID = 0
-		exportRules[i].RealIP = ""
-		exportRules[i].TestStatus = ""
-		exportRules[i].Latency = 0
-		exportRules[i].DownloadSpeed = 0
-		exportRules[i].LastTestTime = ""
+	// 链式代理：全部成员（节点或已导出的负载均衡）都被导出时才导出
+	var exportChains []models.ChainProxy
+	for _, chain := range a.config.ChainProxies {
+		if !exportAll {
+			if len(chain.ChainNodes) == 0 {
+				continue
+			}
+			allIncluded := true
+			for _, nodeID := range chain.ChainNodes {
+				if !exportedRuleIDs[nodeID] && !exportedLBIDs[nodeID] {
+					allIncluded = false
+					break
+				}
+			}
+			if !allIncluded {
+				continue
+			}
+		}
+		exportChains = append(exportChains, chain)
 	}
 
-	exportLBs := make([]models.LoadBalanceNode, len(a.config.LoadBalancers))
-	copy(exportLBs, a.config.LoadBalancers)
-	for i := range exportLBs {
-		exportLBs[i].Enabled = false
-		exportLBs[i].ProcessID = 0
+	// 收集被引用的分组
+	referencedGroupIDs := make(map[string]bool)
+	for _, r := range exportRules {
+		if r.GroupID != "" {
+			referencedGroupIDs[r.GroupID] = true
+		}
+	}
+	for _, lb := range exportLBs {
+		if lb.GroupID != "" {
+			referencedGroupIDs[lb.GroupID] = true
+		}
+	}
+	for _, chain := range exportChains {
+		if chain.GroupID != "" {
+			referencedGroupIDs[chain.GroupID] = true
+		}
 	}
 
-	exportChains := make([]models.ChainProxy, len(a.config.ChainProxies))
-	copy(exportChains, a.config.ChainProxies)
-	for i := range exportChains {
-		exportChains[i].Enabled = false
-		exportChains[i].ProcessID = 0
+	// 分组：仅导出被引用的分组；订阅分组按 includeSubscriptions 决定
+	var exportGroups []models.Group
+	exportedGroupIDs := make(map[string]bool)
+	for _, grp := range a.config.Groups {
+		if !referencedGroupIDs[grp.ID] {
+			continue
+		}
+		if !includeSubscriptions && grp.Source == "subscription" {
+			continue
+		}
+		exportGroups = append(exportGroups, grp)
+		exportedGroupIDs[grp.ID] = true
+	}
+
+	// 订阅：仅在允许导出订阅时导出（且其分组已被导出）
+	var exportSubs []models.Subscription
+	if includeSubscriptions {
+		for _, sub := range a.config.Subscriptions {
+			if exportedGroupIDs[sub.GroupID] {
+				exportSubs = append(exportSubs, sub)
+			}
+		}
+	}
+
+	// 清理导出数据的运行时状态；分组未导出的节点清除分组引用
+	cleanRules := make([]models.ProxyRule, len(exportRules))
+	copy(cleanRules, exportRules)
+	for i := range cleanRules {
+		cleanRules[i].Enabled = false
+		cleanRules[i].ProcessID = 0
+		cleanRules[i].RealIP = ""
+		cleanRules[i].TestStatus = ""
+		cleanRules[i].Latency = 0
+		cleanRules[i].DownloadSpeed = 0
+		cleanRules[i].LastTestTime = ""
+		cleanRules[i].HealthStatus = ""
+		cleanRules[i].HealthLatency = 0
+		cleanRules[i].LastHealthCheck = ""
+		cleanRules[i].Traffic = models.TrafficStats{}
+		cleanRules[i].LastStartTime = ""
+		cleanRules[i].LastStopTime = ""
+
+		if !exportedGroupIDs[cleanRules[i].GroupID] {
+			cleanRules[i].GroupID = ""
+			cleanRules[i].GroupName = ""
+		}
+		// 不导出订阅时，订阅节点转为手动节点，保证导入后可独立管理
+		if !includeSubscriptions && cleanRules[i].Source == "subscription" {
+			cleanRules[i].Source = "manual"
+			cleanRules[i].SubscriptionURL = ""
+		}
+	}
+
+	cleanLBs := make([]models.LoadBalanceNode, len(exportLBs))
+	copy(cleanLBs, exportLBs)
+	for i := range cleanLBs {
+		cleanLBs[i].Enabled = false
+		cleanLBs[i].ProcessID = 0
+		if !exportedGroupIDs[cleanLBs[i].GroupID] {
+			cleanLBs[i].GroupID = ""
+			cleanLBs[i].GroupName = ""
+		}
+	}
+
+	cleanChains := make([]models.ChainProxy, len(exportChains))
+	copy(cleanChains, exportChains)
+	for i := range cleanChains {
+		cleanChains[i].Enabled = false
+		cleanChains[i].ProcessID = 0
+		if !exportedGroupIDs[cleanChains[i].GroupID] {
+			cleanChains[i].GroupID = ""
+			cleanChains[i].GroupName = ""
+		}
 	}
 
 	exportData := models.ExportData{
 		Version:       "1.0",
 		ExportTime:    time.Now().Format("2006-01-02 15:04:05"),
-		Rules:         exportRules,
-		Groups:        a.config.Groups,
-		Subscriptions: a.config.Subscriptions,
-		LoadBalancers: exportLBs,
-		ChainProxies:  exportChains,
+		Rules:         cleanRules,
+		Groups:        exportGroups,
+		Subscriptions: exportSubs,
+		LoadBalancers: cleanLBs,
+		ChainProxies:  cleanChains,
 	}
 
 	data, err := json.MarshalIndent(exportData, "", "  ")
@@ -564,7 +747,8 @@ func (a *MyService) ExportConfig(ruleIds []string) (string, error) {
 		return "", fmt.Errorf("写入导出文件失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个）", filePath, len(exportRules), len(a.config.Groups)))
+	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，负载均衡 %d 个，链式代理 %d 个，订阅 %d 个）",
+		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(exportSubs)))
 	return filePath, nil
 }
 
@@ -667,6 +851,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	}
 
 	// === 导入规则（含重复检测和校验） ===
+	ruleIDMap := make(map[string]string) // 旧规则ID -> 新规则ID（用于修复链式代理/负载均衡的成员引用）
 	for _, rule := range importedRules {
 		// 校验字段合法性
 		if err := rule.Validate(); err != nil {
@@ -679,6 +864,8 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		for j := range a.config.Rules {
 			if rule.IsDuplicateOf(&a.config.Rules[j]) {
 				isDuplicate = true
+				// 重复节点映射到现有规则，保证链式代理/负载均衡引用有效
+				ruleIDMap[rule.ID] = a.config.Rules[j].ID
 				result.RulesSkipped++
 				result.Warnings = append(result.Warnings, fmt.Sprintf("规则重复，跳过: %s (%s:%d)", rule.Alias, rule.ServerAddr, rule.ServerPort))
 				break
@@ -697,10 +884,16 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 					break
 				}
 			}
+		} else if rule.GroupID != "" {
+			// 分组未随导出文件提供，清除失效引用
+			rule.GroupID = ""
+			rule.GroupName = ""
 		}
 
 		// 重置运行时状态
+		oldRuleID := rule.ID
 		rule.ID = generateUniqueRuleID(a.config.Rules)
+		ruleIDMap[oldRuleID] = rule.ID
 		rule.Enabled = false
 		rule.ProcessID = 0
 		rule.RealIP = ""
@@ -715,13 +908,35 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	}
 
 	// === 导入负载均衡 ===
+	lbIDMap := make(map[string]string) // 旧负载均衡ID -> 新ID（链式代理可能引用负载均衡）
 	for _, lb := range importedLBs {
+		oldLBID := lb.ID
 		lb.ID = fmt.Sprintf("lb_%d", time.Now().UnixNano())
+		lbIDMap[oldLBID] = lb.ID
 		lb.Enabled = false
 		lb.ProcessID = 0
 		if newGID, ok := groupIDMap[lb.GroupID]; ok {
 			lb.GroupID = newGID
+		} else if lb.GroupID != "" {
+			lb.GroupID = ""
+			lb.GroupName = ""
 		}
+
+		// 将成员节点引用映射到导入后的新规则ID，丢弃无效引用
+		newNodeIDs := make([]string, 0, len(lb.NodeIDs))
+		for _, nodeID := range lb.NodeIDs {
+			if newID, ok := ruleIDMap[nodeID]; ok {
+				newNodeIDs = append(newNodeIDs, newID)
+			} else {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("负载均衡 %s 的成员节点未包含在导入数据中，已移除引用", lb.Alias))
+			}
+		}
+		if len(newNodeIDs) == 0 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("负载均衡 %s 没有有效的成员节点，跳过导入", lb.Alias))
+			continue
+		}
+		lb.NodeIDs = newNodeIDs
+
 		a.config.LoadBalancers = append(a.config.LoadBalancers, lb)
 		result.LBImported++
 		time.Sleep(time.Nanosecond)
@@ -734,7 +949,30 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		chain.ProcessID = 0
 		if newGID, ok := groupIDMap[chain.GroupID]; ok {
 			chain.GroupID = newGID
+		} else if chain.GroupID != "" {
+			chain.GroupID = ""
+			chain.GroupName = ""
 		}
+
+		// 链成员可能是普通节点或负载均衡，统一映射到新ID
+		newChainNodes := make([]string, 0, len(chain.ChainNodes))
+		missing := false
+		for _, nodeID := range chain.ChainNodes {
+			if newID, ok := ruleIDMap[nodeID]; ok {
+				newChainNodes = append(newChainNodes, newID)
+			} else if newID, ok := lbIDMap[nodeID]; ok {
+				newChainNodes = append(newChainNodes, newID)
+			} else {
+				missing = true
+			}
+		}
+		// 链式代理成员顺序敏感，缺失任一成员都会改变链路语义，直接跳过
+		if missing || len(newChainNodes) < 2 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("链式代理 %s 的成员节点不完整，跳过导入", chain.Alias))
+			continue
+		}
+		chain.ChainNodes = newChainNodes
+
 		a.config.ChainProxies = append(a.config.ChainProxies, chain)
 		result.ChainImported++
 		time.Sleep(time.Nanosecond)
@@ -897,10 +1135,8 @@ func (a *MyService) TestAllRulesSpeed() error {
 // ==================== 订阅相关 API ====================
 
 // AddSubscription 添加订阅
-func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInterval int) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
+// updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
+func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInterval int, updateMode string, updateProxyID string) error {
 	// 创建订阅对象
 	sub := &models.Subscription{
 		ID:             fmt.Sprintf("sub_%d", time.Now().UnixNano()),
@@ -909,6 +1145,8 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 		Enabled:        true,
 		AutoUpdate:     autoUpdate,
 		UpdateInterval: updateInterval,
+		UpdateMode:     updateMode,
+		UpdateProxyID:  updateProxyID,
 	}
 
 	// 为订阅创建分组
@@ -918,11 +1156,16 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 	}
 	sub.GroupID = group.ID
 
-	// 添加订阅并获取节点
+	// 添加订阅并获取节点。
+	// 注意：此处不能持有 a.mu 锁，订阅更新代理解析器需要读取配置（可能临时启动节点）。
 	rules, err := a.subscriptionManager.AddSubscription(sub)
 	if err != nil {
+		_ = a.groupManager.DeleteGroup(group.ID)
 		return err
 	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	// 添加节点到配置
 	for i := range rules {
@@ -952,29 +1195,40 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 
 // UpdateSubscriptionByID 更新指定订阅
 func (a *MyService) UpdateSubscriptionByID(subID string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// 查找订阅
-	var targetSub *models.Subscription
+	// 查找订阅（取副本，避免在持锁状态下进行网络请求导致界面卡死/死锁）
+	a.mu.RLock()
+	var subCopy models.Subscription
+	found := false
 	for i := range a.config.Subscriptions {
 		if a.config.Subscriptions[i].ID == subID {
-			targetSub = &a.config.Subscriptions[i]
+			subCopy = a.config.Subscriptions[i]
+			found = true
 			break
 		}
 	}
+	a.mu.RUnlock()
 
-	if targetSub == nil {
+	if !found {
 		return fmt.Errorf("订阅 %s 不存在", subID)
 	}
 
-	// 更新订阅
-	rules, err := a.subscriptionManager.UpdateSubscription(targetSub)
+	// 更新订阅（onUpdate 回调会自行加锁合并节点）
+	rules, err := a.subscriptionManager.UpdateSubscription(&subCopy)
 	if err != nil {
 		return err
 	}
 
-	a.log(fmt.Sprintf("订阅更新完成: %s，节点数: %d", targetSub.Name, len(rules)))
+	// 将更新后的订阅信息写回配置
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].ID == subID {
+			a.config.Subscriptions[i] = subCopy
+			break
+		}
+	}
+
+	a.log(fmt.Sprintf("订阅更新完成: %s，节点数: %d", subCopy.Name, len(rules)))
 	return a.saveConfig()
 }
 
@@ -1575,27 +1829,13 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 // startLoadBalancerInternal 启动负载均衡节点（内部方法，不加锁）
 func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error {
 	// 收集子节点
-	nodes := make([]*models.ProxyRule, 0)
-	for _, nodeID := range lb.NodeIDs {
-		for j := range a.config.Rules {
-			if a.config.Rules[j].ID == nodeID {
-				nodes = append(nodes, &a.config.Rules[j])
-				break
-			}
-		}
-	}
-
+	nodes := a.collectLBNodes(lb)
 	if len(nodes) == 0 {
 		return fmt.Errorf("未找到有效的子节点")
 	}
 
-	// 构建负载均衡配置
-	xrayConfig, err := xray.BuildLoadBalanceConfig(lb, nodes)
-	if err != nil {
-		return err
-	}
-
-	configJSON, err := xrayConfig.ToJSON()
+	// 构建负载均衡配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核）
+	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes)
 	if err != nil {
 		return err
 	}
@@ -1610,7 +1850,10 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 	}
 
 	// 使用 processManager 启动
-	if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
+		ConfigJSON: configJSON,
+		CoreType:   coreType,
+	}); err != nil {
 		return err
 	}
 
@@ -1781,13 +2024,8 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 		return err
 	}
 
-	// 构建链式代理配置
-	xrayConfig, err := xray.BuildChainConfig(chain.LocalType, chain.LocalPort, chainRules)
-	if err != nil {
-		return err
-	}
-
-	configJSON, err := xrayConfig.ToJSON()
+	// 构建链式代理配置（含 Hysteria2/TUIC 节点时自动切换 sing-box 内核）
+	configJSON, coreType, err := buildChainConfigJSON(chain.LocalPort, chainRules)
 	if err != nil {
 		return err
 	}
@@ -1801,7 +2039,10 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 		Protocol:  "vmess", // 占位
 	}
 
-	if err := a.processManager.StartWithConfig(tempRule, configJSON); err != nil {
+	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
+		ConfigJSON: configJSON,
+		CoreType:   coreType,
+	}); err != nil {
 		return err
 	}
 
@@ -1855,6 +2096,393 @@ func (a *MyService) StopChainProxy(id string) error {
 	}
 
 	return fmt.Errorf("链式代理不存在")
+}
+
+// ==================== 健康检查 API ====================
+
+// getRulesSnapshot 获取规则快照（供健康检查后台任务使用）
+func (a *MyService) getRulesSnapshot() []models.ProxyRule {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	rules := make([]models.ProxyRule, len(a.config.Rules))
+	copy(rules, a.config.Rules)
+	return rules
+}
+
+// handleHealthCheckResult 处理单个节点的健康检查结果
+func (a *MyService) handleHealthCheckResult(result models.HealthCheckResult) {
+	a.mu.Lock()
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == result.RuleID {
+			a.config.Rules[i].HealthStatus = result.Status
+			a.config.Rules[i].HealthLatency = result.Latency
+			a.config.Rules[i].LastHealthCheck = result.Timestamp
+			break
+		}
+	}
+	a.mu.Unlock()
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+}
+
+// GetHealthCheckConfig 获取健康检查配置
+func (a *MyService) GetHealthCheckConfig() models.HealthCheckConfig {
+	return a.healthCheckManager.GetConfig()
+}
+
+// SetHealthCheckConfig 更新健康检查配置
+func (a *MyService) SetHealthCheckConfig(cfg models.HealthCheckConfig) error {
+	a.healthCheckManager.Configure(cfg)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.config.HealthCheck = a.healthCheckManager.GetConfig()
+	return a.saveConfig()
+}
+
+// markRulesChecking 将指定节点标记为检测中并返回其快照
+func (a *MyService) markRulesChecking(ruleIDs []string) []models.ProxyRule {
+	idSet := make(map[string]bool, len(ruleIDs))
+	for _, id := range ruleIDs {
+		idSet[id] = true
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var rules []models.ProxyRule
+	for i := range a.config.Rules {
+		if len(ruleIDs) == 0 || idSet[a.config.Rules[i].ID] {
+			a.config.Rules[i].HealthStatus = "checking"
+			rules = append(rules, a.config.Rules[i])
+		}
+	}
+	return rules
+}
+
+// CheckNodeHealth 检测单个节点健康状态
+func (a *MyService) CheckNodeHealth(ruleID string) error {
+	return a.CheckSelectedNodesHealth([]string{ruleID})
+}
+
+// CheckSelectedNodesHealth 检测选中节点健康状态
+func (a *MyService) CheckSelectedNodesHealth(ruleIDs []string) error {
+	rules := a.markRulesChecking(ruleIDs)
+	if len(rules) == 0 {
+		return fmt.Errorf("未找到需要检测的节点")
+	}
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.log(fmt.Sprintf("[健康检查] 开始检测 %d 个节点", len(rules)))
+
+	go a.healthCheckManager.CheckRules(context.Background(), rules)
+	return nil
+}
+
+// CheckAllNodesHealth 检测全部节点健康状态
+func (a *MyService) CheckAllNodesHealth() error {
+	return a.CheckSelectedNodesHealth(nil)
+}
+
+// ==================== 流量统计 ====================
+
+// handleTraffic 处理进程管理器上报的流量增量
+func (a *MyService) handleTraffic(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) {
+	today := time.Now().Format("2006-01-02")
+	var snapshot *models.TrafficSnapshot
+
+	a.mu.Lock()
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if rule.ID != ruleID {
+			continue
+		}
+
+		// 跨天自动清零今日统计
+		if rule.Traffic.TodayDate != today {
+			rule.Traffic.TodayDate = today
+			rule.Traffic.TodayUp = 0
+			rule.Traffic.TodayDown = 0
+		}
+
+		rule.Traffic.TodayUp += deltaUp
+		rule.Traffic.TodayDown += deltaDown
+		rule.Traffic.TotalUp += deltaUp
+		rule.Traffic.TotalDown += deltaDown
+		a.trafficDirty = true
+
+		snapshot = &models.TrafficSnapshot{
+			RuleID:    ruleID,
+			UpSpeed:   upSpeed,
+			DownSpeed: downSpeed,
+			TodayUp:   rule.Traffic.TodayUp,
+			TodayDown: rule.Traffic.TodayDown,
+			TotalUp:   rule.Traffic.TotalUp,
+			TotalDown: rule.Traffic.TotalDown,
+		}
+		break
+	}
+	a.mu.Unlock()
+
+	// 非普通节点（如链式代理/负载均衡的临时规则）只推送速度
+	if snapshot == nil {
+		snapshot = &models.TrafficSnapshot{
+			RuleID:    ruleID,
+			UpSpeed:   upSpeed,
+			DownSpeed: downSpeed,
+		}
+	}
+
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "trafficUpdate", Data: snapshot})
+}
+
+// ResetRuleTraffic 清零节点流量统计（ruleID 为空时清零全部节点）
+func (a *MyService) ResetRuleTraffic(ruleID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	count := 0
+	for i := range a.config.Rules {
+		if ruleID == "" || a.config.Rules[i].ID == ruleID {
+			a.config.Rules[i].Traffic = models.TrafficStats{
+				TodayDate: time.Now().Format("2006-01-02"),
+			}
+			count++
+		}
+	}
+
+	if count == 0 {
+		return fmt.Errorf("节点 %s 不存在", ruleID)
+	}
+
+	a.log(fmt.Sprintf("[流量统计] 已清零 %d 个节点的流量统计", count))
+	return a.saveConfig()
+}
+
+// ==================== 订阅更新代理 ====================
+
+// SetSubscriptionUpdateMode 设置订阅的更新方式
+// mode: direct（直连）/ system（系统代理）/ proxy（指定节点，proxyID 为节点/链式代理/负载均衡的 ID）
+func (a *MyService) SetSubscriptionUpdateMode(subID, mode, proxyID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].ID == subID {
+			a.config.Subscriptions[i].UpdateMode = mode
+			a.config.Subscriptions[i].UpdateProxyID = proxyID
+			a.log(fmt.Sprintf("[订阅] %s 更新方式已设置为: %s", a.config.Subscriptions[i].Name, mode))
+			return a.saveConfig()
+		}
+	}
+
+	return fmt.Errorf("订阅不存在")
+}
+
+// resolveSubscriptionProxy 根据订阅的更新方式解析代理地址。
+// 返回代理 URL（空表示直连）和清理函数（用于关闭临时启动的代理进程）。
+// 注意：调用方不能持有 a.mu 锁。
+func (a *MyService) resolveSubscriptionProxy(sub *models.Subscription) (string, func(), error) {
+	switch sub.UpdateMode {
+	case "", "direct":
+		return "", nil, nil
+
+	case "system":
+		proxyURL := a.sysProxyManager.GetCurrentSystemProxy()
+		if proxyURL == "" {
+			a.log("[订阅] 未检测到系统代理，改为直连更新")
+		}
+		return proxyURL, nil, nil
+
+	case "proxy":
+		return a.resolveNodeProxy(sub.UpdateProxyID)
+	}
+
+	return "", nil, nil
+}
+
+// resolveNodeProxy 将节点/链式代理/负载均衡解析为可用的本地代理地址。
+// 如果目标已在运行则直接复用；否则在临时端口上启动，返回的清理函数负责关闭。
+func (a *MyService) resolveNodeProxy(proxyID string) (string, func(), error) {
+	a.mu.RLock()
+
+	// 普通节点
+	for i := range a.config.Rules {
+		rule := a.config.Rules[i]
+		if rule.ID != proxyID {
+			continue
+		}
+		a.mu.RUnlock()
+
+		if rule.Enabled && a.processManager.IsRunning(rule.LocalPort) {
+			return fmt.Sprintf("socks5://127.0.0.1:%d", rule.LocalPort), nil, nil
+		}
+
+		// 临时启动该节点
+		tempPort := utils.FindAvailablePort(15800)
+		if tempPort == 0 {
+			return "", nil, fmt.Errorf("未找到可用的临时端口")
+		}
+		tempRule := rule
+		tempRule.LocalPort = tempPort
+		tempRule.LocalType = "mixed"
+		tempRule.Alias = fmt.Sprintf("订阅更新临时代理(%s)", rule.Alias)
+
+		if err := a.processManager.Start(&tempRule); err != nil {
+			return "", nil, fmt.Errorf("临时启动节点 %s 失败: %v", rule.Alias, err)
+		}
+		// 等待内核就绪
+		time.Sleep(1 * time.Second)
+
+		cleanup := func() {
+			_ = a.processManager.Stop(tempPort)
+			a.log(fmt.Sprintf("[订阅] 临时代理已关闭 (端口:%d)", tempPort))
+		}
+		return fmt.Sprintf("socks5://127.0.0.1:%d", tempPort), cleanup, nil
+	}
+
+	// 链式代理
+	for i := range a.config.ChainProxies {
+		chain := a.config.ChainProxies[i]
+		if chain.ID != proxyID {
+			continue
+		}
+
+		if chain.Enabled && a.processManager.IsRunning(chain.LocalPort) {
+			a.mu.RUnlock()
+			return fmt.Sprintf("socks5://127.0.0.1:%d", chain.LocalPort), nil, nil
+		}
+
+		chainRules, err := a.resolveChainNodes(chain.ChainNodes)
+		if err != nil {
+			a.mu.RUnlock()
+			return "", nil, err
+		}
+		a.mu.RUnlock()
+
+		tempPort := utils.FindAvailablePort(15800)
+		configJSON, coreType, err := buildChainConfigJSON(tempPort, chainRules)
+		if err != nil {
+			return "", nil, err
+		}
+		return a.startTempProxy(fmt.Sprintf("订阅更新临时代理(%s)", chain.Alias), tempPort, configJSON, coreType)
+	}
+
+	// 负载均衡
+	for i := range a.config.LoadBalancers {
+		lb := a.config.LoadBalancers[i]
+		if lb.ID != proxyID {
+			continue
+		}
+
+		if lb.Enabled && a.processManager.IsRunning(lb.LocalPort) {
+			a.mu.RUnlock()
+			return fmt.Sprintf("socks5://127.0.0.1:%d", lb.LocalPort), nil, nil
+		}
+
+		nodes := a.collectLBNodes(&lb)
+		a.mu.RUnlock()
+		if len(nodes) == 0 {
+			return "", nil, fmt.Errorf("负载均衡 %s 没有可用的子节点", lb.Alias)
+		}
+
+		tempPort := utils.FindAvailablePort(15800)
+		configJSON, coreType, err := buildLoadBalanceConfigJSON(&lb, tempPort, nodes)
+		if err != nil {
+			return "", nil, err
+		}
+		return a.startTempProxy(fmt.Sprintf("订阅更新临时代理(%s)", lb.Alias), tempPort, configJSON, coreType)
+	}
+
+	a.mu.RUnlock()
+	return "", nil, fmt.Errorf("指定的代理节点不存在: %s", proxyID)
+}
+
+// startTempProxy 使用自定义配置启动临时代理进程
+func (a *MyService) startTempProxy(alias string, tempPort int, configJSON, coreType string) (string, func(), error) {
+	if tempPort == 0 {
+		return "", nil, fmt.Errorf("未找到可用的临时端口")
+	}
+
+	tempRule := &models.ProxyRule{
+		ID:        fmt.Sprintf("temp_%d", time.Now().UnixNano()),
+		Alias:     alias,
+		LocalType: "mixed",
+		LocalPort: tempPort,
+		Protocol:  "vmess", // 占位，不影响实际配置
+	}
+
+	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
+		ConfigJSON: configJSON,
+		CoreType:   coreType,
+	}); err != nil {
+		return "", nil, fmt.Errorf("启动临时代理失败: %v", err)
+	}
+	time.Sleep(1 * time.Second)
+
+	cleanup := func() {
+		_ = a.processManager.Stop(tempPort)
+		a.log(fmt.Sprintf("[订阅] 临时代理已关闭 (端口:%d)", tempPort))
+	}
+	return fmt.Sprintf("socks5://127.0.0.1:%d", tempPort), cleanup, nil
+}
+
+// collectLBNodes 收集负载均衡的子节点（内部方法，需要已持有读锁）
+func (a *MyService) collectLBNodes(lb *models.LoadBalanceNode) []*models.ProxyRule {
+	nodes := make([]*models.ProxyRule, 0)
+	for _, nodeID := range lb.NodeIDs {
+		for j := range a.config.Rules {
+			if a.config.Rules[j].ID == nodeID {
+				nodes = append(nodes, &a.config.Rules[j])
+				break
+			}
+		}
+	}
+	return nodes
+}
+
+// ==================== 多内核配置构建 ====================
+
+// buildChainConfigJSON 构建链式代理配置。
+// 链中包含 Hysteria2/TUIC 节点时使用 sing-box 内核，否则使用 xray。
+func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule) (string, string, error) {
+	if singbox.RulesNeedSingBox(chainRules) {
+		cfg, err := singbox.BuildChainConfig(localPort, chainRules)
+		if err != nil {
+			return "", "", err
+		}
+		configJSON, err := cfg.ToJSON()
+		return configJSON, process.CoreSingBox, err
+	}
+
+	cfg, err := xray.BuildChainConfig("mixed", localPort, chainRules)
+	if err != nil {
+		return "", "", err
+	}
+	configJSON, err := cfg.ToJSON()
+	return configJSON, process.CoreXray, err
+}
+
+// buildLoadBalanceConfigJSON 构建负载均衡配置。
+// 子节点包含 Hysteria2/TUIC 时使用 sing-box 内核，否则使用 xray。
+func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule) (string, string, error) {
+	if singbox.RulesNeedSingBox(nodes) {
+		cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes)
+		if err != nil {
+			return "", "", err
+		}
+		configJSON, err := cfg.ToJSON()
+		return configJSON, process.CoreSingBox, err
+	}
+
+	lbCopy := *lb
+	lbCopy.LocalPort = localPort
+	cfg, err := xray.BuildLoadBalanceConfig(&lbCopy, nodes)
+	if err != nil {
+		return "", "", err
+	}
+	configJSON, err := cfg.ToJSON()
+	return configJSON, process.CoreXray, err
 }
 
 // resolveChainNodes 解析链中的节点（支持负载均衡节点）
