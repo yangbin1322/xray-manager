@@ -907,8 +907,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 	cleanLBs := make([]models.LoadBalanceNode, len(exportLBs))
 	copy(cleanLBs, exportLBs)
 	for i := range cleanLBs {
-		cleanLBs[i].Enabled = false
-		cleanLBs[i].ProcessID = 0
+		cleanLBs[i].ResetRuntimeState()
 		if !exportedGroupIDs[cleanLBs[i].GroupID] {
 			cleanLBs[i].GroupID = ""
 			cleanLBs[i].GroupName = ""
@@ -918,8 +917,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 	cleanChains := make([]models.ChainProxy, len(exportChains))
 	copy(cleanChains, exportChains)
 	for i := range cleanChains {
-		cleanChains[i].Enabled = false
-		cleanChains[i].ProcessID = 0
+		cleanChains[i].ResetRuntimeState()
 		if !exportedGroupIDs[cleanChains[i].GroupID] {
 			cleanChains[i].GroupID = ""
 			cleanChains[i].GroupName = ""
@@ -1111,8 +1109,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		oldLBID := lb.ID
 		lb.ID = fmt.Sprintf("lb_%d", time.Now().UnixNano())
 		lbIDMap[oldLBID] = lb.ID
-		lb.Enabled = false
-		lb.ProcessID = 0
+		lb.ResetRuntimeState() // 清除导入文件中可能残留的运行时状态
 		if newGID, ok := groupIDMap[lb.GroupID]; ok {
 			lb.GroupID = newGID
 		} else if lb.GroupID != "" {
@@ -1143,8 +1140,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	// === 导入链式代理 ===
 	for _, chain := range importedChains {
 		chain.ID = fmt.Sprintf("chain_%d", time.Now().UnixNano())
-		chain.Enabled = false
-		chain.ProcessID = 0
+		chain.ResetRuntimeState() // 清除导入文件中可能残留的运行时状态
 		if newGID, ok := groupIDMap[chain.GroupID]; ok {
 			chain.GroupID = newGID
 		} else if chain.GroupID != "" {

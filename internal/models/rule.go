@@ -17,10 +17,10 @@ type ProxyRule struct {
 	ProcessID  int           `json:"processId"`  // 进程ID
 
 	// 测速相关字段
-	Latency      int    `json:"latency"`      // TCP 延迟（毫秒）
+	Latency       int     `json:"latency"`       // TCP 延迟（毫秒）
 	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）
-	LastTestTime string `json:"lastTestTime"` // 最后测速时间
-	TestStatus   string `json:"testStatus"`   // 测速状态: idle, testing, success, failed
+	LastTestTime  string  `json:"lastTestTime"`  // 最后测速时间
+	TestStatus    string  `json:"testStatus"`    // 测速状态: idle, testing, success, failed
 
 	// 健康检查相关字段
 	HealthStatus    string `json:"healthStatus"`    // 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed
@@ -33,10 +33,10 @@ type ProxyRule struct {
 	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
 
 	// 分组相关字段
-	GroupID      string `json:"groupId"`      // 所属分组ID
-	GroupName    string `json:"groupName"`    // 所属分组名称
+	GroupID         string `json:"groupId"`                   // 所属分组ID
+	GroupName       string `json:"groupName"`                 // 所属分组名称
 	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
-	Source       string `json:"source"`       // 来源: manual（手动添加）, subscription（订阅导入）
+	Source          string `json:"source"`                    // 来源: manual（手动添加）, subscription（订阅导入）
 }
 
 // TrafficStats 节点流量统计（字节）
@@ -200,13 +200,13 @@ type H2Settings struct {
 
 // Config 配置文件结构
 type Config struct {
-	AutoStart      bool              `json:"autoStart"`      // 开机自启
-	Rules          []ProxyRule       `json:"rules"`          // 代理规则列表
-	Groups         []Group           `json:"groups"`         // 分组列表
-	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
-	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 故障转移节点列表
-	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
-	HealthCheck    HealthCheckConfig `json:"healthCheck"`    // 健康检查配置
+	AutoStart     bool              `json:"autoStart"`     // 开机自启
+	Rules         []ProxyRule       `json:"rules"`         // 代理规则列表
+	Groups        []Group           `json:"groups"`        // 分组列表
+	Subscriptions []Subscription    `json:"subscriptions"` // 订阅列表
+	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
+	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
+	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
 }
 
 // ExportData 导出数据结构（包含版本信息）
@@ -222,15 +222,15 @@ type ExportData struct {
 
 // ImportResult 导入结果
 type ImportResult struct {
-	Success       bool     `json:"success"`
-	RulesImported int      `json:"rulesImported"` // 导入的规则数
-	RulesSkipped  int      `json:"rulesSkipped"`  // 跳过的重复规则数
-	GroupsImported int     `json:"groupsImported"`
-	SubsImported  int      `json:"subsImported"`
-	ChainImported int      `json:"chainImported"`
-	LBImported    int      `json:"lbImported"`
-	Errors        []string `json:"errors"`        // 错误信息列表
-	Warnings      []string `json:"warnings"`      // 警告信息列表
+	Success        bool     `json:"success"`
+	RulesImported  int      `json:"rulesImported"` // 导入的规则数
+	RulesSkipped   int      `json:"rulesSkipped"`  // 跳过的重复规则数
+	GroupsImported int      `json:"groupsImported"`
+	SubsImported   int      `json:"subsImported"`
+	ChainImported  int      `json:"chainImported"`
+	LBImported     int      `json:"lbImported"`
+	Errors         []string `json:"errors"`   // 错误信息列表
+	Warnings       []string `json:"warnings"` // 警告信息列表
 }
 
 // ImportShareResult 批量导入分享链接结果
@@ -242,29 +242,29 @@ type ImportShareResult struct {
 
 // Group 节点分组
 type Group struct {
-	ID           string `json:"id"`           // 分组ID
-	Name         string `json:"name"`         // 分组名称
-	Description  string `json:"description"`  // 分组描述
-	Source       string `json:"source"`       // 来源: manual, subscription
+	ID             string `json:"id"`                       // 分组ID
+	Name           string `json:"name"`                     // 分组名称
+	Description    string `json:"description"`              // 分组描述
+	Source         string `json:"source"`                   // 来源: manual, subscription
 	SubscriptionID string `json:"subscriptionId,omitempty"` // 关联的订阅ID（如果来自订阅）
-	CreatedAt    string `json:"createdAt"`    // 创建时间
+	CreatedAt      string `json:"createdAt"`                // 创建时间
 }
 
 // Subscription 订阅配置
 type Subscription struct {
-	ID          string `json:"id"`          // 订阅ID
-	Name        string `json:"name"`        // 订阅名称
-	URL         string `json:"url"`         // 订阅链接
-	Type        string `json:"type"`        // 订阅类型: clash, v2ray, sip008, base64
-	GroupID     string `json:"groupId"`     // 关联的分组ID
-	Enabled     bool   `json:"enabled"`     // 是否启用
-	AutoUpdate  bool   `json:"autoUpdate"`  // 是否自动更新
-	UpdateInterval int `json:"updateInterval"` // 更新间隔（小时）
-	LastUpdate  string `json:"lastUpdate"`  // 最后更新时间
-	NextUpdate  string `json:"nextUpdate"`  // 下次更新时间
-	NodeCount   int    `json:"nodeCount"`   // 节点数量
-	UpdateMode  string `json:"updateMode"`  // 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/故障转移）
-	UpdateProxyID string `json:"updateProxyId,omitempty"` // UpdateMode 为 proxy 时使用的节点/链式代理/故障转移 ID
+	ID             string `json:"id"`                      // 订阅ID
+	Name           string `json:"name"`                    // 订阅名称
+	URL            string `json:"url"`                     // 订阅链接
+	Type           string `json:"type"`                    // 订阅类型: clash, v2ray, sip008, base64
+	GroupID        string `json:"groupId"`                 // 关联的分组ID
+	Enabled        bool   `json:"enabled"`                 // 是否启用
+	AutoUpdate     bool   `json:"autoUpdate"`              // 是否自动更新
+	UpdateInterval int    `json:"updateInterval"`          // 更新间隔（小时）
+	LastUpdate     string `json:"lastUpdate"`              // 最后更新时间
+	NextUpdate     string `json:"nextUpdate"`              // 下次更新时间
+	NodeCount      int    `json:"nodeCount"`               // 节点数量
+	UpdateMode     string `json:"updateMode"`              // 更新方式: direct（直连，默认）, system（系统代理）, proxy（指定节点/链式/故障转移）
+	UpdateProxyID  string `json:"updateProxyId,omitempty"` // UpdateMode 为 proxy 时使用的节点/链式代理/故障转移 ID
 }
 
 // SpeedTestResult 测速结果
@@ -306,6 +306,23 @@ type LoadBalanceNode struct {
 	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
 }
 
+// ResetRuntimeState 清除运行时状态（启用/进程/测速/健康/流量），
+// 用于导出和导入，避免运行时数据污染配置文件。
+func (lb *LoadBalanceNode) ResetRuntimeState() {
+	lb.Enabled = false
+	lb.ProcessID = 0
+	lb.Latency = 0
+	lb.DownloadSpeed = 0
+	lb.TestStatus = ""
+	lb.LastTestTime = ""
+	lb.HealthStatus = ""
+	lb.HealthLatency = 0
+	lb.LastHealthCheck = ""
+	lb.Traffic = TrafficStats{}
+	lb.LastStartTime = ""
+	lb.LastStopTime = ""
+}
+
 // ChainProxy 链式代理配置
 type ChainProxy struct {
 	ID         string   `json:"id"`         // 唯一标识
@@ -333,4 +350,21 @@ type ChainProxy struct {
 	Traffic       TrafficStats `json:"traffic"`       // 累计流量统计
 	LastStartTime string       `json:"lastStartTime"` // 最近启动时间
 	LastStopTime  string       `json:"lastStopTime"`  // 最近停止时间
+}
+
+// ResetRuntimeState 清除运行时状态（启用/进程/测速/健康/流量），
+// 用于导出和导入，避免运行时数据污染配置文件。
+func (c *ChainProxy) ResetRuntimeState() {
+	c.Enabled = false
+	c.ProcessID = 0
+	c.Latency = 0
+	c.DownloadSpeed = 0
+	c.TestStatus = ""
+	c.LastTestTime = ""
+	c.HealthStatus = ""
+	c.HealthLatency = 0
+	c.LastHealthCheck = ""
+	c.Traffic = TrafficStats{}
+	c.LastStartTime = ""
+	c.LastStopTime = ""
 }
