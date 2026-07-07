@@ -2,12 +2,17 @@ name: Build Wails App
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'feat/**' ]
+    tags: [ 'v*' ]
   pull_request:
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.24.0"
 
 jobs:
   build-windows:
-    name: Build Windows
+    name: Build Windows (amd64)
     runs-on: windows-latest
 
     steps:
@@ -15,9 +20,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
@@ -31,8 +41,44 @@ jobs:
           name: xray-manager-windows-amd64
           path: bin/xray-manager.exe
 
+  build-linux:
+    name: Build Linux (amd64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Wails v3 (GTK/WebKit) 构建所需系统依赖
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev build-essential pkg-config
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Build Linux
+        run: wails3 task linux:build PRODUCTION=true
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-manager-linux-amd64
+          path: bin/xray-manager
+
   build-macos:
-    name: Build macOS ARM64
+    name: Build macOS (arm64)
     runs-on: macos-latest
 
     steps:
@@ -40,17 +86,24 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
+      # 内置的 darwin 内核为 arm64；macos-latest 是 Apple Silicon，
+      # 默认构建即 arm64，与内置内核匹配
       - name: Build macOS ARM64
-        run: |
-          export CGO_ENABLED=1
-          wails3 task darwin:package
+        env:
+          CGO_ENABLED: "1"
+        run: wails3 task darwin:package
 
       - name: Create DMG
         run: |
