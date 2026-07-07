@@ -93,6 +93,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 内置 6 个内核二进制体积较大，构建 + DMG 打包会占用较多磁盘，
+      # 清理 runner 上用不到的预装内容，避免 "No space left on device"
+      - name: Free up disk space
+        run: |
+          echo "清理前:"; df -h /
+          sudo rm -rf /Applications/Xcode_1[0-5]*.app || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* || true
+          echo "清理后:"; df -h /
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -117,6 +127,7 @@ jobs:
         run: |
           APP_NAME="xray-manager"
           DMG_NAME="${APP_NAME}-macos-arm64.dmg"
+          df -h /
           hdiutil create -volname "${APP_NAME}" \
             -srcfolder "bin/${APP_NAME}.app" \
             -ov -format UDZO \
