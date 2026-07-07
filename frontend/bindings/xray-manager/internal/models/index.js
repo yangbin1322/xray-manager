@@ -7,10 +7,14 @@ export {
     GRPCSettings,
     Group,
     H2Settings,
+    HealthCheckConfig,
+    ImportResult,
+    ImportShareResult,
     LoadBalanceNode,
     ProxyRule,
     ProxySettings,
     Subscription,
     TLSSettings,
+    TrafficStats,
     WSSettings
 } from "./models.js";

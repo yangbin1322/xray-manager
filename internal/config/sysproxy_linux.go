@@ -2,7 +2,20 @@
 
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
+
+// platformGetCurrentProxy 读取环境变量中的代理设置
+func platformGetCurrentProxy() string {
+	for _, key := range []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"} {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // platformEnableProxy Linux 下暂不支持系统代理
 func platformEnableProxy(port int) error {

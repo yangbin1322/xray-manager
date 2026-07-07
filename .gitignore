@@ -5,6 +5,10 @@
 *.so
 *.dylib
 
+# 例外：internal/assets 下的内核二进制是需要 embed 打包的资源，必须纳入版本控制
+!internal/assets/xray/**
+!internal/assets/singbox/**
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -44,3 +48,9 @@ xray-bin/
 # Wails generated files
 wailsjs/
 frontend/wailsjs/
+
+# Build output (compiled binaries should not be committed)
+bin/
+
+# Taskfile checksum cache (local build state, not source)
+.task/

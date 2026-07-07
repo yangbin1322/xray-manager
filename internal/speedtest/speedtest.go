@@ -48,22 +48,41 @@ func (t *Tester) TestLatency(ctx context.Context, serverAddr string, serverPort 
 	return int(latency), nil
 }
 
-// TestDownloadSpeed 测试下载速度（通过代理）
+// 默认测速参数
+const (
+	// defaultMeasureWindow 测速采样时长：在此时间窗口内下载多少算多少，
+	// 这样慢速网络不会超时失败，快速网络样本也足够，测速时间可预期。
+	defaultMeasureWindow = 8 * time.Second
+	// 默认测速源：请求一个足够大的文件（95MB），让快速线路在采样窗口内也下不完。
+	// 慢速线路则在采样窗口到点后主动停止，用已下载的量计算速度。
+	// cloudflare的测速文件限制最大为99999999bytes
+	defaultTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
+)
+
+// TestDownloadSpeed 测试下载速度（通过代理，限时采样）
+// timeout 为整体上限；实际下载采样时长取 defaultMeasureWindow 与 timeout 中较小者。
 func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyPort int, testURL string, timeout time.Duration) (float64, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
 
+	// 采样窗口：不超过整体超时，也不超过默认窗口
+	measureWindow := defaultMeasureWindow
+	if timeout < measureWindow {
+		measureWindow = timeout
+	}
+
+	// 整体超时略大于采样窗口，为建立连接（尤其慢速网络首字节）留出余量
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 构建代理 URL
+	// 构建代理 URL（本地入站为混合端口，SOCKS5 始终可用）
 	var proxyURL *url.URL
 	var err error
-	if proxyType == "socks5" || proxyType == "socks" {
-		proxyURL, err = url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", proxyPort))
-	} else {
+	if proxyType == "http" {
 		proxyURL, err = url.Parse(fmt.Sprintf("http://127.0.0.1:%d", proxyPort))
+	} else {
+		proxyURL, err = url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", proxyPort))
 	}
 	if err != nil {
 		return 0, fmt.Errorf("构建代理 URL 失败: %v", err)
@@ -77,13 +96,10 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 		},
 	}
 
-	// 如果没有指定测试 URL，使用默认的
 	if testURL == "" {
-		// 使用 10MB 测试文件
-		testURL = "https://speed.cloudflare.com/__down?bytes=10000000"
+		testURL = defaultTestURL
 	}
 
-	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建请求失败: %v", err)
@@ -99,14 +115,38 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 		return 0, fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
 	}
 
-	// 读取响应体
-	written, err := io.Copy(io.Discard, resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("读取响应失败: %v", err)
+	// 限时采样：从首字节到达开始计时，读取 measureWindow 时长后主动停止
+	deadline := time.NewTimer(measureWindow)
+	defer deadline.Stop()
+
+	// 到达采样时限时关闭响应体，令 Read 立即返回，从而停止下载
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-deadline.C:
+			resp.Body.Close()
+		case <-stopped:
+		}
+	}()
+	defer close(stopped)
+
+	start := time.Now()
+	buf := make([]byte, 32*1024)
+	var written int64
+	for {
+		n, readErr := resp.Body.Read(buf)
+		written += int64(n)
+		if readErr != nil {
+			// io.EOF 表示文件下载完毕（快线路下小文件），采样窗口到点主动关闭也会走到这里
+			break
+		}
 	}
 
 	duration := time.Since(start).Seconds()
-	if duration == 0 {
+	if written == 0 {
+		return 0, fmt.Errorf("未下载到任何数据（可能连接失败或超时）")
+	}
+	if duration <= 0 {
 		return 0, fmt.Errorf("测速时间过短")
 	}
 
@@ -114,6 +154,75 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 	speedMBps := float64(written) / duration / 1024 / 1024
 
 	return speedMBps, nil
+}
+
+// TestProxyLatency 通过本地代理端口测延迟（HTTP 探测）。
+// 用于故障转移/链式代理这类没有单一服务器地址的组合节点：
+// 经代理请求一个轻量端点并计时，反映整条链路的往返延迟。
+func (t *Tester) TestProxyLatency(ctx context.Context, proxyPort int, timeout time.Duration) (int, error) {
+	if timeout == 0 {
+		timeout = 8 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", proxyPort))
+	if err != nil {
+		return 0, fmt.Errorf("构建代理 URL 失败: %v", err)
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+
+	// 轻量端点（204 无响应体），计时首字节到达
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://www.gstatic.com/generate_204", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("代理连通性测试失败: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	return int(time.Since(start).Milliseconds()), nil
+}
+
+// TestProxyEndpoint 测试一个已启动的本地代理端口（延迟 + 下载速度）。
+// 适用于故障转移/链式代理（proxyType 传 "mixed" 即可，内部走 SOCKS5）。
+func (t *Tester) TestProxyEndpoint(ctx context.Context, id, alias string, proxyPort int) models.SpeedTestResult {
+	result := models.SpeedTestResult{
+		RuleID:    id,
+		Timestamp: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	t.log(fmt.Sprintf("[测速] 开始测试: %s", alias))
+
+	latency, err := t.TestProxyLatency(ctx, proxyPort, 8*time.Second)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("延迟测试失败: %v", err)
+		t.log(fmt.Sprintf("[测速] %s - 延迟测试失败: %v", alias, err))
+		return result
+	}
+	result.Latency = latency
+	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms", alias, latency))
+
+	speed, err := t.TestDownloadSpeed(ctx, "mixed", proxyPort, "", 20*time.Second)
+	if err != nil {
+		result.Success = true
+		result.DownloadSpeed = 0
+		result.Error = fmt.Sprintf("速度测试失败: %v", err)
+		t.log(fmt.Sprintf("[测速] %s - 速度测试失败: %v", alias, err))
+		return result
+	}
+	result.DownloadSpeed = speed
+	result.Success = true
+	t.log(fmt.Sprintf("[测速] %s - 下载速度: %.2f MB/s", alias, speed))
+	return result
 }
 
 // TestRule 测试单个规则（包括延迟和下载速度）
@@ -144,8 +253,8 @@ func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.Sp
 		return result
 	}
 
-	// 测试下载速度
-	speed, err := t.TestDownloadSpeed(ctx, rule.LocalType, rule.LocalPort, "", 30*time.Second)
+	// 测试下载速度（限时采样，20 秒整体上限：为慢速网络建连留余量 + 12 秒采样窗口）
+	speed, err := t.TestDownloadSpeed(ctx, rule.LocalType, rule.LocalPort, "", 20*time.Second)
 	if err != nil {
 		// 延迟测试成功但速度测试失败，仍然算部分成功
 		result.Success = true

@@ -2,6 +2,7 @@ package process
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,13 +11,22 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"xray-manager/internal/assets"
 	"xray-manager/internal/models"
+	"xray-manager/internal/singbox"
+	"xray-manager/internal/utils"
 	"xray-manager/internal/xray"
+)
+
+// 内核类型
+const (
+	CoreXray    = "xray"
+	CoreSingBox = "singbox"
 )
 
 // Manager 进程管理器
@@ -26,6 +36,10 @@ type Manager struct {
 	logFunc   func(string) // 日志回调函数
 	configDir string       // 配置文件目录
 	loadRules func()       //前端重新加载规则
+
+	trafficFunc func(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) // 流量统计回调
+	pollerStop  chan struct{}
+	stopOnce    sync.Once // 确保 pollerStop 只关闭一次
 }
 
 // ProcessInfo 进程信息
@@ -35,6 +49,23 @@ type ProcessInfo struct {
 	ConfigPath string
 	Cancel     chan struct{}
 	cancelOnce sync.Once // 确保 Cancel channel 只关闭一次
+
+	CoreType   string // 内核类型: xray / singbox
+	CoreBinary string // 内核二进制路径（用于流量查询）
+	ApiPort    int    // 流量统计 API 端口，0 表示未启用
+
+	// 流量统计累计值（进程启动以来）
+	lastUp           int64
+	lastDown         int64
+	lastSample       time.Time
+	trafficErrLogged bool // 是否已记录过流量查询失败日志（避免刷屏）
+}
+
+// StartOptions 使用自定义配置启动的选项
+type StartOptions struct {
+	ConfigJSON string
+	CoreType   string // 内核类型，空默认 xray
+	ApiPort    int    // 流量统计 API 端口，0 表示未启用
 }
 
 // NewManager 创建进程管理器
@@ -54,12 +85,34 @@ func NewManager(logFunc func(string), loadRules func()) *Manager {
 		return nil
 	}
 
-	return &Manager{
-		processes: make(map[int]*ProcessInfo),
-		logFunc:   logFunc,
-		loadRules: loadRules,
-		configDir: configDir,
+	m := &Manager{
+		processes:  make(map[int]*ProcessInfo),
+		logFunc:    logFunc,
+		loadRules:  loadRules,
+		configDir:  configDir,
+		pollerStop: make(chan struct{}),
 	}
+
+	// 启动流量统计轮询
+	go m.pollTraffic()
+
+	return m
+}
+
+// SetTrafficCallback 设置流量统计回调
+func (m *Manager) SetTrafficCallback(fn func(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.trafficFunc = fn
+}
+
+// FindApiPort 为流量统计 API 查找可用端口（基于本地端口偏移，避免与代理端口冲突）
+func FindApiPort(localPort int) int {
+	start := localPort + 20000
+	if start >= 65000 || start <= 0 {
+		start = 20000
+	}
+	return utils.FindAvailablePort(start)
 }
 
 // Start 启动代理规则
@@ -67,40 +120,101 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 检查端口是否已被占用
+	// 检查端口是否已被本管理器占用
 	if existingProcess, exists := m.processes[rule.LocalPort]; exists {
 		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
 	}
 
-	// 生成 Xray 配置
-	xrayConfig, err := xray.BuildConfig(rule)
-	if err != nil {
-		return fmt.Errorf("生成 Xray 配置失败: %v", err)
+	// 根据协议选择内核并生成配置
+	apiPort := FindApiPort(rule.LocalPort)
+	var configJSON string
+	coreType := CoreXray
+
+	if singbox.NeedsSingBox(rule.Protocol) {
+		coreType = CoreSingBox
+		sbConfig, err := singbox.BuildConfig(rule)
+		if err != nil {
+			return fmt.Errorf("生成 sing-box 配置失败: %v", err)
+		}
+		if apiPort > 0 {
+			singbox.AddClashAPI(sbConfig, apiPort)
+		}
+		configJSON, err = sbConfig.ToJSON()
+		if err != nil {
+			return err
+		}
+	} else {
+		xrayConfig, err := xray.BuildConfig(rule)
+		if err != nil {
+			return fmt.Errorf("生成 Xray 配置失败: %v", err)
+		}
+		if apiPort > 0 {
+			xray.AddStatsAPI(xrayConfig, apiPort)
+		}
+		configJSON, err = xrayConfig.ToJSON()
+		if err != nil {
+			return fmt.Errorf("转换配置为 JSON 失败: %v", err)
+		}
 	}
 
-	// 将配置转换为 JSON
-	configJSON, err := xrayConfig.ToJSON()
-	if err != nil {
-		return fmt.Errorf("转换配置为 JSON 失败: %v", err)
+	return m.startProcessLocked(rule, StartOptions{
+		ConfigJSON: configJSON,
+		CoreType:   coreType,
+		ApiPort:    apiPort,
+	})
+}
+
+// StartWithConfig 使用自定义配置 JSON 启动进程（默认 xray 内核，不启用流量统计）
+func (m *Manager) StartWithConfig(rule *models.ProxyRule, configJSON string) error {
+	return m.StartWithOptions(rule, StartOptions{ConfigJSON: configJSON, CoreType: CoreXray})
+}
+
+// StartWithOptions 使用自定义配置和选项启动进程
+func (m *Manager) StartWithOptions(rule *models.ProxyRule, opts StartOptions) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existingProcess, exists := m.processes[rule.LocalPort]; exists {
+		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
+	}
+
+	return m.startProcessLocked(rule, opts)
+}
+
+// startProcessLocked 启动内核进程（内部方法，需要已持有锁）
+func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) error {
+	if opts.CoreType == "" {
+		opts.CoreType = CoreXray
+	}
+
+	// 启动前确保端口未被残留进程占用（残留的 xray/sing-box 直接终止，其他程序则报错）
+	if err := utils.EnsurePortFree(rule.LocalPort, m.log); err != nil {
+		return err
 	}
 
 	// 保存配置文件
 	configPath := filepath.Join(m.configDir, fmt.Sprintf("config_%d.json", rule.LocalPort))
-	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(opts.ConfigJSON), 0644); err != nil {
 		return fmt.Errorf("保存配置文件失败: %v", err)
 	}
 
-	m.log(fmt.Sprintf("[启动] %s - 端口:%d - 协议:%s", rule.Alias, rule.LocalPort, rule.Protocol))
+	m.log(fmt.Sprintf("[启动] %s - 端口:%d - 内核:%s", rule.Alias, rule.LocalPort, opts.CoreType))
 	m.log(fmt.Sprintf("[配置] 配置文件: %s", configPath))
 
-	// 提取 xray 二进制文件
-	xrayBinary, err := assets.ExtractXrayBinary()
+	// 获取内核二进制
+	var coreBinary string
+	var err error
+	if opts.CoreType == CoreSingBox {
+		coreBinary, err = assets.FindSingBoxBinary()
+	} else {
+		coreBinary, err = assets.ExtractXrayBinary()
+	}
 	if err != nil {
-		return fmt.Errorf("提取 xray 二进制文件失败: %v", err)
+		return err
 	}
 
-	// 创建命令 - 使用提取的 xray 二进制文件
-	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
+	// 创建命令（xray 和 sing-box 的启动参数一致: run -c config.json）
+	cmd := exec.Command(coreBinary, "run", "-c", configPath)
 
 	// Windows 平台特殊处理：创建新的进程组并隐藏控制台窗口
 	setPlatformSpecificAttrs(cmd)
@@ -118,7 +232,7 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 
 	// 启动进程
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 xray 进程失败: %v (请确保 xray 命令可用)", err)
+		return fmt.Errorf("启动 %s 进程失败: %v", opts.CoreType, err)
 	}
 
 	// 创建进程信息
@@ -127,11 +241,15 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 		Rule:       rule,
 		ConfigPath: configPath,
 		Cancel:     make(chan struct{}),
+		CoreType:   opts.CoreType,
+		CoreBinary: coreBinary,
+		ApiPort:    opts.ApiPort,
 	}
 
 	// 保存进程信息
 	m.processes[rule.LocalPort] = processInfo
 	rule.ProcessID = cmd.Process.Pid
+	rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
 
 	// 启动日志读取协程
 	go m.readLog(stdout, rule.Alias, "INFO", processInfo)
@@ -145,65 +263,6 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	return nil
 }
 
-// StartWithConfig 使用自定义配置 JSON 启动进程
-func (m *Manager) StartWithConfig(rule *models.ProxyRule, configJSON string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 检查端口是否已被占用
-	if existingProcess, exists := m.processes[rule.LocalPort]; exists {
-		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
-	}
-
-	// 保存配置文件
-	configPath := filepath.Join(m.configDir, fmt.Sprintf("config_%d.json", rule.LocalPort))
-	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
-		return fmt.Errorf("保存配置文件失败: %v", err)
-	}
-
-	m.log(fmt.Sprintf("[启动] %s - 端口:%d", rule.Alias, rule.LocalPort))
-
-	// 提取 xray 二进制文件
-	xrayBinary, err := assets.ExtractXrayBinary()
-	if err != nil {
-		return fmt.Errorf("提取 xray 二进制文件失败: %v", err)
-	}
-
-	cmd := exec.Command(xrayBinary, "run", "-c", configPath)
-	setPlatformSpecificAttrs(cmd)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("获取标准输出失败: %v", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("获取标准错误失败: %v", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 xray 进程失败: %v", err)
-	}
-
-	processInfo := &ProcessInfo{
-		Cmd:        cmd,
-		Rule:       rule,
-		ConfigPath: configPath,
-		Cancel:     make(chan struct{}),
-	}
-
-	m.processes[rule.LocalPort] = processInfo
-	rule.ProcessID = cmd.Process.Pid
-
-	go m.readLog(stdout, rule.Alias, "INFO", processInfo)
-	go m.readLog(stderr, rule.Alias, "ERROR", processInfo)
-
-	m.log(fmt.Sprintf("[成功] %s 已启动，PID: %d", rule.Alias, cmd.Process.Pid))
-
-	return nil
-}
-
 // Stop 停止代理规则
 func (m *Manager) Stop(localPort int) error {
 	m.mu.Lock()
@@ -211,8 +270,9 @@ func (m *Manager) Stop(localPort int) error {
 
 	processInfo, exists := m.processes[localPort]
 	if !exists {
-		// 进程不存在（可能已崩溃或被外部终止），不报错，直接认为已停止
-		m.log(fmt.Sprintf("[停止] 端口 %d 无对应进程，视为已停止", localPort))
+		// 进程不存在（可能已崩溃或被外部终止），检查端口上是否有残留内核进程
+		m.log(fmt.Sprintf("[停止] 端口 %d 无对应进程记录，检查残留进程", localPort))
+		utils.WaitPortReleased(localPort, 0, m.log)
 		return nil
 	}
 
@@ -220,7 +280,20 @@ func (m *Manager) Stop(localPort int) error {
 }
 
 // stopProcessLocked 停止进程（内部方法，需要已持有锁）
+// 从 map 中移除记录后，在锁内调用 terminateProcess 完成实际终止。
 func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) error {
+	delete(m.processes, localPort)
+	processInfo.Rule.ProcessID = 0
+	processInfo.Rule.RealIP = ""
+	processInfo.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+
+	m.terminateProcess(localPort, processInfo, true)
+	return nil
+}
+
+// terminateProcess 实际终止进程并清理（不涉及 m.processes，可在锁外并发调用）。
+// waitPort 为 true 时会确认端口释放（供单个停止后重启用）；关窗批量停止传 false 跳过等待。
+func (m *Manager) terminateProcess(localPort int, processInfo *ProcessInfo, waitPort bool) {
 	m.log(fmt.Sprintf("[停止] %s - 端口:%d", processInfo.Rule.Alias, localPort))
 
 	// 关闭日志读取协程 - 使用 sync.Once 确保只关闭一次
@@ -228,89 +301,14 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 		close(processInfo.Cancel)
 	})
 
-	// 终止进程
+	// 终止进程。
+	// Windows 上子进程不支持 os.Interrupt 优雅关闭（返回 "not supported"），
+	// 直接强制终止即可；Unix 上先 SIGTERM 优雅退出，超时再 SIGKILL。
 	if processInfo.Cmd.Process != nil {
-		killed := false
-
-		// 尝试优雅关闭（发送中断信号）
 		if runtime.GOOS == "windows" {
-			// Windows: 尝试发送 CTRL+BREAK 信号
-			m.log(fmt.Sprintf("[停止] 尝试发送中断信号到进程 %d", processInfo.Cmd.Process.Pid))
-			if err := processInfo.Cmd.Process.Signal(os.Interrupt); err != nil {
-				m.log(fmt.Sprintf("[警告] 发送中断信号失败: %v", err))
-			} else {
-				// 等待进程优雅退出
-				done := make(chan error, 1)
-				go func() {
-					done <- processInfo.Cmd.Wait()
-				}()
-				select {
-				case <-done:
-					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
-					killed = true
-				case <-time.After(3 * time.Second):
-					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
-				}
-			}
+			m.killWindows(processInfo)
 		} else {
-			// Linux/Mac: 发送 SIGTERM
-			if err := processInfo.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
-				m.log(fmt.Sprintf("[警告] 发送 SIGTERM 失败: %v", err))
-			} else {
-				// 等待进程优雅退出
-				done := make(chan error, 1)
-				go func() {
-					done <- processInfo.Cmd.Wait()
-				}()
-				select {
-				case <-done:
-					m.log(fmt.Sprintf("[成功] 进程 %d 已优雅退出", processInfo.Cmd.Process.Pid))
-					killed = true
-				case <-time.After(3 * time.Second):
-					m.log(fmt.Sprintf("[警告] 等待进程优雅退出超时，将强制终止"))
-				}
-			}
-		}
-
-		// 如果优雅关闭失败，尝试强制终止
-		if !killed {
-			m.log(fmt.Sprintf("[停止] 强制终止进程 %d", processInfo.Cmd.Process.Pid))
-
-			if runtime.GOOS == "windows" {
-				// Windows: 使用 taskkill 命令强制终止进程树
-				killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
-				// 隐藏 taskkill 的控制台窗口
-				hideConsoleWindow(killCmd) // 调用平台特定函数
-
-				if err := killCmd.Run(); err != nil {
-					m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
-					// 回退到 Kill()
-					if err := processInfo.Cmd.Process.Kill(); err != nil {
-						m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
-					}
-				} else {
-					m.log(fmt.Sprintf("[成功] 使用 taskkill 终止进程"))
-				}
-			} else {
-				// Linux/Mac: 发送 SIGKILL
-				if err := processInfo.Cmd.Process.Signal(syscall.SIGKILL); err != nil {
-					m.log(fmt.Sprintf("[警告] 发送 SIGKILL 失败: %v (进程可能已结束)", err))
-				} else {
-					m.log(fmt.Sprintf("[成功] 使用 SIGKILL 终止进程"))
-				}
-			}
-
-			// 等待进程结束（带超时）
-			done := make(chan error, 1)
-			go func() {
-				done <- processInfo.Cmd.Wait()
-			}()
-			select {
-			case <-done:
-				// 进程已结束
-			case <-time.After(2 * time.Second):
-				m.log(fmt.Sprintf("[警告] 等待进程强制终止超时"))
-			}
+			m.killUnix(processInfo)
 		}
 	}
 
@@ -319,14 +317,65 @@ func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) err
 		m.log(fmt.Sprintf("[警告] 删除配置文件失败: %v", err))
 	}
 
-	// 清理进程信息
-	delete(m.processes, localPort)
 	processInfo.Rule.ProcessID = 0
 	processInfo.Rule.RealIP = ""
 
-	m.log(fmt.Sprintf("[成功] %s 已停止", processInfo.Rule.Alias))
+	// 确认端口已释放（轻量探测），若仍被残留内核进程占用则强制终止
+	if waitPort {
+		utils.WaitPortReleased(localPort, 3*time.Second, m.log)
+	}
 
-	return nil
+	m.log(fmt.Sprintf("[成功] %s 已停止", processInfo.Rule.Alias))
+}
+
+// killWindows Windows 平台强制终止进程树
+func (m *Manager) killWindows(processInfo *ProcessInfo) {
+	pid := processInfo.Cmd.Process.Pid
+	killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
+	hideConsoleWindow(killCmd)
+
+	if err := killCmd.Run(); err != nil {
+		m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
+		if err := processInfo.Cmd.Process.Kill(); err != nil {
+			m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
+		}
+	}
+
+	// 回收进程，避免僵尸
+	done := make(chan error, 1)
+	go func() { done <- processInfo.Cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		m.log("[警告] 等待进程退出超时")
+	}
+}
+
+// killUnix Unix 平台优雅关闭，超时后强制终止
+func (m *Manager) killUnix(processInfo *ProcessInfo) {
+	proc := processInfo.Cmd.Process
+
+	done := make(chan error, 1)
+	go func() { done <- processInfo.Cmd.Wait() }()
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		m.log(fmt.Sprintf("[警告] 发送 SIGTERM 失败: %v", err))
+	} else {
+		select {
+		case <-done:
+			return
+		case <-time.After(3 * time.Second):
+			m.log("[警告] 等待进程优雅退出超时，将强制终止")
+		}
+	}
+
+	// 强制终止
+	_ = proc.Signal(syscall.SIGKILL)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		m.log("[警告] 等待进程强制终止超时")
+	}
 }
 
 // IsRunning 检查端口是否正在运行
@@ -371,22 +420,189 @@ func (m *Manager) isProcessAlive(processInfo *ProcessInfo) bool {
 	}
 }
 
-// StopAll 停止所有进程
+// StopAll 停止所有进程（并发执行，加速关窗/批量停止）
 func (m *Manager) StopAll() {
+	// 停止流量轮询，避免关窗时还在 fork statsquery 子进程
+	m.stopOnce.Do(func() { close(m.pollerStop) })
+
+	// 锁内摘出所有进程并清空 map，避免并发终止时的 map 竞争
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 创建副本以避免在迭代时修改 map
-	processesToStop := make(map[int]*ProcessInfo)
+	toStop := make(map[int]*ProcessInfo, len(m.processes))
 	for port, info := range m.processes {
-		processesToStop[port] = info
+		toStop[port] = info
+		info.Rule.ProcessID = 0
+		info.Rule.RealIP = ""
+		info.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	m.processes = make(map[int]*ProcessInfo)
+	m.mu.Unlock()
+
+	if len(toStop) == 0 {
+		return
 	}
 
-	for localPort, processInfo := range processesToStop {
-		_ = m.stopProcessLocked(localPort, processInfo)
+	// 锁外并发终止各进程（终止是慢操作，串行会导致关窗卡顿）。
+	// 关窗场景不等待端口释放（应用即将退出，无需为下次启动预留端口）。
+	var wg sync.WaitGroup
+	for localPort, processInfo := range toStop {
+		wg.Add(1)
+		go func(port int, info *ProcessInfo) {
+			defer wg.Done()
+			m.terminateProcess(port, info, false)
+		}(localPort, processInfo)
 	}
+	wg.Wait()
 
 	m.log("[系统] 所有进程已停止")
+}
+
+// ==================== 流量统计 ====================
+
+// pollTraffic 后台轮询各进程的流量统计
+func (m *Manager) pollTraffic() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.pollerStop:
+			return
+		case <-ticker.C:
+			m.mu.RLock()
+			cb := m.trafficFunc
+			infos := make([]*ProcessInfo, 0, len(m.processes))
+			for _, info := range m.processes {
+				if info.ApiPort > 0 {
+					infos = append(infos, info)
+				}
+			}
+			m.mu.RUnlock()
+
+			if cb == nil {
+				continue
+			}
+
+			for _, info := range infos {
+				up, down, err := queryTraffic(info)
+				if err != nil {
+					// 仅首次失败记录日志，避免每 3 秒刷屏
+					if !info.trafficErrLogged {
+						info.trafficErrLogged = true
+						m.log(fmt.Sprintf("[流量统计] %s 查询失败（后续不再重复提示）: %v", info.Rule.Alias, err))
+					}
+					continue
+				}
+				info.trafficErrLogged = false
+
+				now := time.Now()
+				elapsed := now.Sub(info.lastSample).Seconds()
+				if info.lastSample.IsZero() || elapsed <= 0 {
+					elapsed = 3
+				}
+
+				deltaUp := up - info.lastUp
+				deltaDown := down - info.lastDown
+				if deltaUp < 0 {
+					deltaUp = 0
+				}
+				if deltaDown < 0 {
+					deltaDown = 0
+				}
+
+				info.lastUp = up
+				info.lastDown = down
+				info.lastSample = now
+
+				cb(info.Rule.ID, deltaUp, deltaDown, float64(deltaUp)/elapsed, float64(deltaDown)/elapsed)
+			}
+		}
+	}
+}
+
+// queryTraffic 查询进程的累计流量（自进程启动以来，字节）
+func queryTraffic(info *ProcessInfo) (up int64, down int64, err error) {
+	if info.CoreType == CoreSingBox {
+		return querySingBoxTraffic(info.ApiPort)
+	}
+	return queryXrayTraffic(info.CoreBinary, info.ApiPort)
+}
+
+// queryXrayTraffic 通过 xray api statsquery 查询出站流量
+func queryXrayTraffic(xrayBinary string, apiPort int) (int64, int64, error) {
+	cmd := exec.Command(xrayBinary, "api", "statsquery", fmt.Sprintf("--server=127.0.0.1:%d", apiPort))
+	hideConsoleWindow(cmd)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var result struct {
+		Stat []struct {
+			Name  string      `json:"name"`
+			Value interface{} `json:"value"`
+		} `json:"stat"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return 0, 0, err
+	}
+
+	var up, down int64
+	for _, stat := range result.Stat {
+		// 格式: outbound>>>TAG>>>traffic>>>uplink
+		parts := strings.Split(stat.Name, ">>>")
+		if len(parts) != 4 || parts[0] != "outbound" {
+			continue
+		}
+		tag := parts[1]
+		if tag == "direct" || tag == "block" || tag == "api" {
+			continue
+		}
+		value := coerceInt64(stat.Value)
+		switch parts[3] {
+		case "uplink":
+			up += value
+		case "downlink":
+			down += value
+		}
+	}
+
+	return up, down, nil
+}
+
+// querySingBoxTraffic 通过 sing-box Clash API 查询累计流量
+func querySingBoxTraffic(apiPort int) (int64, int64, error) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/connections", apiPort))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		UploadTotal   int64 `json:"uploadTotal"`
+		DownloadTotal int64 `json:"downloadTotal"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, 0, err
+	}
+
+	return result.UploadTotal, result.DownloadTotal, nil
+}
+
+// coerceInt64 将 JSON 数值（可能是字符串或数字）转换为 int64
+func coerceInt64(v interface{}) int64 {
+	switch val := v.(type) {
+	case float64:
+		return int64(val)
+	case string:
+		n, _ := strconv.ParseInt(val, 10, 64)
+		return n
+	case json.Number:
+		n, _ := val.Int64()
+		return n
+	default:
+		return 0
+	}
 }
 
 // readLog 读取进程日志
@@ -429,14 +645,8 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		return
 	}
 
-	// 构建代理 URL
-	var proxyURL *url.URL
-	var err error
-	if rule.LocalType == "socks5" || rule.LocalType == "socks" {
-		proxyURL, err = url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", rule.LocalPort))
-	} else {
-		proxyURL, err = url.Parse(fmt.Sprintf("http://127.0.0.1:%d", rule.LocalPort))
-	}
+	// 构建代理 URL（本地入站为混合端口，SOCKS5 始终可用）
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", rule.LocalPort))
 	if err != nil {
 		m.log(fmt.Sprintf("[错误] %s 构建代理 URL 失败: %v", rule.Alias, err))
 		rule.RealIP = "获取失败"

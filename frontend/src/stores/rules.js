@@ -15,8 +15,9 @@ export const useRulesStore = defineStore('rules', () => {
   const sortDirection = ref('asc')
   const loading = ref(false)
   const clipboard = ref([]) // 复制的节点数据
+  const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
-  // === 合并所有节点（规则 + 负载均衡 + 链式代理） ===
+  // === 合并所有节点（规则 + 故障转移 + 链式代理） ===
   const allNodes = computed(() => {
     const ruleNodes = rules.value.map(r => ({ ...r, _nodeType: 'rule' }))
     const lbNodes = loadBalancers.value.map(lb => ({ ...lb, _nodeType: 'lb', protocol: 'loadbalance' }))
@@ -93,6 +94,11 @@ export const useRulesStore = defineStore('rules', () => {
     await loadRules()
   }
 
+  async function updateNodes(rules) {
+    await api.updateNodes(rules)
+    await loadRules()
+  }
+
   async function deleteRule(id) {
     await api.deleteRule(id)
     selectedIds.value.delete(id)
@@ -130,36 +136,27 @@ export const useRulesStore = defineStore('rules', () => {
   }
 
   async function startSelectedRules() {
-    for (const id of selectedRuleIds.value) {
+    // 只启动当前未运行的选中节点，交给后端并发处理、只保存一次配置
+    const ids = selectedRuleIds.value.filter(id => {
       const node = allNodes.value.find(n => n.id === id)
-      if (!node || node.enabled) continue
-      try {
-        if (node._nodeType === 'lb') {
-          await api.startLoadBalancer(id)
-        } else if (node._nodeType === 'chain') {
-          await api.startChainProxy(id)
-        } else {
-          await api.startRule(id)
-        }
-      } catch (e) { console.error(e) }
-    }
+      return node && !node.enabled
+    })
+    if (ids.length === 0) return
+    try {
+      await api.startNodes(ids)
+    } catch (e) { console.error(e) }
     await loadRules()
   }
 
   async function stopSelectedRules() {
-    for (const id of selectedRuleIds.value) {
+    const ids = selectedRuleIds.value.filter(id => {
       const node = allNodes.value.find(n => n.id === id)
-      if (!node || !node.enabled) continue
-      try {
-        if (node._nodeType === 'lb') {
-          await api.stopLoadBalancer(id)
-        } else if (node._nodeType === 'chain') {
-          await api.stopChainProxy(id)
-        } else {
-          await api.stopRule(id)
-        }
-      } catch (e) { console.error(e) }
-    }
+      return node && node.enabled
+    })
+    if (ids.length === 0) return
+    try {
+      await api.stopNodes(ids)
+    } catch (e) { console.error(e) }
     await loadRules()
   }
 
@@ -174,6 +171,55 @@ export const useRulesStore = defineStore('rules', () => {
     if (idx >= 0) {
       rules.value[idx] = { ...rules.value[idx], ...updatedRule }
     }
+  }
+
+  // 应用实时流量快照（trafficUpdate 事件）
+  function applyTrafficUpdate(snap) {
+    if (!snap || !snap.ruleId) return
+    traffic.value = { ...traffic.value, [snap.ruleId]: snap }
+  }
+
+  // 应用健康检查结果（healthCheckResult 事件）
+  function applyHealthCheckResult(result) {
+    if (!result || !result.ruleId) return
+    const patch = {
+      healthStatus: result.status,
+      healthLatency: result.latency,
+      lastHealthCheck: result.timestamp,
+    }
+    // 结果 ID 可能属于普通节点/故障转移/链式代理，逐个数组查找
+    for (const list of [rules, loadBalancers, chainProxies]) {
+      const idx = list.value.findIndex(r => r.id === result.ruleId)
+      if (idx >= 0) {
+        list.value[idx] = { ...list.value[idx], ...patch }
+        return
+      }
+    }
+  }
+
+  async function checkSelectedHealth() {
+    // 普通节点直连检测，已启动的故障转移/链式代理经代理端口检测
+    const ids = selectedRuleIds.value.filter(id => allNodes.value.some(n => n.id === id))
+    if (ids.length === 0) return false
+    await api.checkSelectedNodesHealth(ids)
+    return true
+  }
+
+  async function checkAllHealth() {
+    await api.checkAllNodesHealth()
+  }
+
+  async function resetTraffic(ruleID = '') {
+    await api.resetRuleTraffic(ruleID)
+    if (ruleID) {
+      const snap = traffic.value[ruleID]
+      if (snap) {
+        traffic.value = { ...traffic.value, [ruleID]: { ...snap, todayUp: 0, todayDown: 0, totalUp: 0, totalDown: 0 } }
+      }
+    } else {
+      traffic.value = {}
+    }
+    await loadRules()
   }
 
   function toggleSelect(id) {
@@ -247,14 +293,16 @@ export const useRulesStore = defineStore('rules', () => {
     // State
     rules, loadBalancers, chainProxies,
     selectedIds, statusFilter, searchKeyword,
-    groupFilter, sortColumn, sortDirection, loading, clipboard,
+    groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
     filteredRules, selectedRuleIds, runningCount, totalCount,
     // Actions
-    loadRules, addRule, updateRule, deleteRule,
+    loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, setSort,
     copySelected, pasteNodes,
+    applyTrafficUpdate, applyHealthCheckResult,
+    checkSelectedHealth, checkAllHealth, resetTraffic,
   }
 })

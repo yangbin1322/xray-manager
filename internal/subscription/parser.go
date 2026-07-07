@@ -11,9 +11,28 @@ import (
 	"strings"
 	"time"
 	"xray-manager/internal/models"
+	sharelink "xray-manager/internal/parser"
 
 	"gopkg.in/yaml.v3"
 )
+
+// parseClashBandwidth 解析 Clash Hysteria2 的带宽字段（可能是 int 或 "100 Mbps" 形式的字符串）
+func parseClashBandwidth(v interface{}) int {
+	switch val := v.(type) {
+	case int:
+		return val
+	case float64:
+		return int(val)
+	case string:
+		s := strings.TrimSpace(strings.ToLower(val))
+		s = strings.TrimSuffix(s, "mbps")
+		s = strings.TrimSpace(s)
+		if n, err := strconv.Atoi(s); err == nil {
+			return n
+		}
+	}
+	return 0
+}
 
 // Parser 订阅解析器
 type Parser struct {
@@ -27,13 +46,33 @@ func NewParser(logFunc func(string)) *Parser {
 	}
 }
 
-// FetchAndParse 获取并解析订阅
+// FetchAndParse 获取并解析订阅（直连）
 func (p *Parser) FetchAndParse(subscriptionURL string) ([]models.ProxyRule, string, error) {
-	p.log(fmt.Sprintf("[订阅] 正在获取订阅: %s", subscriptionURL))
+	return p.FetchAndParseWithProxy(subscriptionURL, "")
+}
+
+// FetchAndParseWithProxy 通过指定代理获取并解析订阅
+// proxyURL 支持 http:// 和 socks5:// 格式，为空时直连
+func (p *Parser) FetchAndParseWithProxy(subscriptionURL string, proxyURL string) ([]models.ProxyRule, string, error) {
+	if proxyURL != "" {
+		p.log(fmt.Sprintf("[订阅] 正在通过代理 %s 获取订阅: %s", proxyURL, subscriptionURL))
+	} else {
+		p.log(fmt.Sprintf("[订阅] 正在获取订阅: %s", subscriptionURL))
+	}
 
 	// 下载订阅内容
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+	}
+
+	if proxyURL != "" {
+		parsedProxy, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("代理地址无效: %v", err)
+		}
+		client.Transport = &http.Transport{
+			Proxy: http.ProxyURL(parsedProxy),
+		}
 	}
 
 	resp, err := client.Get(subscriptionURL)
@@ -194,6 +233,69 @@ func (p *Parser) parseClashProxy(proxy map[string]interface{}, index int) (model
 			rule.Settings.TrojanPassword = password
 		}
 
+	case "hysteria2":
+		rule.Protocol = "hysteria2"
+		if password, ok := proxy["password"].(string); ok {
+			rule.Settings.Hy2Password = password
+		}
+		if obfs, ok := proxy["obfs"].(string); ok && obfs != "" && obfs != "none" {
+			rule.Settings.Hy2Obfs = obfs
+			if obfsPassword, ok := proxy["obfs-password"].(string); ok {
+				rule.Settings.Hy2ObfsPassword = obfsPassword
+			}
+		}
+		rule.Settings.Hy2UpMbps = parseClashBandwidth(proxy["up"])
+		rule.Settings.Hy2DownMbps = parseClashBandwidth(proxy["down"])
+		// Hysteria2 强制 TLS
+		rule.Settings.Security = "tls"
+		rule.Settings.TLS = &models.TLSSettings{}
+		if sni, ok := proxy["sni"].(string); ok {
+			rule.Settings.TLS.ServerName = sni
+		}
+		if alpn, ok := proxy["alpn"].([]interface{}); ok {
+			for _, a := range alpn {
+				if s, ok := a.(string); ok {
+					rule.Settings.TLS.ALPN = append(rule.Settings.TLS.ALPN, s)
+				}
+			}
+		}
+		if skipCertVerify, ok := proxy["skip-cert-verify"].(bool); ok {
+			rule.Settings.TLS.AllowInsecure = skipCertVerify
+		}
+		return rule, nil
+
+	case "tuic":
+		rule.Protocol = "tuic"
+		if uuid, ok := proxy["uuid"].(string); ok {
+			rule.Settings.TUICUserID = uuid
+		}
+		if password, ok := proxy["password"].(string); ok {
+			rule.Settings.TUICPassword = password
+		}
+		if congestion, ok := proxy["congestion-controller"].(string); ok {
+			rule.Settings.TUICCongestion = congestion
+		}
+		if udpMode, ok := proxy["udp-relay-mode"].(string); ok {
+			rule.Settings.TUICUDPRelayMode = udpMode
+		}
+		// TUIC 强制 TLS
+		rule.Settings.Security = "tls"
+		rule.Settings.TLS = &models.TLSSettings{}
+		if sni, ok := proxy["sni"].(string); ok {
+			rule.Settings.TLS.ServerName = sni
+		}
+		if alpn, ok := proxy["alpn"].([]interface{}); ok {
+			for _, a := range alpn {
+				if s, ok := a.(string); ok {
+					rule.Settings.TLS.ALPN = append(rule.Settings.TLS.ALPN, s)
+				}
+			}
+		}
+		if skipCertVerify, ok := proxy["skip-cert-verify"].(bool); ok {
+			rule.Settings.TLS.AllowInsecure = skipCertVerify
+		}
+		return rule, nil
+
 	default:
 		return rule, fmt.Errorf("不支持的协议类型: %s", proxyType)
 	}
@@ -309,6 +411,15 @@ func (p *Parser) parseProxyURL(proxyURL string, index int) (models.ProxyRule, er
 		return p.parseSSURL(proxyURL, index)
 	} else if strings.HasPrefix(proxyURL, "trojan://") {
 		return p.parseTrojanURL(proxyURL, index)
+	} else if strings.HasPrefix(proxyURL, "hysteria2://") || strings.HasPrefix(proxyURL, "hy2://") ||
+		strings.HasPrefix(proxyURL, "tuic://") {
+		// 复用分享链接解析器（Hysteria2/TUIC）
+		rule, err := sharelink.NewShareLinkParser().ParseLink(proxyURL)
+		if err != nil {
+			return rule, err
+		}
+		rule.Source = "subscription"
+		return rule, nil
 	}
 
 	return rule, fmt.Errorf("不支持的协议: %s", proxyURL[:10])

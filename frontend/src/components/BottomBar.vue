@@ -9,8 +9,33 @@
     <div class="bar-right">
       <button class="btn-action" @click="showBatchImport = true">批量导入</button>
       <button class="btn-action" @click="appStore.doImportConfig().then(handleImportDone)">导入规则</button>
-      <button class="btn-action" @click="handleExport">导出规则</button>
+      <button class="btn-action" @click="showExportDialog = true">导出规则</button>
       <button class="btn-primary" @click="$emit('addRule')">添加规则</button>
+    </div>
+
+    <!-- 导出选项对话框 -->
+    <div v-if="showExportDialog" class="dialog-overlay" @click.self="showExportDialog = false">
+      <div class="dialog">
+        <div class="dialog-header">
+          <h3>导出规则</h3>
+          <button class="dialog-close" @click="showExportDialog = false">&times;</button>
+        </div>
+        <div class="dialog-body">
+          <p class="import-hint">
+            {{ selectedCount > 0
+              ? `将导出选中的 ${selectedCount} 个节点，并自动包含其完整所属的链式代理、故障转移及相关分组。`
+              : '未选中任何节点，将导出全部节点与配置。' }}
+          </p>
+          <label class="export-check">
+            <input type="checkbox" v-model="includeSubscriptions" />
+            同时导出订阅及订阅分组（默认不导出，导出的订阅节点将转为手动节点）
+          </label>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-secondary" @click="showExportDialog = false">取消</button>
+          <button class="btn-primary" @click="handleExport">导出</button>
+        </div>
+      </div>
     </div>
 
     <!-- 批量导入对话框 -->
@@ -21,7 +46,7 @@
           <button class="dialog-close" @click="showBatchImport = false">&times;</button>
         </div>
         <div class="dialog-body">
-          <p class="import-hint">支持 vmess:// / vless:// / ss:// / trojan:// 链接，每行一个</p>
+          <p class="import-hint">支持 vmess:// / vless:// / ss:// / trojan:// / hysteria2:// / hy2:// / tuic:// 链接，每行一个</p>
           <textarea
             v-model="importText"
             class="import-textarea"
@@ -44,7 +69,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useAppStore } from '../stores/app.js'
 import { useRulesStore } from '../stores/rules.js'
 import { useGroupsStore } from '../stores/groups.js'
@@ -58,11 +83,18 @@ const groupsStore = useGroupsStore()
 const showBatchImport = ref(false)
 const importText = ref('')
 const importing = ref(false)
+const showExportDialog = ref(false)
+const includeSubscriptions = ref(false)
+
+const selectedCount = computed(() =>
+  rulesStore.selectedRuleIds.filter(id => rulesStore.rules.some(r => r.id === id)).length
+)
 
 async function handleExport() {
-  // 有选中的规则时导出选中的，否则导出全部
-  const ids = rulesStore.selectedRuleIds
-  await appStore.doExportConfig(ids)
+  // 仅统计普通节点的选中项（链式/故障转移会按关联关系自动带出）
+  const ids = rulesStore.selectedRuleIds.filter(id => rulesStore.rules.some(r => r.id === id))
+  showExportDialog.value = false
+  await appStore.doExportConfig(ids, includeSubscriptions.value)
 }
 
 async function handleBatchImport() {
@@ -206,6 +238,17 @@ async function handleImportDone(result) {
 .import-actions {
   margin-top: 8px;
 }
+
+.export-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.export-check input { margin-top: 3px; }
 
 .btn-small {
   padding: 4px 10px;

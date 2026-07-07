@@ -18,6 +18,11 @@ export async function updateRule(id, rule) {
   return await MyService.UpdateRule(id, rule)
 }
 
+// 批量更新节点（后端只保存一次配置）
+export async function updateNodes(rules) {
+  return await MyService.UpdateNodes(rules)
+}
+
 export async function deleteRule(id) {
   return await MyService.DeleteRule(id)
 }
@@ -34,10 +39,19 @@ export async function saveRuleOrder(orderedIDs) {
   return await MyService.SaveRuleOrder(orderedIDs)
 }
 
+// 批量启动/停止节点（后端并发处理，只保存一次配置）
+export async function startNodes(ids) {
+  return await MyService.StartNodes(ids)
+}
+
+export async function stopNodes(ids) {
+  return await MyService.StopNodes(ids)
+}
+
 // ==================== 导入导出 ====================
 
-export async function exportConfig(ruleIds = []) {
-  return await MyService.ExportConfig(ruleIds)
+export async function exportConfig(ruleIds = [], includeSubscriptions = false) {
+  return await MyService.ExportConfig(ruleIds, includeSubscriptions)
 }
 
 export async function importConfig() {
@@ -76,8 +90,16 @@ export async function getSubscriptions() {
   return await MyService.GetSubscriptions()
 }
 
-export async function addSubscription(name, url, autoUpdate, updateInterval) {
-  return await MyService.AddSubscription(name, url, autoUpdate, updateInterval)
+export async function addSubscription(name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+  return await MyService.AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
+}
+
+export async function setSubscriptionUpdateMode(subID, mode, proxyID) {
+  return await MyService.SetSubscriptionUpdateMode(subID, mode, proxyID)
+}
+
+export async function editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+  return await MyService.EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
 }
 
 export async function updateSubscriptionByID(subID) {
@@ -88,7 +110,7 @@ export async function deleteSubscription(subID) {
   return await MyService.DeleteSubscription(subID)
 }
 
-// ==================== 负载均衡 ====================
+// ==================== 故障转移 ====================
 
 export async function getLoadBalancers() {
   return await MyService.GetLoadBalancers()
@@ -152,6 +174,42 @@ export async function testAllRulesSpeed() {
 
 export async function testSelectedRulesSpeed(ruleIDs) {
   return await MyService.TestSelectedRulesSpeed(ruleIDs)
+}
+
+export async function testLoadBalancerSpeed(id) {
+  return await MyService.TestLoadBalancerSpeed(id)
+}
+
+export async function testChainProxySpeed(id) {
+  return await MyService.TestChainProxySpeed(id)
+}
+
+// ==================== 健康检查 ====================
+
+export async function getHealthCheckConfig() {
+  return await MyService.GetHealthCheckConfig()
+}
+
+export async function setHealthCheckConfig(cfg) {
+  return await MyService.SetHealthCheckConfig(cfg)
+}
+
+export async function checkNodeHealth(ruleID) {
+  return await MyService.CheckNodeHealth(ruleID)
+}
+
+export async function checkSelectedNodesHealth(ruleIDs) {
+  return await MyService.CheckSelectedNodesHealth(ruleIDs)
+}
+
+export async function checkAllNodesHealth() {
+  return await MyService.CheckAllNodesHealth()
+}
+
+// ==================== 流量统计 ====================
+
+export async function resetRuleTraffic(ruleID = '') {
+  return await MyService.ResetRuleTraffic(ruleID)
 }
 
 // ==================== 系统代理 ====================

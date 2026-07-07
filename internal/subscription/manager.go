@@ -15,6 +15,39 @@ type Manager struct {
 	onUpdate    func(subID string, rules []models.ProxyRule) error
 	updateTasks map[string]*updateTask
 	mu          sync.RWMutex
+
+	// resolveProxy 根据订阅的更新方式解析出代理地址（可能临时启动节点）
+	// 返回: 代理URL（空表示直连）、清理函数（可为 nil，用于关闭临时代理）、错误
+	resolveProxy func(sub *models.Subscription) (string, func(), error)
+}
+
+// SetProxyResolver 设置订阅更新代理解析器
+func (m *Manager) SetProxyResolver(fn func(sub *models.Subscription) (string, func(), error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resolveProxy = fn
+}
+
+// fetchSubscription 按订阅配置的更新方式获取并解析订阅内容
+func (m *Manager) fetchSubscription(sub *models.Subscription) ([]models.ProxyRule, string, error) {
+	m.mu.RLock()
+	resolver := m.resolveProxy
+	m.mu.RUnlock()
+
+	proxyURL := ""
+	var cleanup func()
+	if resolver != nil {
+		var err error
+		proxyURL, cleanup, err = resolver(sub)
+		if err != nil {
+			return nil, "", fmt.Errorf("建立订阅更新代理失败: %v", err)
+		}
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	return m.parser.FetchAndParseWithProxy(sub.URL, proxyURL)
 }
 
 // updateTask 更新任务
@@ -38,8 +71,8 @@ func NewManager(logFunc func(string), onUpdate func(subID string, rules []models
 func (m *Manager) AddSubscription(sub *models.Subscription) ([]models.ProxyRule, error) {
 	m.log(fmt.Sprintf("[订阅] 添加订阅: %s", sub.Name))
 
-	// 获取并解析订阅
-	rules, subType, err := m.parser.FetchAndParse(sub.URL)
+	// 获取并解析订阅（按配置的更新方式走代理）
+	rules, subType, err := m.fetchSubscription(sub)
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +99,8 @@ func (m *Manager) AddSubscription(sub *models.Subscription) ([]models.ProxyRule,
 func (m *Manager) UpdateSubscription(sub *models.Subscription) ([]models.ProxyRule, error) {
 	m.log(fmt.Sprintf("[订阅] 更新订阅: %s", sub.Name))
 
-	// 获取并解析订阅
-	rules, subType, err := m.parser.FetchAndParse(sub.URL)
+	// 获取并解析订阅（按配置的更新方式走代理）
+	rules, subType, err := m.fetchSubscription(sub)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +196,16 @@ func (m *Manager) stopAutoUpdate(subID string) {
 
 // RestartAutoUpdate 重启自动更新（用于配置加载后恢复任务）
 func (m *Manager) RestartAutoUpdate(sub *models.Subscription) {
+	if sub.AutoUpdate && sub.Enabled {
+		m.startAutoUpdate(sub)
+	}
+}
+
+// ReconfigureAutoUpdate 按订阅最新配置重设自动更新任务：
+// 先停掉已有任务，若启用了自动更新则按新间隔重启，否则保持停止。
+// 用于编辑订阅后同步定时任务状态。
+func (m *Manager) ReconfigureAutoUpdate(sub *models.Subscription) {
+	m.stopAutoUpdate(sub.ID)
 	if sub.AutoUpdate && sub.Enabled {
 		m.startAutoUpdate(sub)
 	}

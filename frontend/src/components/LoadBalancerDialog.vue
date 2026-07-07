@@ -2,7 +2,7 @@
   <div v-if="visible" class="dialog-overlay" @click.self="close">
     <div class="dialog dialog-large">
       <div class="dialog-header">
-        <h3>{{ isEditing ? '编辑负载均衡' : '添加负载均衡' }}</h3>
+        <h3>{{ isEditing ? '编辑故障转移' : '添加故障转移' }}</h3>
         <button class="dialog-close" @click="close">&times;</button>
       </div>
 
@@ -12,7 +12,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>别名：</label>
-              <input v-model="form.alias" type="text" placeholder="例如：负载均衡-香港" />
+              <input v-model="form.alias" type="text" placeholder="例如：故障转移-香港" />
             </div>
             <div class="form-group">
               <label>所属分组：</label>
@@ -24,14 +24,7 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>本地代理类型：</label>
-              <select v-model="form.localType">
-                <option value="socks">socks</option>
-                <option value="http">http</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>本地代理端口：</label>
+              <label>本地代理端口（混合端口，同时支持 HTTP/SOCKS5）：</label>
               <input v-model.number="form.localPort" type="number" placeholder="1080" min="1" max="65535" />
             </div>
           </div>
@@ -81,7 +74,7 @@ const isEditing = computed(() => !!props.editingLB)
 
 const defaultForm = () => ({
   alias: '',
-  localType: 'socks',
+  localType: 'mixed',
   localPort: 0,
   groupId: '',
   nodeIds: [],
@@ -93,7 +86,7 @@ watch(() => props.visible, (v) => {
     if (props.editingLB) {
       form.value = {
         alias: props.editingLB.alias || '',
-        localType: props.editingLB.localType || 'socks',
+        localType: 'mixed',
         localPort: props.editingLB.localPort || 0,
         groupId: props.editingLB.groupId || '',
         nodeIds: props.editingLB.nodeIds ? [...props.editingLB.nodeIds] : [],
@@ -124,10 +117,10 @@ async function handleSave() {
     if (isEditing.value) {
       lbData.id = props.editingLB.id
       await api.updateLoadBalancer(lbData)
-      appStore.showToast('负载均衡已更新', 'success')
+      appStore.showToast('故障转移已更新', 'success')
     } else {
       await api.addLoadBalancer(lbData)
-      appStore.showToast('负载均衡已添加', 'success')
+      appStore.showToast('故障转移已添加', 'success')
     }
     await rulesStore.loadRules()
     close()

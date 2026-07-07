@@ -24,14 +24,7 @@
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>本地代理类型：</label>
-              <select v-model="form.localType">
-                <option value="socks">socks</option>
-                <option value="http">http</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label>本地代理端口：</label>
+              <label>本地代理端口（混合端口，同时支持 HTTP/SOCKS5）：</label>
               <input v-model.number="form.localPort" type="number" placeholder="1080" min="1" max="65535" />
             </div>
           </div>
@@ -47,7 +40,7 @@
             </div>
 
             <hr v-if="rulesStore.loadBalancers.length > 0" style="margin: 8px 0;" />
-            <strong v-if="rulesStore.loadBalancers.length > 0" style="font-size: 12px;">负载均衡节点：</strong>
+            <strong v-if="rulesStore.loadBalancers.length > 0" style="font-size: 12px;">故障转移节点：</strong>
             <div v-for="lb in rulesStore.loadBalancers" :key="lb.id" class="node-select-item">
               <button class="btn-add" @click="addToChain(lb.id, lb.alias, 'lb')">+ 添加</button>
               <span>[LB] {{ lb.alias }}</span>
@@ -110,7 +103,7 @@ const isEditing = computed(() => !!props.editingChain)
 
 const defaultForm = () => ({
   alias: '',
-  localType: 'socks',
+  localType: 'mixed',
   localPort: 0,
   groupId: '',
 })
@@ -124,7 +117,7 @@ watch(() => props.visible, (v) => {
     if (props.editingChain) {
       form.value = {
         alias: props.editingChain.alias || '',
-        localType: props.editingChain.localType || 'socks',
+        localType: 'mixed',
         localPort: props.editingChain.localPort || 0,
         groupId: props.editingChain.groupId || '',
       }
