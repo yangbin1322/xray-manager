@@ -23,12 +23,28 @@ var xrayLinux []byte
 //go:embed xray/darwin/xray
 var xrayDarwin []byte
 
+// 嵌入不同平台的 sing-box 二进制文件（Hysteria2/TUIC 协议由 sing-box 内核运行）
+// - Windows: internal/assets/singbox/windows/sing-box.exe
+// - Linux:   internal/assets/singbox/linux/sing-box
+// - macOS:   internal/assets/singbox/darwin/sing-box
+
+//go:embed singbox/windows/sing-box.exe
+var singboxWindows []byte
+
+//go:embed singbox/linux/sing-box
+var singboxLinux []byte
+
+//go:embed singbox/darwin/sing-box
+var singboxDarwin []byte
+
+// binDirName 内核二进制提取目录（位于可执行文件同级）
+const binDirName = "xray-bin"
+
 // ExtractXrayBinary 提取并返回当前平台的 xray 二进制文件路径
 func ExtractXrayBinary() (string, error) {
 	var binaryData []byte
 	var binaryName string
 
-	// 根据操作系统选择对应的二进制文件
 	switch runtime.GOOS {
 	case "windows":
 		binaryData = xrayWindows
@@ -43,41 +59,64 @@ func ExtractXrayBinary() (string, error) {
 		return "", fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
 	}
 
-	// 检查是否成功嵌入二进制文件
-	if len(binaryData) == 0 {
-		return "", fmt.Errorf("未找到 %s 平台的 xray 二进制文件，请确保已将文件放置在 internal/assets/xray/%s/ 目录下", runtime.GOOS, runtime.GOOS)
+	return extractBinary(binaryData, binaryName, "xray", "internal/assets/xray")
+}
+
+// ExtractSingBoxBinary 提取并返回当前平台的 sing-box 二进制文件路径
+func ExtractSingBoxBinary() (string, error) {
+	var binaryData []byte
+	var binaryName string
+
+	switch runtime.GOOS {
+	case "windows":
+		binaryData = singboxWindows
+		binaryName = "sing-box.exe"
+	case "linux":
+		binaryData = singboxLinux
+		binaryName = "sing-box"
+	case "darwin":
+		binaryData = singboxDarwin
+		binaryName = "sing-box"
+	default:
+		return "", fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
 	}
 
-	// 获取可执行文件所在目录
+	return extractBinary(binaryData, binaryName, "sing-box", "internal/assets/singbox")
+}
+
+// extractBinary 将嵌入的二进制数据提取到可执行文件同级的 xray-bin 目录并返回路径。
+// 若目标已存在且大小一致则直接复用。core 用于错误提示，srcHint 提示放置源文件的目录。
+func extractBinary(binaryData []byte, binaryName, core, srcHint string) (string, error) {
+	if len(binaryData) == 0 {
+		return "", fmt.Errorf("未找到 %s 平台的 %s 二进制文件，请确保已将文件放置在 %s/%s/ 目录下",
+			runtime.GOOS, core, srcHint, runtime.GOOS)
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("获取可执行文件路径失败: %v", err)
 	}
 	exeDir := filepath.Dir(exePath)
 
-	// 创建 xray 目录
-	xrayDir := filepath.Join(exeDir, "xray-bin")
-	if err := os.MkdirAll(xrayDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 xray 目录失败: %v", err)
+	binDir := filepath.Join(exeDir, binDirName)
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", fmt.Errorf("创建 %s 目录失败: %v", binDirName, err)
 	}
 
-	// 二进制文件路径
-	binaryPath := filepath.Join(xrayDir, binaryName)
+	binaryPath := filepath.Join(binDir, binaryName)
 
-	// 检查文件是否已存在且大小一致
+	// 已存在且大小一致，直接复用
 	if fileInfo, err := os.Stat(binaryPath); err == nil {
 		if int(fileInfo.Size()) == len(binaryData) {
-			// 文件已存在且大小一致，直接返回
 			return binaryPath, nil
 		}
 	}
 
-	// 写入二进制文件
 	if err := os.WriteFile(binaryPath, binaryData, 0755); err != nil {
-		return "", fmt.Errorf("写入 xray 二进制文件失败: %v", err)
+		return "", fmt.Errorf("写入 %s 二进制文件失败: %v", core, err)
 	}
 
-	// 确保文件有执行权限 (Unix 系统)
+	// Unix 系统确保执行权限
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(binaryPath, 0755); err != nil {
 			return "", fmt.Errorf("设置执行权限失败: %v", err)
