@@ -98,9 +98,16 @@ jobs:
       - name: Free up disk space
         run: |
           echo "清理前:"; df -h /
+          # 删除占大头的预装内容：模拟器运行时、旧 Xcode、Android/其他 SDK
+          sudo rm -rf /Library/Developer/CoreSimulator/* || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/* || true
           sudo rm -rf /Applications/Xcode_1[0-5]*.app || true
-          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* || true
+          sudo rm -rf ~/Library/Developer/Xcode/DerivedData/* || true
+          sudo rm -rf ~/Library/Developer/Xcode/iOS\ DeviceSupport/* || true
+          sudo rm -rf $ANDROID_HOME || true
+          sudo rm -rf $ANDROID_SDK_ROOT || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf ~/.rustup ~/.cargo || true
           echo "清理后:"; df -h /
 
       - name: Setup Go
@@ -128,10 +135,17 @@ jobs:
           APP_NAME="xray-manager"
           DMG_NAME="${APP_NAME}-macos-arm64.dmg"
           df -h /
+          # 按 app 实际大小 + 60MB 余量创建卷，避免 hdiutil 默认膨胀占满磁盘；
+          # 用 UDBZ(bzip2) 压缩，临时开销更小
+          APP_SIZE_MB=$(du -sm "bin/${APP_NAME}.app" | cut -f1)
+          VOL_SIZE_MB=$((APP_SIZE_MB + 60))
+          echo "app 大小 ${APP_SIZE_MB}MB，卷大小 ${VOL_SIZE_MB}MB"
           hdiutil create -volname "${APP_NAME}" \
             -srcfolder "bin/${APP_NAME}.app" \
-            -ov -format UDZO \
+            -megabytes "${VOL_SIZE_MB}" \
+            -ov -format UDBZ \
             "bin/${DMG_NAME}"
+          df -h /
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
