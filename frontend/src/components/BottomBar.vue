@@ -56,6 +56,23 @@
           <div class="import-actions">
             <button class="btn-small" @click="pasteFromClipboard">从剪贴板粘贴</button>
           </div>
+
+          <!-- 导入到分组 -->
+          <div class="import-group-row">
+            <label>导入到分组：</label>
+            <select v-model="importGroupSel" class="import-select">
+              <option value="">不分组</option>
+              <option value="__new__">+ 新建分组</option>
+              <option v-for="g in groupsStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+            <input
+              v-if="importGroupSel === '__new__'"
+              v-model="importNewGroupName"
+              class="import-newgroup"
+              type="text"
+              placeholder="新分组名称"
+            />
+          </div>
         </div>
         <div class="dialog-footer">
           <button class="btn-secondary" @click="showBatchImport = false">取消</button>
@@ -83,6 +100,8 @@ const groupsStore = useGroupsStore()
 const showBatchImport = ref(false)
 const importText = ref('')
 const importing = ref(false)
+const importGroupSel = ref('')        // '' 不分组 | '__new__' 新建 | 分组ID
+const importNewGroupName = ref('')    // importGroupSel === '__new__' 时的新分组名
 const showExportDialog = ref(false)
 const includeSubscriptions = ref(false)
 
@@ -103,13 +122,29 @@ async function handleBatchImport() {
     return
   }
 
+  // 解析分组选择：新建分组 / 现有分组 / 不分组
+  let groupId = ''
+  let newGroupName = ''
+  if (importGroupSel.value === '__new__') {
+    newGroupName = importNewGroupName.value.trim()
+    if (!newGroupName) {
+      appStore.showToast('请输入新分组名称', 'warning')
+      return
+    }
+  } else {
+    groupId = importGroupSel.value
+  }
+
   importing.value = true
   try {
-    const result = await appStore.doImportShareLinks(importText.value)
+    const result = await appStore.doImportShareLinks(importText.value, groupId, newGroupName)
     if (result && result.successCount > 0) {
       showBatchImport.value = false
       importText.value = ''
+      importGroupSel.value = ''
+      importNewGroupName.value = ''
       await rulesStore.loadRules()
+      await groupsStore.loadGroups() // 新建分组后刷新侧边栏
     }
   } finally {
     importing.value = false
@@ -238,6 +273,25 @@ async function handleImportDone(result) {
 .import-actions {
   margin-top: 8px;
 }
+
+.import-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.import-group-row label { white-space: nowrap; color: var(--text-secondary); }
+.import-select, .import-newgroup {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.import-newgroup { flex: 1; }
 
 .export-check {
   display: flex;

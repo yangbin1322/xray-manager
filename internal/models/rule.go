@@ -15,6 +15,7 @@ type ProxyRule struct {
 	RealIP     string        `json:"realIp"`     // 真实IP
 	Enabled    bool          `json:"enabled"`    // 启动状态
 	ProcessID  int           `json:"processId"`  // 进程ID
+	LastError  string        `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 
 	// 测速相关字段
 	Latency       int     `json:"latency"`       // TCP 延迟（毫秒）
@@ -286,6 +287,8 @@ type LoadBalanceNode struct {
 	NodeIDs   []string `json:"nodeIds"`   // 子节点 ID 列表
 	Enabled   bool     `json:"enabled"`   // 启动状态
 	ProcessID int      `json:"processId"` // 进程ID
+	RealIP    string   `json:"realIp"`    // 真实IP
+	LastError string   `json:"lastError"` // 最近一次启动失败/不通的原因（成功后清空）
 	GroupID   string   `json:"groupId"`   // 所属分组ID
 	GroupName string   `json:"groupName"` // 所属分组名称
 
@@ -311,6 +314,8 @@ type LoadBalanceNode struct {
 func (lb *LoadBalanceNode) ResetRuntimeState() {
 	lb.Enabled = false
 	lb.ProcessID = 0
+	lb.RealIP = ""
+	lb.LastError = ""
 	lb.Latency = 0
 	lb.DownloadSpeed = 0
 	lb.TestStatus = ""
@@ -332,6 +337,8 @@ type ChainProxy struct {
 	ChainNodes []string `json:"chainNodes"` // 链中的节点ID列表（可以包含普通节点或LB节点ID）
 	Enabled    bool     `json:"enabled"`    // 启动状态
 	ProcessID  int      `json:"processId"`  // 进程ID
+	RealIP     string   `json:"realIp"`     // 真实IP
+	LastError  string   `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 	GroupID    string   `json:"groupId"`    // 所属分组ID
 	GroupName  string   `json:"groupName"`  // 所属分组名称
 
@@ -357,6 +364,8 @@ type ChainProxy struct {
 func (c *ChainProxy) ResetRuntimeState() {
 	c.Enabled = false
 	c.ProcessID = 0
+	c.RealIP = ""
+	c.LastError = ""
 	c.Latency = 0
 	c.DownloadSpeed = 0
 	c.TestStatus = ""

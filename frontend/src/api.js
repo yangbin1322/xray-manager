@@ -58,8 +58,8 @@ export async function importConfig() {
   return await MyService.ImportConfig()
 }
 
-export async function importShareLinks(text) {
-  return await MyService.ImportShareLinks(text)
+export async function importShareLinks(text, groupId = '', newGroupName = '') {
+  return await MyService.ImportShareLinks(text, groupId, newGroupName)
 }
 
 // ==================== 分组管理 ====================

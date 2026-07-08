@@ -124,6 +124,8 @@ export function DeleteChainProxy(id) {
 
 /**
  * DeleteGroup 删除分组
+ * DeleteGroup 删除分组（级联）：停止并删除分组内所有节点，再删除分组本身。
+ * 调用方（前端）应先向用户确认。
  * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */
@@ -314,12 +316,16 @@ export function ImportConfig() {
 }
 
 /**
- * ImportShareLinks 批量导入分享链接（返回详细结果）
+ * ImportShareLinks 批量导入分享链接（返回详细结果）。
+ * groupID：导入到的现有分组 ID（空=不分组）；
+ * newGroupName：非空时新建一个手动分组并将导入节点归入（优先于 groupID）。
  * @param {string} text
+ * @param {string} groupID
+ * @param {string} newGroupName
  * @returns {$CancellablePromise<models$0.ImportShareResult | null>}
  */
-export function ImportShareLinks(text) {
-    return $Call.ByID(4153373042, text).then(/** @type {($result: any) => any} */(($result) => {
+export function ImportShareLinks(text, groupID, newGroupName) {
+    return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType16($result);
     }));
 }
@@ -393,7 +399,7 @@ export function SetSubscriptionUpdateMode(subID, mode, proxyID) {
 }
 
 /**
- * StartAllRulesInGroup 启动分组中的所有规则
+ * StartAllRulesInGroup 启动分组中的所有节点（普通节点 + 故障转移 + 链式代理）
  * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */
@@ -439,7 +445,7 @@ export function StartRule(id) {
 }
 
 /**
- * StopAllRulesInGroup 停止分组中的所有规则
+ * StopAllRulesInGroup 停止分组中的所有节点（普通节点 + 故障转移 + 链式代理）
  * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */

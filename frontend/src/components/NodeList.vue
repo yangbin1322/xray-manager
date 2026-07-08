@@ -4,7 +4,7 @@
       <div class="spinner"></div>
     </div>
 
-    <table class="rules-table">
+    <table class="rules-table" :class="{ 'shift-pressed': shiftPressed }">
       <thead>
         <tr>
           <th class="col-check">
@@ -47,9 +47,10 @@
         <tr
           v-for="rule in rulesStore.filteredRules"
           :key="rule.id"
-          :class="rowClass(rule)"
+          :class="[rowClass(rule), { 'row-selected': rulesStore.selectedIds.has(rule.id) }]"
+          @click="onRowClick(rule.id, $event)"
         >
-          <td class="col-check">
+          <td class="col-check" @click.stop>
             <input
               type="checkbox"
               :checked="rulesStore.selectedIds.has(rule.id)"
@@ -101,14 +102,14 @@
           <td class="col-traffic-total" :title="trafficTitle(rule)">
             <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
           </td>
-          <td class="col-ip" :title="rule.realIp">
-            <template v-if="rule._nodeType === 'rule'">{{ rule.realIp || '-' }}</template>
-            <template v-else>-</template>
+          <td class="col-ip" :title="rule.lastError || rule.realIp">
+            <span v-if="rule.lastError" class="ip-error">{{ rule.lastError }}</span>
+            <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
           <td class="col-status">
-            <span :class="['status-dot', statusClass(rule)]"></span>
+            <span :class="['status-dot', statusClass(rule)]" :title="rule.lastError || ''"></span>
           </td>
-          <td class="col-actions">
+          <td class="col-actions" @click.stop>
             <button
               v-if="!rule.enabled"
               class="btn-action-sm btn-start"
@@ -149,9 +150,12 @@ const emit = defineEmits(['editRule', 'editLB', 'editChain'])
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
 const startingIds = ref(new Set())
+const shiftPressed = ref(false) // 按住 Shift 时临时禁用文本选择
 
 // 快捷键：Ctrl+C 复制 / Ctrl+V 粘贴
 function handleKeydown(e) {
+  if (e.key === 'Shift') shiftPressed.value = true
+
   // 忽略输入框内的按键
   const tag = e.target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
@@ -178,13 +182,39 @@ function handleKeydown(e) {
   }
 }
 
-onMounted(() => { window.addEventListener('keydown', handleKeydown) })
-onUnmounted(() => { window.removeEventListener('keydown', handleKeydown) })
+// 松开 Shift 恢复文本选择；窗口失焦时也重置，避免状态卡住
+function handleKeyup(e) {
+  if (e.key === 'Shift') shiftPressed.value = false
+}
+function resetShift() { shiftPressed.value = false }
+
+onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keyup', handleKeyup)
+  window.addEventListener('blur', resetShift)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keyup', handleKeyup)
+  window.removeEventListener('blur', resetShift)
+})
 
 const allSelected = computed(() => {
   const filtered = rulesStore.filteredRules
   return filtered.length > 0 && filtered.every(r => rulesStore.selectedIds.has(r.id))
 })
+
+// 行点击：支持 Ctrl（切换单个）/ Shift（范围选）多选
+function onRowClick(id, event) {
+  const shift = event.shiftKey
+  const ctrl = event.ctrlKey || event.metaKey
+  // Shift 多选会触发浏览器文本选择，清除它
+  if (shift) {
+    const sel = window.getSelection && window.getSelection()
+    if (sel) sel.removeAllRanges()
+  }
+  rulesStore.handleRowSelect(id, { shift, ctrl })
+}
 
 function rowClass(rule) {
   if (rule._nodeType === 'lb' && rule.enabled) return 'row-lb-running'
@@ -294,6 +324,7 @@ async function handleHealthCheck(rule) {
 
 function statusClass(rule) {
   if (rule.enabled) return 'status-running'
+  if (rule.lastError) return 'status-failed'
   if (rule.testStatus === 'failed') return 'status-failed'
   return 'status-stopped'
 }
@@ -428,10 +459,18 @@ async function handleDelete(rule) {
 
 .rules-table tr:hover { background: var(--bg-hover); }
 
+.rules-table tbody tr { cursor: default; }
+/* 仅在按住 Shift 时禁止文本选择，避免范围多选拖蓝文字；平时可正常选中复制 */
+.rules-table.shift-pressed tbody tr { user-select: none; }
+
 .row-running { background: rgba(39, 174, 96, 0.05) !important; }
 .row-lb-running { background: rgba(155, 89, 182, 0.08) !important; }
 .row-chain-running { background: rgba(52, 152, 219, 0.08) !important; }
 .row-testing { background: rgba(243, 156, 18, 0.05) !important; }
+
+/* 选中行高亮（优先级高于运行状态底色） */
+.row-selected,
+.rules-table tbody tr.row-selected:hover { background: var(--primary-light) !important; }
 
 .col-check { width: 36px; text-align: center; }
 .col-alias { max-width: 120px; }
@@ -445,6 +484,7 @@ async function handleDelete(rule) {
 .col-traffic { width: 130px; }
 .col-traffic-total { width: 110px; }
 .col-ip { max-width: 100px; }
+.ip-error { color: #e74c3c; font-size: 11px; }
 .col-status { width: 40px; text-align: center; }
 .col-actions { width: 230px; }
 

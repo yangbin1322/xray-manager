@@ -135,9 +135,9 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function doImportShareLinks(text) {
+  async function doImportShareLinks(text, groupId = '', newGroupName = '') {
     try {
-      const result = await api.importShareLinks(text)
+      const result = await api.importShareLinks(text, groupId, newGroupName)
       let msg = `成功导入 ${result.successCount} 个节点`
       if (result.failCount > 0) msg += `，失败 ${result.failCount} 个`
       showToast(msg, result.failCount > 0 ? 'warning' : 'success')

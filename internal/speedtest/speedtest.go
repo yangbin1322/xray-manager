@@ -53,11 +53,31 @@ const (
 	// defaultMeasureWindow 测速采样时长：在此时间窗口内下载多少算多少，
 	// 这样慢速网络不会超时失败，快速网络样本也足够，测速时间可预期。
 	defaultMeasureWindow = 8 * time.Second
-	// 默认测速源：请求一个足够大的文件（95MB），让快速线路在采样窗口内也下不完。
+	// 默认测速源：请求一个足够大的文件（200MB），让快速线路在采样窗口内也下不完。
 	// 慢速线路则在采样窗口到点后主动停止，用已下载的量计算速度。
-	// cloudflare的测速文件限制最大为99999999bytes
-	defaultTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
+	defaultTestURL = "https://losangeles.ca.speedtest.frontier.com:8080/download?size=209715200"
+	// browserUA 浏览器 User-Agent：部分测速/CDN 服务器会拒绝无 UA 的请求（返回 500 等），
+	// 统一带上模拟浏览器的 UA 以提升兼容性。
+	browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0"
 )
+
+// setBrowserHeaders 为请求设置一套模拟浏览器的请求头，
+// 提升对挑剔的测速/CDN 服务器的兼容性（部分服务器无这些头会拒绝请求）。
+func setBrowserHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("sec-ch-ua", `"Microsoft Edge";v="149", "Chromium";v="149", "Not)A;Brand";v="24"`)
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+}
 
 // TestDownloadSpeed 测试下载速度（通过代理，限时采样）
 // timeout 为整体上限；实际下载采样时长取 defaultMeasureWindow 与 timeout 中较小者。
@@ -104,6 +124,7 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 	if err != nil {
 		return 0, fmt.Errorf("创建请求失败: %v", err)
 	}
+	setBrowserHeaders(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -181,6 +202,7 @@ func (t *Tester) TestProxyLatency(ctx context.Context, proxyPort int, timeout ti
 	if err != nil {
 		return 0, err
 	}
+	setBrowserHeaders(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("代理连通性测试失败: %v", err)
@@ -225,6 +247,11 @@ func (t *Tester) TestProxyEndpoint(ctx context.Context, id, alias string, proxyP
 	return result
 }
 
+// isUDPProtocol 判断是否为 QUIC/UDP 协议（服务器不监听 TCP，不能直接 TCP 测延迟）
+func isUDPProtocol(protocol string) bool {
+	return protocol == "hysteria2" || protocol == "tuic"
+}
+
 // TestRule 测试单个规则（包括延迟和下载速度）
 func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.SpeedTestResult {
 	result := models.SpeedTestResult{
@@ -234,7 +261,24 @@ func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.Sp
 
 	t.log(fmt.Sprintf("[测速] 开始测试: %s", rule.Alias))
 
-	// 测试延迟
+	// 已启动的节点：统一通过本地代理端口测延迟+速度。
+	// 这对所有协议都正确，尤其 Hysteria2/TUIC 等 UDP 协议无法直接 TCP 测延迟。
+	if rule.Enabled {
+		r := t.TestProxyEndpoint(ctx, rule.ID, rule.Alias, rule.LocalPort)
+		r.Timestamp = result.Timestamp
+		return r
+	}
+
+	// 未启动的节点：
+	// - TCP 类协议：直连服务器测 TCP 延迟（只能反映服务器可达性，不测下载）
+	// - UDP 类协议(hy2/tuic)：服务器不监听 TCP，无法直连测；提示需先启动
+	if isUDPProtocol(rule.Protocol) {
+		result.Success = false
+		result.Error = "Hysteria2/TUIC 为 UDP 协议，请先启动节点再测速"
+		t.log(fmt.Sprintf("[测速] %s - 未启动，UDP 协议需启动后测速", rule.Alias))
+		return result
+	}
+
 	latency, err := t.TestLatency(ctx, rule.ServerAddr, rule.ServerPort, 5*time.Second)
 	if err != nil {
 		result.Success = false
@@ -243,31 +287,9 @@ func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.Sp
 		return result
 	}
 	result.Latency = latency
-	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms", rule.Alias, latency))
-
-	// 如果规则未启动，只测试延迟
-	if !rule.Enabled {
-		result.Success = true
-		result.DownloadSpeed = 0
-		t.log(fmt.Sprintf("[测速] %s - 未启动，跳过速度测试", rule.Alias))
-		return result
-	}
-
-	// 测试下载速度（限时采样，20 秒整体上限：为慢速网络建连留余量 + 12 秒采样窗口）
-	speed, err := t.TestDownloadSpeed(ctx, rule.LocalType, rule.LocalPort, "", 20*time.Second)
-	if err != nil {
-		// 延迟测试成功但速度测试失败，仍然算部分成功
-		result.Success = true
-		result.DownloadSpeed = 0
-		result.Error = fmt.Sprintf("速度测试失败: %v", err)
-		t.log(fmt.Sprintf("[测速] %s - 速度测试失败: %v", rule.Alias, err))
-		return result
-	}
-
-	result.DownloadSpeed = speed
 	result.Success = true
-	t.log(fmt.Sprintf("[测速] %s - 下载速度: %.2f MB/s", rule.Alias, speed))
-
+	result.DownloadSpeed = 0
+	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms（未启动，跳过速度测试）", rule.Alias, latency))
 	return result
 }
 

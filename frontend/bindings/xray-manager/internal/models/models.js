@@ -71,6 +71,22 @@ export class ChainProxy {
              */
             this["processId"] = 0;
         }
+        if (!("realIp" in $$source)) {
+            /**
+             * 真实IP
+             * @member
+             * @type {string}
+             */
+            this["realIp"] = "";
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
         if (!("groupId" in $$source)) {
             /**
              * 所属分组ID
@@ -181,13 +197,13 @@ export class ChainProxy {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
-        const $$createField16_0 = $$createType1;
+        const $$createField18_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("chainNodes" in $$parsedSource) {
             $$parsedSource["chainNodes"] = $$createField4_0($$parsedSource["chainNodes"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
         }
         return new ChainProxy(/** @type {Partial<ChainProxy>} */($$parsedSource));
     }
@@ -613,6 +629,22 @@ export class LoadBalanceNode {
              */
             this["processId"] = 0;
         }
+        if (!("realIp" in $$source)) {
+            /**
+             * 真实IP
+             * @member
+             * @type {string}
+             */
+            this["realIp"] = "";
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
         if (!("groupId" in $$source)) {
             /**
              * 所属分组ID
@@ -723,13 +755,13 @@ export class LoadBalanceNode {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
-        const $$createField16_0 = $$createType1;
+        const $$createField18_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("nodeIds" in $$parsedSource) {
             $$parsedSource["nodeIds"] = $$createField4_0($$parsedSource["nodeIds"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
         }
         return new LoadBalanceNode(/** @type {Partial<LoadBalanceNode>} */($$parsedSource));
     }
@@ -831,6 +863,14 @@ export class ProxyRule {
              * @type {number}
              */
             this["processId"] = 0;
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
         }
         if (!("latency" in $$source)) {
             /**
@@ -959,13 +999,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType2;
-        const $$createField18_0 = $$createType1;
+        const $$createField19_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField19_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }
