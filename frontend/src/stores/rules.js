@@ -2,15 +2,19 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as api from '../api.js'
 
+// groupFilter 的特殊值：仅显示未分组节点
+export const UNGROUPED_FILTER = '__ungrouped__'
+
 export const useRulesStore = defineStore('rules', () => {
   // === 状态 ===
   const rules = ref([])
   const loadBalancers = ref([])
   const chainProxies = ref([])
   const selectedIds = ref(new Set())
+  const lastSelectedId = ref(null) // Shift 范围选的锚点（上次点击的行）
   const statusFilter = ref('all') // all | running | stopped
   const searchKeyword = ref('')
-  const groupFilter = ref(null) // null = 所有分组
+  const groupFilter = ref(null) // null=所有节点, UNGROUPED_FILTER=未分组, 其他=分组ID
   const sortColumn = ref(null)
   const sortDirection = ref('asc')
   const loading = ref(false)
@@ -29,8 +33,10 @@ export const useRulesStore = defineStore('rules', () => {
   const filteredRules = computed(() => {
     let result = allNodes.value
 
-    // 分组过滤
-    if (groupFilter.value !== null) {
+    // 分组过滤：null=所有节点，UNGROUPED_FILTER=仅未分组，其余=指定分组
+    if (groupFilter.value === UNGROUPED_FILTER) {
+      result = result.filter(r => !r.groupId)
+    } else if (groupFilter.value !== null) {
       result = result.filter(r => r.groupId === groupFilter.value)
     }
 
@@ -69,6 +75,16 @@ export const useRulesStore = defineStore('rules', () => {
 
   const runningCount = computed(() => allNodes.value.filter(r => r.enabled).length)
   const totalCount = computed(() => allNodes.value.length)
+  const ungroupedCount = computed(() => allNodes.value.filter(r => !r.groupId).length)
+
+  // 各分组的节点数映射 { groupId: count }，一次遍历统计
+  const groupCounts = computed(() => {
+    const counts = {}
+    for (const n of allNodes.value) {
+      if (n.groupId) counts[n.groupId] = (counts[n.groupId] || 0) + 1
+    }
+    return counts
+  })
 
   // === 动作 ===
   async function loadRules() {
@@ -223,19 +239,46 @@ export const useRulesStore = defineStore('rules', () => {
   }
 
   function toggleSelect(id) {
-    if (selectedIds.value.has(id)) {
-      selectedIds.value.delete(id)
-    } else {
-      selectedIds.value.add(id)
-    }
+    const next = new Set(selectedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    selectedIds.value = next
+    lastSelectedId.value = id
   }
 
   function selectAll(checked) {
-    if (checked) {
-      filteredRules.value.forEach(r => selectedIds.value.add(r.id))
-    } else {
-      selectedIds.value.clear()
+    const next = new Set()
+    if (checked) filteredRules.value.forEach(r => next.add(r.id))
+    selectedIds.value = next
+  }
+
+  // 处理行点击的多选：
+  // - 无修饰键：仅选中该行（清除其余）
+  // - Ctrl/Meta：切换该行选中状态
+  // - Shift：从锚点到该行范围全选（基于当前显示顺序 filteredRules）
+  function handleRowSelect(id, { shift = false, ctrl = false } = {}) {
+    if (shift && lastSelectedId.value != null) {
+      const list = filteredRules.value
+      const from = list.findIndex(r => r.id === lastSelectedId.value)
+      const to = list.findIndex(r => r.id === id)
+      if (from >= 0 && to >= 0) {
+        const [lo, hi] = from <= to ? [from, to] : [to, from]
+        const next = new Set(selectedIds.value)
+        for (let i = lo; i <= hi; i++) next.add(list[i].id)
+        selectedIds.value = next
+        // Shift 选择不移动锚点，便于连续调整范围
+        return
+      }
     }
+
+    if (ctrl) {
+      toggleSelect(id)
+      return
+    }
+
+    // 普通单击：仅选中该行
+    selectedIds.value = new Set([id])
+    lastSelectedId.value = id
   }
 
   function setSort(column) {
@@ -295,12 +338,12 @@ export const useRulesStore = defineStore('rules', () => {
     selectedIds, statusFilter, searchKeyword,
     groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
-    filteredRules, selectedRuleIds, runningCount, totalCount,
+    filteredRules, selectedRuleIds, runningCount, totalCount, ungroupedCount, groupCounts,
     // Actions
     loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
-    updateRuleInList, toggleSelect, selectAll, setSort,
+    updateRuleInList, toggleSelect, selectAll, handleRowSelect, setSort,
     copySelected, pasteNodes,
     applyTrafficUpdate, applyHealthCheckResult,
     checkSelectedHealth, checkAllHealth, resetTraffic,

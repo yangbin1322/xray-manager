@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 	"xray-manager/internal/config"
@@ -95,6 +96,8 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 	// 流量统计回调
 	a.processManager.SetTrafficCallback(a.handleTraffic)
+	a.processManager.SetNodeFailedCallback(a.handleNodeFailed)
+	a.processManager.SetRealIPCallback(a.handleRealIP)
 
 	// 初始化健康检查管理器
 	a.healthCheckManager = healthcheck.NewManager(
@@ -229,6 +232,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 启动后台健康检查（按配置）
 		a.healthCheckManager.Configure(a.config.HealthCheck)
+
+		// 应用测速配置
+		a.speedTestManager.Configure(a.config.SpeedTest.URL, a.config.SpeedTest.Headers)
 	}
 
 	// 定期保存流量统计（避免每次流量更新都写盘）
@@ -319,6 +325,44 @@ func generateUniqueRuleID(existingRules []models.ProxyRule) string {
 	return id
 }
 
+// usedLocalPorts 收集配置中所有节点（普通/故障转移/链式代理）已占用的本地端口。
+// 需已持有 a.mu 锁。
+func (a *MyService) usedLocalPorts() map[int]bool {
+	used := make(map[int]bool)
+	for i := range a.config.Rules {
+		if p := a.config.Rules[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if p := a.config.LoadBalancers[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if p := a.config.ChainProxies[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	return used
+}
+
+// allocateLocalPort 分配一个既不与配置中其他节点冲突、系统又可监听的本地端口。
+// 相比直接用 utils.FindAvailablePort，额外排除了已分配给未启动节点的端口，
+// 避免多个未启动节点拿到同一端口。需已持有 a.mu 锁。
+func (a *MyService) allocateLocalPort() int {
+	used := a.usedLocalPorts()
+	for port := 10800; port < 65535; port++ {
+		if used[port] {
+			continue
+		}
+		if utils.CheckPortAvailable(port) {
+			return port
+		}
+	}
+	return 0
+}
+
 // AddRule 添加规则
 func (a *MyService) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
@@ -343,6 +387,11 @@ func (a *MyService) AddRule(rule models.ProxyRule) error {
 				break
 			}
 		}
+	}
+
+	// 端口无效或已被其他节点占用时自动分配
+	if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] {
+		rule.LocalPort = a.allocateLocalPort()
 	}
 
 	a.config.Rules = append(a.config.Rules, rule)
@@ -640,10 +689,16 @@ func (a *MyService) StartRule(id string) error {
 			}
 
 			if err := a.processManager.Start(rule); err != nil {
+				// 启动失败：记录原因供前端显示，保持未启用
+				rule.Enabled = false
+				rule.LastError = err.Error()
+				_ = a.saveConfig()
+				a.app.Event.EmitEvent(&application.CustomEvent{Name: "ruleUpdated", Data: rule})
 				return err
 			}
 
 			rule.Enabled = true
+			rule.LastError = "" // 启动成功，清除旧的失败原因（真实IP 获取后会再确认）
 
 			if err := a.saveConfig(); err != nil {
 				return err
@@ -739,6 +794,9 @@ func (a *MyService) saveConfig() error {
 
 // log 输出日志
 func (a *MyService) log(message string) {
+	if a.app == nil {
+		return
+	}
 	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: fmt.Sprintf("[系统] %s", message)})
 }
 
@@ -1094,9 +1152,9 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		rule.ProcessID = 0
 		rule.RealIP = ""
 
-		// 分配可用端口（如果端口已被使用）
-		if rule.LocalPort <= 0 || !utils.CheckPortAvailable(rule.LocalPort) {
-			rule.LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		// 分配可用端口：端口无效、已被其他节点占用、或系统不可用时重新分配
+		if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] || !utils.CheckPortAvailable(rule.LocalPort) {
+			rule.LocalPort = a.allocateLocalPort()
 		}
 
 		a.config.Rules = append(a.config.Rules, rule)
@@ -1480,7 +1538,7 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 		rules[i].GroupName = group.Name
 		rules[i].SubscriptionURL = url
 		rules[i].Source = "subscription"
-		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		rules[i].LocalPort = a.allocateLocalPort()
 
 		a.config.Rules = append(a.config.Rules, rules[i])
 	}
@@ -1729,7 +1787,7 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 			newRules[i].GroupID = targetSub.GroupID
 			newRules[i].SubscriptionURL = targetSub.URL
 			newRules[i].Source = "subscription"
-			newRules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+			newRules[i].LocalPort = a.allocateLocalPort()
 
 			a.config.Rules = append(a.config.Rules, newRules[i])
 		}
@@ -1775,22 +1833,74 @@ func (a *MyService) GetGroups() []models.Group {
 }
 
 // DeleteGroup 删除分组
+// DeleteGroup 删除分组（级联）：停止并删除分组内所有节点，再删除分组本身。
+// 调用方（前端）应先向用户确认。
 func (a *MyService) DeleteGroup(groupID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 检查是否有规则使用该分组
-	for _, rule := range a.config.Rules {
-		if rule.GroupID == groupID {
-			return fmt.Errorf("该分组下还有节点，无法删除")
-		}
-	}
+	stopped, removed := 0, 0
 
+	// 先停止并删除该分组下的故障转移与链式代理（它们可能引用分组内的普通节点）
+	remainingLBs := make([]models.LoadBalanceNode, 0, len(a.config.LoadBalancers))
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.GroupID == groupID {
+			if lb.Enabled {
+				if err := a.processManager.Stop(lb.LocalPort); err != nil {
+					a.logError(fmt.Sprintf("停止故障转移 %s 失败", lb.Alias), err)
+				} else {
+					stopped++
+				}
+			}
+			removed++
+			continue
+		}
+		remainingLBs = append(remainingLBs, *lb)
+	}
+	a.config.LoadBalancers = remainingLBs
+
+	remainingChains := make([]models.ChainProxy, 0, len(a.config.ChainProxies))
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.GroupID == groupID {
+			if chain.Enabled {
+				if err := a.processManager.Stop(chain.LocalPort); err != nil {
+					a.logError(fmt.Sprintf("停止链式代理 %s 失败", chain.Alias), err)
+				} else {
+					stopped++
+				}
+			}
+			removed++
+			continue
+		}
+		remainingChains = append(remainingChains, *chain)
+	}
+	a.config.ChainProxies = remainingChains
+
+	// 再停止并删除该分组下的普通节点
+	remaining := make([]models.ProxyRule, 0, len(a.config.Rules))
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if rule.GroupID == groupID {
+			if rule.Enabled {
+				if err := a.processManager.Stop(rule.LocalPort); err != nil {
+					a.logError(fmt.Sprintf("停止规则 %s 失败", rule.Alias), err)
+				} else {
+					stopped++
+				}
+			}
+			removed++
+			continue // 不加入 remaining，即删除
+		}
+		remaining = append(remaining, *rule)
+	}
+	a.config.Rules = remaining
+
+	// 删除分组
 	if err := a.groupManager.DeleteGroup(groupID); err != nil {
 		return err
 	}
-
-	// 从配置中删除
 	for i := range a.config.Groups {
 		if a.config.Groups[i].ID == groupID {
 			a.config.Groups = append(a.config.Groups[:i], a.config.Groups[i+1:]...)
@@ -1798,15 +1908,21 @@ func (a *MyService) DeleteGroup(groupID string) error {
 		}
 	}
 
-	return a.saveConfig()
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+
+	a.log(fmt.Sprintf("已删除分组，停止 %d 个运行中节点，删除 %d 个节点", stopped, removed))
+	return nil
 }
 
-// StartAllRulesInGroup 启动分组中的所有规则
+// StartAllRulesInGroup 启动分组中的所有节点（普通节点 + 故障转移 + 链式代理）
 func (a *MyService) StartAllRulesInGroup(groupID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	count := 0
+	// 普通节点
 	for i := range a.config.Rules {
 		rule := &a.config.Rules[i]
 		if rule.GroupID == groupID && !rule.Enabled {
@@ -1818,21 +1934,44 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 			count++
 		}
 	}
+	// 故障转移
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.GroupID == groupID && !lb.Enabled {
+			if err := a.startLoadBalancerInternal(lb); err != nil {
+				a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
+				continue
+			}
+			count++
+		}
+	}
+	// 链式代理
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.GroupID == groupID && !chain.Enabled {
+			if err := a.startChainProxyInternal(chain); err != nil {
+				a.logError(fmt.Sprintf("启动链式代理 %s 失败", chain.Alias), err)
+				continue
+			}
+			count++
+		}
+	}
 
 	if err := a.saveConfig(); err != nil {
 		return err
 	}
 
-	a.log(fmt.Sprintf("已启动分组中的 %d 个规则", count))
+	a.log(fmt.Sprintf("已启动分组中的 %d 个节点", count))
 	return nil
 }
 
-// StopAllRulesInGroup 停止分组中的所有规则
+// StopAllRulesInGroup 停止分组中的所有节点（普通节点 + 故障转移 + 链式代理）
 func (a *MyService) StopAllRulesInGroup(groupID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	count := 0
+	// 普通节点
 	for i := range a.config.Rules {
 		rule := &a.config.Rules[i]
 		if rule.GroupID == groupID && rule.Enabled {
@@ -1844,12 +1983,36 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 			count++
 		}
 	}
+	// 故障转移
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.GroupID == groupID && lb.Enabled {
+			if err := a.processManager.Stop(lb.LocalPort); err != nil {
+				a.logError(fmt.Sprintf("停止故障转移 %s 失败", lb.Alias), err)
+			}
+			lb.Enabled = false
+			lb.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			count++
+		}
+	}
+	// 链式代理
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.GroupID == groupID && chain.Enabled {
+			if err := a.processManager.Stop(chain.LocalPort); err != nil {
+				a.logError(fmt.Sprintf("停止链式代理 %s 失败", chain.Alias), err)
+			}
+			chain.Enabled = false
+			chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			count++
+		}
+	}
 
 	if err := a.saveConfig(); err != nil {
 		return err
 	}
 
-	a.log(fmt.Sprintf("已停止分组中的 %d 个规则", count))
+	a.log(fmt.Sprintf("已停止分组中的 %d 个节点", count))
 	return nil
 }
 
@@ -1928,8 +2091,10 @@ func (a *MyService) SaveRuleOrder(orderedIDs []string) error {
 
 // ==================== 批量导入 API (Feature 4) ====================
 
-// ImportShareLinks 批量导入分享链接（返回详细结果）
-func (a *MyService) ImportShareLinks(text string) (*models.ImportShareResult, error) {
+// ImportShareLinks 批量导入分享链接（返回详细结果）。
+// groupID：导入到的现有分组 ID（空=不分组）；
+// newGroupName：非空时新建一个手动分组并将导入节点归入（优先于 groupID）。
+func (a *MyService) ImportShareLinks(text, groupID, newGroupName string) (*models.ImportShareResult, error) {
 	p := parser.NewShareLinkParser()
 	rules, parseErrors := p.ParseMultipleLinks(text)
 
@@ -1953,6 +2118,32 @@ func (a *MyService) ImportShareLinks(text string) (*models.ImportShareResult, er
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// 若指定新建分组，则先创建
+	newGroupName = strings.TrimSpace(newGroupName)
+	if newGroupName != "" {
+		group, err := a.groupManager.CreateGroup(newGroupName, "批量导入", "manual")
+		if err != nil {
+			return result, fmt.Errorf("创建分组失败: %v", err)
+		}
+		a.config.Groups = append(a.config.Groups, *group)
+		groupID = group.ID
+	}
+
+	// 解析目标分组名称（用于回填 GroupName）
+	var groupName string
+	if groupID != "" {
+		for _, g := range a.config.Groups {
+			if g.ID == groupID {
+				groupName = g.Name
+				break
+			}
+		}
+		if groupName == "" {
+			// 指定的分组不存在，视为不分组
+			groupID = ""
+		}
+	}
+
 	for i := range rules {
 		// 校验
 		if err := rules[i].Validate(); err != nil {
@@ -1965,7 +2156,9 @@ func (a *MyService) ImportShareLinks(text string) (*models.ImportShareResult, er
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].Source = "manual"
-		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		rules[i].GroupID = groupID
+		rules[i].GroupName = groupName
+		rules[i].LocalPort = a.allocateLocalPort()
 		a.config.Rules = append(a.config.Rules, rules[i])
 		result.SuccessCount++
 	}
@@ -2316,14 +2509,16 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 
 	// 使用 processManager 启动
 	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
-		ConfigJSON: configJSON,
-		CoreType:   coreType,
-		ApiPort:    apiPort,
+		ConfigJSON:  configJSON,
+		CoreType:    coreType,
+		ApiPort:     apiPort,
+		FetchRealIP: true,
 	}); err != nil {
 		return err
 	}
 
 	lb.Enabled = true
+	lb.LastError = ""
 	lb.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
 	return nil
 }
@@ -2341,6 +2536,11 @@ func (a *MyService) StartLoadBalancer(id string) error {
 			}
 
 			if err := a.startLoadBalancerInternal(lb); err != nil {
+				// 启动失败：记录原因供前端显示，保持未启用
+				lb.Enabled = false
+				lb.LastError = err.Error()
+				_ = a.saveConfig()
+				a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 				return err
 			}
 
@@ -2510,14 +2710,16 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 	}
 
 	if err := a.processManager.StartWithOptions(tempRule, process.StartOptions{
-		ConfigJSON: configJSON,
-		CoreType:   coreType,
-		ApiPort:    apiPort,
+		ConfigJSON:  configJSON,
+		CoreType:    coreType,
+		ApiPort:     apiPort,
+		FetchRealIP: true,
 	}); err != nil {
 		return err
 	}
 
 	chain.Enabled = true
+	chain.LastError = ""
 	chain.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
 	return nil
 }
@@ -2535,6 +2737,11 @@ func (a *MyService) StartChainProxy(id string) error {
 			}
 
 			if err := a.startChainProxyInternal(chain); err != nil {
+				// 启动失败：记录原因供前端显示，保持未启用
+				chain.Enabled = false
+				chain.LastError = err.Error()
+				_ = a.saveConfig()
+				a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 				return err
 			}
 
@@ -2633,6 +2840,42 @@ func (a *MyService) SetHealthCheckConfig(cfg models.HealthCheckConfig) error {
 	defer a.mu.Unlock()
 	a.config.HealthCheck = a.healthCheckManager.GetConfig()
 	return a.saveConfig()
+}
+
+// GetSpeedTestConfig 获取测速配置。为空的字段用默认值填充，便于前端展示当前生效值。
+func (a *MyService) GetSpeedTestConfig() models.SpeedTestConfig {
+	a.mu.RLock()
+	cfg := a.config.SpeedTest
+	a.mu.RUnlock()
+
+	if cfg.URL == "" {
+		cfg.URL = speedtest.DefaultSpeedTestURL()
+	}
+	if len(cfg.Headers) == 0 {
+		cfg.Headers = speedtest.DefaultSpeedTestHeaders()
+	}
+	return cfg
+}
+
+// GetDefaultSpeedTestConfig 获取默认测速配置（供前端"恢复默认"使用）
+func (a *MyService) GetDefaultSpeedTestConfig() models.SpeedTestConfig {
+	return models.SpeedTestConfig{
+		URL:     speedtest.DefaultSpeedTestURL(),
+		Headers: speedtest.DefaultSpeedTestHeaders(),
+	}
+}
+
+// SetSpeedTestConfig 更新测速配置并立即生效
+func (a *MyService) SetSpeedTestConfig(cfg models.SpeedTestConfig) error {
+	a.mu.Lock()
+	a.config.SpeedTest = cfg
+	err := a.saveConfig()
+	a.mu.Unlock()
+
+	// 应用到测速器（空值时测速器内部回退到默认）
+	a.speedTestManager.Configure(cfg.URL, cfg.Headers)
+	a.log("[测速] 测速配置已更新")
+	return err
 }
 
 // markRulesChecking 将指定节点标记为检测中并返回其快照
@@ -2769,6 +3012,96 @@ func accumulateTraffic(t *models.TrafficStats, deltaUp, deltaDown int64, today s
 	t.TodayDown += deltaDown
 	t.TotalUp += deltaUp
 	t.TotalDown += deltaDown
+}
+
+// handleRealIP 处理成功获取真实IP的回调：按 localPort 回填到对应节点
+//（普通节点/故障转移/链式代理），并清除失败原因。
+func (a *MyService) handleRealIP(localPort int, ip string) {
+	a.mu.Lock()
+	for i := range a.config.Rules {
+		if a.config.Rules[i].LocalPort == localPort {
+			a.config.Rules[i].RealIP = ip
+			a.config.Rules[i].LastError = ""
+			a.mu.Unlock()
+			return
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].LocalPort == localPort {
+			a.config.LoadBalancers[i].RealIP = ip
+			a.config.LoadBalancers[i].LastError = ""
+			a.mu.Unlock()
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+			return
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].LocalPort == localPort {
+			a.config.ChainProxies[i].RealIP = ip
+			a.config.ChainProxies[i].LastError = ""
+			a.mu.Unlock()
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+			return
+		}
+	}
+	a.mu.Unlock()
+}
+
+// handleNodeFailed 处理进程管理器上报的"节点启动后不通"事件：
+// 停止该节点的进程、标记为未启用、记录失败原因，并通知前端刷新。
+// localPort 定位节点（可能是普通节点/故障转移/链式代理）。
+func (a *MyService) handleNodeFailed(localPort int, reason string) {
+	// 先停止进程（不持 a.mu，避免与 processManager 内部锁交叉）
+	_ = a.processManager.Stop(localPort)
+
+	a.mu.Lock()
+	var alias string
+	matched := false
+	for i := range a.config.Rules {
+		if a.config.Rules[i].LocalPort == localPort {
+			a.config.Rules[i].Enabled = false
+			a.config.Rules[i].ProcessID = 0
+			a.config.Rules[i].RealIP = ""
+			a.config.Rules[i].LastError = reason
+			alias = a.config.Rules[i].Alias
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		for i := range a.config.LoadBalancers {
+			if a.config.LoadBalancers[i].LocalPort == localPort {
+				a.config.LoadBalancers[i].Enabled = false
+				a.config.LoadBalancers[i].ProcessID = 0
+				a.config.LoadBalancers[i].RealIP = ""
+				a.config.LoadBalancers[i].LastError = reason
+				alias = a.config.LoadBalancers[i].Alias
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
+		for i := range a.config.ChainProxies {
+			if a.config.ChainProxies[i].LocalPort == localPort {
+				a.config.ChainProxies[i].Enabled = false
+				a.config.ChainProxies[i].ProcessID = 0
+				a.config.ChainProxies[i].RealIP = ""
+				a.config.ChainProxies[i].LastError = reason
+				alias = a.config.ChainProxies[i].Alias
+				matched = true
+				break
+			}
+		}
+	}
+	_ = a.saveConfig()
+	a.mu.Unlock()
+
+	if matched {
+		a.log(fmt.Sprintf("[系统] 节点 %s 启动后不通（%s），已自动停用", alias, reason))
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "nodeFailed", Data: map[string]string{"alias": alias, "reason": reason}})
+	}
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 }
 
 // handleTraffic 处理进程管理器上报的流量增量。

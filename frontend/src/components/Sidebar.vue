@@ -15,6 +15,21 @@
         <span class="group-count">{{ rulesStore.totalCount }}</span>
       </div>
 
+      <!-- 未分组 -->
+      <div
+        :class="['group-item', { active: rulesStore.groupFilter === UNGROUPED_FILTER }]"
+        @click="rulesStore.groupFilter = UNGROUPED_FILTER"
+      >
+        <div class="group-info">
+          <span class="group-name">未分组</span>
+        </div>
+        <span class="group-count">{{ rulesStore.ungroupedCount }}</span>
+        <div class="group-actions">
+          <button class="btn-icon-small" @click.stop="startGroup('')" title="启动全部">▶</button>
+          <button class="btn-icon-small" @click.stop="stopGroup('')" title="停止全部">■</button>
+        </div>
+      </div>
+
       <!-- 分组列表 -->
       <div
         v-for="group in groupsStore.groups"
@@ -26,13 +41,13 @@
           <span class="group-name">{{ group.name }}</span>
           <span v-if="group.source === 'subscription'" class="group-badge">订阅</span>
         </div>
+        <span class="group-count">{{ rulesStore.groupCounts[group.id] || 0 }}</span>
         <div class="group-actions">
           <button class="btn-icon-small" @click.stop="startGroup(group.id)" title="启动全部">▶</button>
           <button class="btn-icon-small" @click.stop="stopGroup(group.id)" title="停止全部">■</button>
           <button
-            v-if="group.source === 'manual'"
             class="btn-icon-small btn-delete"
-            @click.stop="handleDeleteGroup(group.id)"
+            @click.stop="handleDeleteGroup(group)"
             title="删除"
           >×</button>
         </div>
@@ -73,7 +88,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { useRulesStore } from '../stores/rules.js'
+import { useRulesStore, UNGROUPED_FILTER } from '../stores/rules.js'
 import { useGroupsStore } from '../stores/groups.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
@@ -104,11 +119,34 @@ async function handleAddGroup() {
   }
 }
 
-function handleDeleteGroup(groupId) {
-  if (confirm('确定要删除该分组吗？')) {
-    groupsStore.deleteGroup(groupId).catch(e => {
-      appStore.showToast(`删除分组失败: ${e}`, 'error')
-    })
+async function handleDeleteGroup(group) {
+  const count = rulesStore.groupCounts[group.id] || 0
+  const isSub = group.source === 'subscription'
+  const what = isSub ? '订阅分组' : '分组'
+  const msg = count > 0
+    ? `确定要删除${what}「${group.name}」吗？\n\n这将停止并删除该分组内的 ${count} 个节点，且无法恢复。`
+    : `确定要删除${what}「${group.name}」吗？`
+  if (!confirm(msg)) return
+
+  try {
+    if (isSub) {
+      // 订阅分组：找到对应订阅并删除（会连带删订阅、节点、分组）
+      const sub = groupsStore.subscriptions.find(s => s.groupId === group.id)
+      if (sub) {
+        await groupsStore.deleteSubscription(sub.id)
+      } else {
+        // 找不到订阅记录（异常情况），退回按普通分组删除
+        await groupsStore.deleteGroup(group.id)
+      }
+    } else {
+      await groupsStore.deleteGroup(group.id)
+    }
+    // 若当前正筛选被删分组，切回全部
+    if (rulesStore.groupFilter === group.id) rulesStore.groupFilter = null
+    await rulesStore.loadRules()
+    appStore.showToast('删除成功', 'success')
+  } catch (e) {
+    appStore.showToast(`删除失败: ${e}`, 'error')
   }
 }
 
@@ -180,6 +218,8 @@ async function stopGroup(groupId) {
   align-items: center;
   gap: 6px;
   overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 
 .group-name {

@@ -71,6 +71,22 @@ export class ChainProxy {
              */
             this["processId"] = 0;
         }
+        if (!("realIp" in $$source)) {
+            /**
+             * 真实IP
+             * @member
+             * @type {string}
+             */
+            this["realIp"] = "";
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
         if (!("groupId" in $$source)) {
             /**
              * 所属分组ID
@@ -181,13 +197,13 @@ export class ChainProxy {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
-        const $$createField16_0 = $$createType1;
+        const $$createField18_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("chainNodes" in $$parsedSource) {
             $$parsedSource["chainNodes"] = $$createField4_0($$parsedSource["chainNodes"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
         }
         return new ChainProxy(/** @type {Partial<ChainProxy>} */($$parsedSource));
     }
@@ -613,6 +629,22 @@ export class LoadBalanceNode {
              */
             this["processId"] = 0;
         }
+        if (!("realIp" in $$source)) {
+            /**
+             * 真实IP
+             * @member
+             * @type {string}
+             */
+            this["realIp"] = "";
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
         if (!("groupId" in $$source)) {
             /**
              * 所属分组ID
@@ -723,13 +755,13 @@ export class LoadBalanceNode {
      */
     static createFrom($$source = {}) {
         const $$createField4_0 = $$createType0;
-        const $$createField16_0 = $$createType1;
+        const $$createField18_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("nodeIds" in $$parsedSource) {
             $$parsedSource["nodeIds"] = $$createField4_0($$parsedSource["nodeIds"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField16_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
         }
         return new LoadBalanceNode(/** @type {Partial<LoadBalanceNode>} */($$parsedSource));
     }
@@ -831,6 +863,14 @@ export class ProxyRule {
              * @type {number}
              */
             this["processId"] = 0;
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败/不通的原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
         }
         if (!("latency" in $$source)) {
             /**
@@ -959,13 +999,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType2;
-        const $$createField18_0 = $$createType1;
+        const $$createField19_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField18_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField19_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }
@@ -1141,6 +1181,22 @@ export class ProxySettings {
         }
         if (/** @type {any} */(false)) {
             /**
+             * 证书指纹固定（自签证书）；sing-box 无法用证书指纹校验，故有此值时启用 insecure
+             * @member
+             * @type {string | undefined}
+             */
+            this["hy2PinSHA256"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 端口跳跃范围，如 "35000-39000"（对应 mport）
+             * @member
+             * @type {string | undefined}
+             */
+            this["hy2Ports"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * TUIC v5 配置
              * 用户 UUID
              * @member
@@ -1231,24 +1287,68 @@ export class ProxySettings {
      * @returns {ProxySettings}
      */
     static createFrom($$source = {}) {
-        const $$createField25_0 = $$createType4;
-        const $$createField26_0 = $$createType6;
-        const $$createField27_0 = $$createType8;
-        const $$createField28_0 = $$createType10;
+        const $$createField27_0 = $$createType4;
+        const $$createField28_0 = $$createType6;
+        const $$createField29_0 = $$createType8;
+        const $$createField30_0 = $$createType10;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tls" in $$parsedSource) {
-            $$parsedSource["tls"] = $$createField25_0($$parsedSource["tls"]);
+            $$parsedSource["tls"] = $$createField27_0($$parsedSource["tls"]);
         }
         if ("ws" in $$parsedSource) {
-            $$parsedSource["ws"] = $$createField26_0($$parsedSource["ws"]);
+            $$parsedSource["ws"] = $$createField28_0($$parsedSource["ws"]);
         }
         if ("grpc" in $$parsedSource) {
-            $$parsedSource["grpc"] = $$createField27_0($$parsedSource["grpc"]);
+            $$parsedSource["grpc"] = $$createField29_0($$parsedSource["grpc"]);
         }
         if ("h2" in $$parsedSource) {
-            $$parsedSource["h2"] = $$createField28_0($$parsedSource["h2"]);
+            $$parsedSource["h2"] = $$createField30_0($$parsedSource["h2"]);
         }
         return new ProxySettings(/** @type {Partial<ProxySettings>} */($$parsedSource));
+    }
+}
+
+/**
+ * SpeedTestConfig 测速配置（下载测速的目标 URL 与请求头）
+ */
+export class SpeedTestConfig {
+    /**
+     * Creates a new SpeedTestConfig instance.
+     * @param {Partial<SpeedTestConfig>} [$$source = {}] - The source object to create the SpeedTestConfig.
+     */
+    constructor($$source = {}) {
+        if (!("url" in $$source)) {
+            /**
+             * 测速下载 URL（空则用默认）
+             * @member
+             * @type {string}
+             */
+            this["url"] = "";
+        }
+        if (!("headers" in $$source)) {
+            /**
+             * 自定义请求头（空则用默认浏览器请求头）
+             * @member
+             * @type {{ [_: string]: string }}
+             */
+            this["headers"] = {};
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SpeedTestConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SpeedTestConfig}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType11;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("headers" in $$parsedSource) {
+            $$parsedSource["headers"] = $$createField1_0($$parsedSource["headers"]);
+        }
+        return new SpeedTestConfig(/** @type {Partial<SpeedTestConfig>} */($$parsedSource));
     }
 }
 

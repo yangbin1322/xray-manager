@@ -169,6 +169,12 @@ function listenToBackendEvents() {
   Events.On('healthCheckComplete', () => {
     rulesStore.loadRules()
   })
+
+  // 节点启动后不通，已被自动停用
+  Events.On('nodeFailed', (event) => {
+    const d = event.data || {}
+    appStore.showToast(`节点「${d.alias || ''}」启动后不通（${d.reason || '未知原因'}），已自动停用`, 'error', 5000)
+  })
 }
 
 // 初始化

@@ -16,6 +16,10 @@ import (
 type Tester struct {
 	logFunc func(string)
 	mu      sync.RWMutex
+
+	// 可配置的测速参数（为空时使用默认值）
+	customURL     string
+	customHeaders map[string]string
 }
 
 // NewTester 创建测速器
@@ -23,6 +27,24 @@ func NewTester(logFunc func(string)) *Tester {
 	return &Tester{
 		logFunc: logFunc,
 	}
+}
+
+// Configure 设置测速的目标 URL 与自定义请求头（传空则使用默认值）
+func (t *Tester) Configure(url string, headers map[string]string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.customURL = url
+	t.customHeaders = headers
+}
+
+// downloadURL 返回配置的测速 URL，未配置时用默认
+func (t *Tester) downloadURL() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.customURL != "" {
+		return t.customURL
+	}
+	return defaultTestURL
 }
 
 // TestLatency 测试 TCP 延迟
@@ -53,11 +75,48 @@ const (
 	// defaultMeasureWindow 测速采样时长：在此时间窗口内下载多少算多少，
 	// 这样慢速网络不会超时失败，快速网络样本也足够，测速时间可预期。
 	defaultMeasureWindow = 8 * time.Second
-	// 默认测速源：请求一个足够大的文件（95MB），让快速线路在采样窗口内也下不完。
+	// 默认测速源：请求一个足够大的文件（200MB），让快速线路在采样窗口内也下不完。
 	// 慢速线路则在采样窗口到点后主动停止，用已下载的量计算速度。
-	// cloudflare的测速文件限制最大为99999999bytes
-	defaultTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
+	defaultTestURL = "https://speedtest.frontier.com:8080/download?size=209715200"
+	// browserUA 浏览器 User-Agent：部分测速/CDN 服务器会拒绝无 UA 的请求（返回 500 等），
+	// 统一带上模拟浏览器的 UA 以提升兼容性。
+	browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0"
 )
+
+// DefaultSpeedTestURL 返回默认测速 URL（供前端展示默认值）
+func DefaultSpeedTestURL() string { return defaultTestURL }
+
+// DefaultSpeedTestHeaders 返回默认请求头（供前端展示默认值）
+func DefaultSpeedTestHeaders() map[string]string {
+	return map[string]string{
+		"User-Agent":                browserUA,
+		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+		"Accept-Language":           "zh-CN,zh;q=0.9,en;q=0.8",
+		"Cache-Control":             "no-cache",
+		"Pragma":                    "no-cache",
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-User":            "?1",
+		"Upgrade-Insecure-Requests": "1",
+		"referer":                   "https://speedtestworld.com/",
+	}
+}
+
+// setBrowserHeaders 为请求设置请求头：有自定义配置则用自定义，否则用默认浏览器请求头。
+// 提升对挑剔的测速/CDN 服务器的兼容性（部分服务器无这些头会拒绝请求）。
+func (t *Tester) setBrowserHeaders(req *http.Request) {
+	t.mu.RLock()
+	headers := t.customHeaders
+	t.mu.RUnlock()
+
+	if len(headers) == 0 {
+		headers = DefaultSpeedTestHeaders()
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+}
 
 // TestDownloadSpeed 测试下载速度（通过代理，限时采样）
 // timeout 为整体上限；实际下载采样时长取 defaultMeasureWindow 与 timeout 中较小者。
@@ -97,13 +156,14 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 	}
 
 	if testURL == "" {
-		testURL = defaultTestURL
+		testURL = t.downloadURL()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建请求失败: %v", err)
 	}
+	t.setBrowserHeaders(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -181,6 +241,7 @@ func (t *Tester) TestProxyLatency(ctx context.Context, proxyPort int, timeout ti
 	if err != nil {
 		return 0, err
 	}
+	t.setBrowserHeaders(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("代理连通性测试失败: %v", err)
@@ -225,6 +286,11 @@ func (t *Tester) TestProxyEndpoint(ctx context.Context, id, alias string, proxyP
 	return result
 }
 
+// isUDPProtocol 判断是否为 QUIC/UDP 协议（服务器不监听 TCP，不能直接 TCP 测延迟）
+func isUDPProtocol(protocol string) bool {
+	return protocol == "hysteria2" || protocol == "tuic"
+}
+
 // TestRule 测试单个规则（包括延迟和下载速度）
 func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.SpeedTestResult {
 	result := models.SpeedTestResult{
@@ -234,7 +300,24 @@ func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.Sp
 
 	t.log(fmt.Sprintf("[测速] 开始测试: %s", rule.Alias))
 
-	// 测试延迟
+	// 已启动的节点：统一通过本地代理端口测延迟+速度。
+	// 这对所有协议都正确，尤其 Hysteria2/TUIC 等 UDP 协议无法直接 TCP 测延迟。
+	if rule.Enabled {
+		r := t.TestProxyEndpoint(ctx, rule.ID, rule.Alias, rule.LocalPort)
+		r.Timestamp = result.Timestamp
+		return r
+	}
+
+	// 未启动的节点：
+	// - TCP 类协议：直连服务器测 TCP 延迟（只能反映服务器可达性，不测下载）
+	// - UDP 类协议(hy2/tuic)：服务器不监听 TCP，无法直连测；提示需先启动
+	if isUDPProtocol(rule.Protocol) {
+		result.Success = false
+		result.Error = "Hysteria2/TUIC 为 UDP 协议，请先启动节点再测速"
+		t.log(fmt.Sprintf("[测速] %s - 未启动，UDP 协议需启动后测速", rule.Alias))
+		return result
+	}
+
 	latency, err := t.TestLatency(ctx, rule.ServerAddr, rule.ServerPort, 5*time.Second)
 	if err != nil {
 		result.Success = false
@@ -243,31 +326,9 @@ func (t *Tester) TestRule(ctx context.Context, rule *models.ProxyRule) models.Sp
 		return result
 	}
 	result.Latency = latency
-	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms", rule.Alias, latency))
-
-	// 如果规则未启动，只测试延迟
-	if !rule.Enabled {
-		result.Success = true
-		result.DownloadSpeed = 0
-		t.log(fmt.Sprintf("[测速] %s - 未启动，跳过速度测试", rule.Alias))
-		return result
-	}
-
-	// 测试下载速度（限时采样，20 秒整体上限：为慢速网络建连留余量 + 12 秒采样窗口）
-	speed, err := t.TestDownloadSpeed(ctx, rule.LocalType, rule.LocalPort, "", 20*time.Second)
-	if err != nil {
-		// 延迟测试成功但速度测试失败，仍然算部分成功
-		result.Success = true
-		result.DownloadSpeed = 0
-		result.Error = fmt.Sprintf("速度测试失败: %v", err)
-		t.log(fmt.Sprintf("[测速] %s - 速度测试失败: %v", rule.Alias, err))
-		return result
-	}
-
-	result.DownloadSpeed = speed
 	result.Success = true
-	t.log(fmt.Sprintf("[测速] %s - 下载速度: %.2f MB/s", rule.Alias, speed))
-
+	result.DownloadSpeed = 0
+	t.log(fmt.Sprintf("[测速] %s - 延迟: %d ms（未启动，跳过速度测试）", rule.Alias, latency))
 	return result
 }
 

@@ -15,6 +15,7 @@ type ProxyRule struct {
 	RealIP     string        `json:"realIp"`     // 真实IP
 	Enabled    bool          `json:"enabled"`    // 启动状态
 	ProcessID  int           `json:"processId"`  // 进程ID
+	LastError  string        `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 
 	// 测速相关字段
 	Latency       int     `json:"latency"`       // TCP 延迟（毫秒）
@@ -158,6 +159,8 @@ type ProxySettings struct {
 	Hy2ObfsPassword string `json:"hy2ObfsPassword,omitempty"` // 混淆密码
 	Hy2UpMbps       int    `json:"hy2UpMbps,omitempty"`       // 上行带宽限制 (Mbps)，0 表示自动（BBR）
 	Hy2DownMbps     int    `json:"hy2DownMbps,omitempty"`     // 下行带宽限制 (Mbps)，0 表示自动（BBR）
+	Hy2PinSHA256    string `json:"hy2PinSHA256,omitempty"`    // 证书指纹固定（自签证书）；sing-box 无法用证书指纹校验，故有此值时启用 insecure
+	Hy2Ports        string `json:"hy2Ports,omitempty"`        // 端口跳跃范围，如 "35000-39000"（对应 mport）
 
 	// TUIC v5 配置
 	TUICUserID       string `json:"tuicUserId,omitempty"`       // 用户 UUID
@@ -207,6 +210,13 @@ type Config struct {
 	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
 	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
+	SpeedTest     SpeedTestConfig   `json:"speedTest"`     // 测速配置
+}
+
+// SpeedTestConfig 测速配置（下载测速的目标 URL 与请求头）
+type SpeedTestConfig struct {
+	URL     string            `json:"url"`     // 测速下载 URL（空则用默认）
+	Headers map[string]string `json:"headers"` // 自定义请求头（空则用默认浏览器请求头）
 }
 
 // ExportData 导出数据结构（包含版本信息）
@@ -286,6 +296,8 @@ type LoadBalanceNode struct {
 	NodeIDs   []string `json:"nodeIds"`   // 子节点 ID 列表
 	Enabled   bool     `json:"enabled"`   // 启动状态
 	ProcessID int      `json:"processId"` // 进程ID
+	RealIP    string   `json:"realIp"`    // 真实IP
+	LastError string   `json:"lastError"` // 最近一次启动失败/不通的原因（成功后清空）
 	GroupID   string   `json:"groupId"`   // 所属分组ID
 	GroupName string   `json:"groupName"` // 所属分组名称
 
@@ -311,6 +323,8 @@ type LoadBalanceNode struct {
 func (lb *LoadBalanceNode) ResetRuntimeState() {
 	lb.Enabled = false
 	lb.ProcessID = 0
+	lb.RealIP = ""
+	lb.LastError = ""
 	lb.Latency = 0
 	lb.DownloadSpeed = 0
 	lb.TestStatus = ""
@@ -332,6 +346,8 @@ type ChainProxy struct {
 	ChainNodes []string `json:"chainNodes"` // 链中的节点ID列表（可以包含普通节点或LB节点ID）
 	Enabled    bool     `json:"enabled"`    // 启动状态
 	ProcessID  int      `json:"processId"`  // 进程ID
+	RealIP     string   `json:"realIp"`     // 真实IP
+	LastError  string   `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 	GroupID    string   `json:"groupId"`    // 所属分组ID
 	GroupName  string   `json:"groupName"`  // 所属分组名称
 
@@ -357,6 +373,8 @@ type ChainProxy struct {
 func (c *ChainProxy) ResetRuntimeState() {
 	c.Enabled = false
 	c.ProcessID = 0
+	c.RealIP = ""
+	c.LastError = ""
 	c.Latency = 0
 	c.DownloadSpeed = 0
 	c.TestStatus = ""

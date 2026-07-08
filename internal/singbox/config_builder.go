@@ -6,12 +6,28 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"xray-manager/internal/models"
 )
 
 // NeedsSingBox 判断协议是否需要 sing-box 内核运行
 func NeedsSingBox(protocol string) bool {
 	return protocol == "hysteria2" || protocol == "tuic"
+}
+
+// normalizePorts 将端口跳跃范围规范为 sing-box server_ports 格式（"起:止"）。
+// 接受 "35000-39000" 或 "35000:39000"，无效则返回空字符串。
+func normalizePorts(ports string) string {
+	ports = strings.TrimSpace(ports)
+	if ports == "" {
+		return ""
+	}
+	ports = strings.ReplaceAll(ports, "-", ":")
+	// 必须形如 a:b
+	if !strings.Contains(ports, ":") {
+		return ""
+	}
+	return ports
 }
 
 // RulesNeedSingBox 判断一组节点中是否有需要 sing-box 内核的协议
@@ -133,6 +149,10 @@ func BuildOutbound(rule *models.ProxyRule, tag string) (map[string]interface{}, 
 				"type":     rule.Settings.Hy2Obfs,
 				"password": rule.Settings.Hy2ObfsPassword,
 			}
+		}
+		// 端口跳跃：mport 范围 "35000-39000" → sing-box server_ports ["35000:39000"]
+		if ports := normalizePorts(rule.Settings.Hy2Ports); ports != "" {
+			outbound["server_ports"] = []string{ports}
 		}
 		// Hysteria2 强制 TLS
 		tls := buildTLS(rule, true)

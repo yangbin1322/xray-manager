@@ -37,9 +37,25 @@ type Manager struct {
 	configDir string       // 配置文件目录
 	loadRules func()       //前端重新加载规则
 
-	trafficFunc func(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) // 流量统计回调
-	pollerStop  chan struct{}
-	stopOnce    sync.Once // 确保 pollerStop 只关闭一次
+	trafficFunc  func(ruleID string, deltaUp, deltaDown int64, upSpeed, downSpeed float64) // 流量统计回调
+	onNodeFailed func(localPort int, reason string)                                        // 节点启动后验证不通的回调
+	onRealIP     func(localPort int, ip string)                                            // 成功获取真实IP的回调（回填到节点）
+	pollerStop   chan struct{}
+	stopOnce     sync.Once // 确保 pollerStop 只关闭一次
+}
+
+// SetNodeFailedCallback 设置节点启动后验证失败（如无法访问外网）的回调
+func (m *Manager) SetNodeFailedCallback(fn func(localPort int, reason string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onNodeFailed = fn
+}
+
+// SetRealIPCallback 设置成功获取真实IP的回调
+func (m *Manager) SetRealIPCallback(fn func(localPort int, ip string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRealIP = fn
 }
 
 // ProcessInfo 进程信息
@@ -63,9 +79,10 @@ type ProcessInfo struct {
 
 // StartOptions 使用自定义配置启动的选项
 type StartOptions struct {
-	ConfigJSON string
-	CoreType   string // 内核类型，空默认 xray
-	ApiPort    int    // 流量统计 API 端口，0 表示未启用
+	ConfigJSON  string
+	CoreType    string // 内核类型，空默认 xray
+	ApiPort     int    // 流量统计 API 端口，0 表示未启用
+	FetchRealIP bool   // 启动后是否获取真实IP并做连通性验证（故障转移/链式代理需要）
 }
 
 // NewManager 创建进程管理器
@@ -158,9 +175,10 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 	}
 
 	return m.startProcessLocked(rule, StartOptions{
-		ConfigJSON: configJSON,
-		CoreType:   coreType,
-		ApiPort:    apiPort,
+		ConfigJSON:  configJSON,
+		CoreType:    coreType,
+		ApiPort:     apiPort,
+		FetchRealIP: true,
 	})
 }
 
@@ -255,8 +273,10 @@ func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) 
 	go m.readLog(stdout, rule.Alias, "INFO", processInfo)
 	go m.readLog(stderr, rule.Alias, "ERROR", processInfo)
 
-	// 获取真实 IP（异步）
-	go m.getRealIP(rule)
+	// 获取真实 IP + 连通性验证（异步）
+	if opts.FetchRealIP {
+		go m.getRealIP(rule)
+	}
 
 	m.log(fmt.Sprintf("[成功] %s 已启动，PID: %d", rule.Alias, cmd.Process.Pid))
 
@@ -669,6 +689,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		"https://icanhazip.com",
 	}
 
+	var lastErr string
 	for _, service := range ipServices {
 		// 再次检查进程是否还在运行
 		if !m.IsRunning(rule.LocalPort) {
@@ -679,6 +700,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 
 		resp, err := client.Get(service)
 		if err != nil {
+			lastErr = err.Error()
 			m.log(fmt.Sprintf("[警告] %s 请求 %s 失败: %v", rule.Alias, service, err))
 			continue
 		}
@@ -686,6 +708,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			lastErr = err.Error()
 			m.log(fmt.Sprintf("[警告] %s 读取 %s 响应失败: %v", rule.Alias, service, err))
 			continue
 		}
@@ -694,16 +717,59 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 			realIP := strings.TrimSpace(string(body))
 			if realIP != "" {
 				rule.RealIP = realIP
+				rule.LastError = "" // 成功，清除失败原因
 				m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
+				// 回填到对应节点（普通节点直接命中；故障转移/链式代理经回调按端口回填）
+				m.mu.RLock()
+				ipcb := m.onRealIP
+				m.mu.RUnlock()
+				if ipcb != nil {
+					ipcb(rule.LocalPort, realIP)
+				}
 				m.loadRules()
 				return
 			}
 		}
+		lastErr = fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
 
-	m.log(fmt.Sprintf("[警告] %s 无法获取真实IP", rule.Alias))
-	rule.RealIP = "获取失败"
-	m.loadRules()
+	// 全部 IP 服务都失败：节点虽已启动但无法访问外网，视为不通。
+	// 记录失败原因，并回调上层停用该节点。
+	reason := simplifyProxyError(lastErr)
+	m.log(fmt.Sprintf("[失败] %s 启动后无法访问外网（%s），自动停用", rule.Alias, reason))
+	rule.RealIP = ""
+	rule.LastError = reason
+
+	m.mu.RLock()
+	cb := m.onNodeFailed
+	m.mu.RUnlock()
+	if cb != nil {
+		cb(rule.LocalPort, reason)
+	} else {
+		m.loadRules()
+	}
+}
+
+// simplifyProxyError 把冗长的网络错误简化为可读原因
+func simplifyProxyError(err string) string {
+	if err == "" {
+		return "无法获取真实IP"
+	}
+	lower := strings.ToLower(err)
+	switch {
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "连接超时（节点不可用或本机无网络）"
+	case strings.Contains(lower, "refused"):
+		return "连接被拒绝（节点端口不可达）"
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "dns"):
+		return "DNS 解析失败"
+	case strings.Contains(lower, "socks") || strings.Contains(lower, "proxy"):
+		return "代理连接失败（节点配置可能有误）"
+	case strings.Contains(lower, "reset"):
+		return "连接被重置"
+	default:
+		return "无法访问外网：" + err
+	}
 }
 
 // SyncState 同步进程状态，检查配置中标记为运行的规则其进程是否真的存在

@@ -58,8 +58,8 @@ export async function importConfig() {
   return await MyService.ImportConfig()
 }
 
-export async function importShareLinks(text) {
-  return await MyService.ImportShareLinks(text)
+export async function importShareLinks(text, groupId = '', newGroupName = '') {
+  return await MyService.ImportShareLinks(text, groupId, newGroupName)
 }
 
 // ==================== 分组管理 ====================
@@ -192,6 +192,20 @@ export async function getHealthCheckConfig() {
 
 export async function setHealthCheckConfig(cfg) {
   return await MyService.SetHealthCheckConfig(cfg)
+}
+
+// ==================== 测速配置 ====================
+
+export async function getSpeedTestConfig() {
+  return await MyService.GetSpeedTestConfig()
+}
+
+export async function getDefaultSpeedTestConfig() {
+  return await MyService.GetDefaultSpeedTestConfig()
+}
+
+export async function setSpeedTestConfig(cfg) {
+  return await MyService.SetSpeedTestConfig(cfg)
 }
 
 export async function checkNodeHealth(ruleID) {

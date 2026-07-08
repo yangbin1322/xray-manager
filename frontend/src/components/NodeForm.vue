@@ -162,6 +162,16 @@
           <input v-model.number="form.settings.hy2DownMbps" type="number" min="0" placeholder="0" />
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>端口跳跃范围（如 35000-39000）：</label>
+          <input v-model="form.settings.hy2Ports" type="text" placeholder="留空则不启用" />
+        </div>
+        <div class="form-group">
+          <label>证书指纹 pinSHA256（自签证书）：</label>
+          <input v-model="form.settings.hy2PinSHA256" type="text" placeholder="有则自动跳过证书校验" />
+        </div>
+      </div>
     </div>
 
     <!-- TUIC 配置 -->
@@ -420,6 +430,8 @@ export function defaultNodeForm() {
       hy2ObfsPassword: '',
       hy2UpMbps: 0,
       hy2DownMbps: 0,
+      hy2Ports: '',
+      hy2PinSHA256: '',
       tuicUserId: '',
       tuicPassword: '',
       tuicCongestion: 'bbr',

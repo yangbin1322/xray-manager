@@ -11,15 +11,20 @@
         />
         <select v-model="levelFilter" class="log-filter">
           <option value="ALL">所有日志</option>
-          <option value="INFO">INFO</option>
-          <option value="WARN">WARN</option>
-          <option value="ERROR">ERROR</option>
-          <option value="XRAY">XRAY</option>
+          <option value="error">错误</option>
+          <option value="warn">警告</option>
+          <option value="success">成功</option>
+          <option value="info">普通信息</option>
         </select>
         <button class="btn-small" @click="appStore.clearLogsList()">清空</button>
       </div>
     </div>
-    <div class="log-content" ref="logContainer">
+    <div
+      class="log-content"
+      ref="logContainer"
+      @mouseenter="isHovering = true"
+      @mouseleave="isHovering = false"
+    >
       <div
         v-for="log in filteredLogs"
         :key="log.id"
@@ -44,13 +49,22 @@ const { logs } = storeToRefs(appStore)
 const searchKeyword = ref('')
 const levelFilter = ref('ALL')
 const logContainer = ref(null)
+const isHovering = ref(false)
+
+// 统一判定一条日志的级别（筛选和着色共用），兼容中文与 xray 英文标记
+function logLevel(message) {
+  const m = message || ''
+  if (m.includes('[错误]') || m.includes('[失败]') || m.includes('[ERROR]')) return 'error'
+  if (m.includes('[警告]') || m.includes('[WARN]')) return 'warn'
+  if (m.includes('[成功]')) return 'success'
+  return 'info'
+}
 
 const filteredLogs = computed(() => {
   let result = logs.value
 
   if (levelFilter.value !== 'ALL') {
-    const level = levelFilter.value
-    result = result.filter(l => l.message.includes(`[${level}]`))
+    result = result.filter(l => logLevel(l.message) === levelFilter.value)
   }
 
   if (searchKeyword.value) {
@@ -62,14 +76,13 @@ const filteredLogs = computed(() => {
 })
 
 function logLevelClass(message) {
-  if (message.includes('[错误]') || message.includes('[ERROR]')) return 'log-error'
-  if (message.includes('[警告]') || message.includes('[WARN]')) return 'log-warn'
-  if (message.includes('[成功]')) return 'log-success'
-  return ''
+  const lv = logLevel(message)
+  return lv === 'error' ? 'log-error' : lv === 'warn' ? 'log-warn' : lv === 'success' ? 'log-success' : ''
 }
 
-// 自动滚动到底部
+// 自动滚动到底部：鼠标悬停在日志框上时暂停，方便查看/选取历史日志
 watch(() => logs.value.length, () => {
+  if (isHovering.value) return
   nextTick(() => {
     if (logContainer.value) {
       logContainer.value.scrollTop = logContainer.value.scrollHeight

@@ -32,19 +32,27 @@
 
         <div class="form-section">
           <h4>可用节点（点击添加到链）</h4>
+          <input
+            v-model="nodeSearch"
+            type="text"
+            class="node-search"
+            placeholder="搜索节点（别名/协议/地址）..."
+          />
           <div class="node-select-list">
             <!-- 普通节点 -->
-            <div v-for="rule in rulesStore.rules" :key="rule.id" class="node-select-item">
+            <div v-for="rule in filteredRules" :key="rule.id" class="node-select-item">
               <button class="btn-add" @click="addToChain(rule.id, rule.alias, 'rule')">+ 添加</button>
               <span>{{ rule.alias }} ({{ rule.protocol }})</span>
             </div>
 
-            <hr v-if="rulesStore.loadBalancers.length > 0" style="margin: 8px 0;" />
-            <strong v-if="rulesStore.loadBalancers.length > 0" style="font-size: 12px;">故障转移节点：</strong>
-            <div v-for="lb in rulesStore.loadBalancers" :key="lb.id" class="node-select-item">
+            <hr v-if="filteredLBs.length > 0" style="margin: 8px 0;" />
+            <strong v-if="filteredLBs.length > 0" style="font-size: 12px;">故障转移节点：</strong>
+            <div v-for="lb in filteredLBs" :key="lb.id" class="node-select-item">
               <button class="btn-add" @click="addToChain(lb.id, lb.alias, 'lb')">+ 添加</button>
               <span>[LB] {{ lb.alias }}</span>
             </div>
+
+            <div v-if="filteredRules.length === 0 && filteredLBs.length === 0" class="empty-hint">无匹配节点</div>
           </div>
         </div>
 
@@ -101,6 +109,22 @@ const saving = ref(false)
 
 const isEditing = computed(() => !!props.editingChain)
 
+const nodeSearch = ref('')
+const filteredRules = computed(() => {
+  const kw = nodeSearch.value.trim().toLowerCase()
+  if (!kw) return rulesStore.rules
+  return rulesStore.rules.filter(r =>
+    (r.alias && r.alias.toLowerCase().includes(kw)) ||
+    (r.protocol && r.protocol.toLowerCase().includes(kw)) ||
+    (r.serverAddr && r.serverAddr.toLowerCase().includes(kw))
+  )
+})
+const filteredLBs = computed(() => {
+  const kw = nodeSearch.value.trim().toLowerCase()
+  if (!kw) return rulesStore.loadBalancers
+  return rulesStore.loadBalancers.filter(lb => lb.alias && lb.alias.toLowerCase().includes(kw))
+})
+
 const defaultForm = () => ({
   alias: '',
   localType: 'mixed',
@@ -114,6 +138,7 @@ let dragIndex = null
 
 watch(() => props.visible, (v) => {
   if (v) {
+    nodeSearch.value = ''
     if (props.editingChain) {
       form.value = {
         alias: props.editingChain.alias || '',
@@ -281,6 +306,17 @@ function close() { emit('close') }
   box-sizing: border-box;
 }
 
+.node-search {
+  width: 100%;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
 .node-select-list {
   max-height: 180px;
   overflow-y: auto;

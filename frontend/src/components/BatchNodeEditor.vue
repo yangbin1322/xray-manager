@@ -19,6 +19,26 @@
         </span>
       </div>
 
+      <!-- 批量设置分组 -->
+      <div class="dialog-toolbar batch-group-bar">
+        <label>批量分组：</label>
+        <select v-model="batchGroupSel" class="batch-select">
+          <option value="">不分组</option>
+          <option value="__new__">+ 新建分组</option>
+          <option v-for="g in groupsStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+        </select>
+        <input
+          v-if="batchGroupSel === '__new__'"
+          v-model="batchNewGroupName"
+          class="batch-newgroup"
+          type="text"
+          placeholder="新分组名称"
+        />
+        <button class="btn-small" @click="applyBatchGroup" :disabled="applyingGroup">
+          {{ applyingGroup ? '应用中...' : '应用到全部' }}
+        </button>
+      </div>
+
       <div class="dialog-body">
         <div v-if="forms.length === 0" class="empty-hint">
           未选中任何可编辑的普通节点
@@ -50,6 +70,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { useRulesStore } from '../stores/rules.js'
+import { useGroupsStore } from '../stores/groups.js'
 import { useAppStore } from '../stores/app.js'
 import NodeForm, { defaultNodeForm, normalizeTransport } from './NodeForm.vue'
 
@@ -62,15 +83,54 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 const rulesStore = useRulesStore()
+const groupsStore = useGroupsStore()
 const appStore = useAppStore()
 
 // forms: [{ form: <深拷贝的节点>, expanded: bool }]
 const forms = ref([])
 const saving = ref(false)
 
+// 批量分组
+const batchGroupSel = ref('')       // '' 不分组 | '__new__' 新建 | 分组ID
+const batchNewGroupName = ref('')
+const applyingGroup = ref(false)
+
+// 把选定的分组应用到所有编辑中的节点（更新各 form 的 groupId，随“全部保存”一起提交）
+async function applyBatchGroup() {
+  let groupId = ''
+  if (batchGroupSel.value === '__new__') {
+    const name = batchNewGroupName.value.trim()
+    if (!name) { appStore.showToast('请输入新分组名称', 'warning'); return }
+    applyingGroup.value = true
+    try {
+      await groupsStore.createGroup(name, '')   // 创建后 groupsStore.groups 会刷新
+      const g = groupsStore.groups.find(x => x.name === name)
+      if (!g) { appStore.showToast('创建分组失败', 'error'); return }
+      groupId = g.id
+      batchGroupSel.value = g.id            // 下拉切到新建的分组
+      batchNewGroupName.value = ''
+    } catch (e) {
+      appStore.showToast(`创建分组失败: ${e}`, 'error')
+      return
+    } finally {
+      applyingGroup.value = false
+    }
+  } else {
+    groupId = batchGroupSel.value
+  }
+
+  // 应用到所有节点表单
+  forms.value.forEach(item => { item.form.groupId = groupId })
+  const label = groupId ? (groupsStore.groups.find(g => g.id === groupId)?.name || '分组') : '不分组'
+  appStore.showToast(`已将全部节点设为「${label}」，保存后生效`, 'success')
+}
+
 // 打开时根据传入节点初始化表单副本（第一个默认展开）
 watch(() => props.visible, (v) => {
   if (v) {
+    // 重置批量分组选择
+    batchGroupSel.value = ''
+    batchNewGroupName.value = ''
     forms.value = props.nodes.map((n, i) => {
       const form = JSON.parse(JSON.stringify(n))
       if (!form.settings) form.settings = defaultNodeForm().settings
@@ -173,6 +233,21 @@ function close() {
   color: var(--text-secondary);
   margin-left: auto;
 }
+
+.batch-group-bar label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.batch-select, .batch-newgroup {
+  padding: 5px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.batch-newgroup { flex: 1; max-width: 200px; }
 
 .dialog-body {
   padding: 12px 20px;
