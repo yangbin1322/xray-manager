@@ -16,6 +16,10 @@ import (
 type Tester struct {
 	logFunc func(string)
 	mu      sync.RWMutex
+
+	// 可配置的测速参数（为空时使用默认值）
+	customURL     string
+	customHeaders map[string]string
 }
 
 // NewTester 创建测速器
@@ -23,6 +27,24 @@ func NewTester(logFunc func(string)) *Tester {
 	return &Tester{
 		logFunc: logFunc,
 	}
+}
+
+// Configure 设置测速的目标 URL 与自定义请求头（传空则使用默认值）
+func (t *Tester) Configure(url string, headers map[string]string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.customURL = url
+	t.customHeaders = headers
+}
+
+// downloadURL 返回配置的测速 URL，未配置时用默认
+func (t *Tester) downloadURL() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.customURL != "" {
+		return t.customURL
+	}
+	return defaultTestURL
 }
 
 // TestLatency 测试 TCP 延迟
@@ -55,28 +77,45 @@ const (
 	defaultMeasureWindow = 8 * time.Second
 	// 默认测速源：请求一个足够大的文件（200MB），让快速线路在采样窗口内也下不完。
 	// 慢速线路则在采样窗口到点后主动停止，用已下载的量计算速度。
-	defaultTestURL = "https://losangeles.ca.speedtest.frontier.com:8080/download?size=209715200"
+	defaultTestURL = "https://speedtest.frontier.com:8080/download?size=209715200"
 	// browserUA 浏览器 User-Agent：部分测速/CDN 服务器会拒绝无 UA 的请求（返回 500 等），
 	// 统一带上模拟浏览器的 UA 以提升兼容性。
 	browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0"
 )
 
-// setBrowserHeaders 为请求设置一套模拟浏览器的请求头，
+// DefaultSpeedTestURL 返回默认测速 URL（供前端展示默认值）
+func DefaultSpeedTestURL() string { return defaultTestURL }
+
+// DefaultSpeedTestHeaders 返回默认请求头（供前端展示默认值）
+func DefaultSpeedTestHeaders() map[string]string {
+	return map[string]string{
+		"User-Agent":                browserUA,
+		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+		"Accept-Language":           "zh-CN,zh;q=0.9,en;q=0.8",
+		"Cache-Control":             "no-cache",
+		"Pragma":                    "no-cache",
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Sec-Fetch-User":            "?1",
+		"Upgrade-Insecure-Requests": "1",
+		"referer":                   "https://speedtestworld.com/",
+	}
+}
+
+// setBrowserHeaders 为请求设置请求头：有自定义配置则用自定义，否则用默认浏览器请求头。
 // 提升对挑剔的测速/CDN 服务器的兼容性（部分服务器无这些头会拒绝请求）。
-func setBrowserHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", browserUA)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Sec-Fetch-Dest", "document")
-	req.Header.Set("Sec-Fetch-Mode", "navigate")
-	req.Header.Set("Sec-Fetch-Site", "none")
-	req.Header.Set("Sec-Fetch-User", "?1")
-	req.Header.Set("Upgrade-Insecure-Requests", "1")
-	req.Header.Set("sec-ch-ua", `"Microsoft Edge";v="149", "Chromium";v="149", "Not)A;Brand";v="24"`)
-	req.Header.Set("sec-ch-ua-mobile", "?0")
-	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+func (t *Tester) setBrowserHeaders(req *http.Request) {
+	t.mu.RLock()
+	headers := t.customHeaders
+	t.mu.RUnlock()
+
+	if len(headers) == 0 {
+		headers = DefaultSpeedTestHeaders()
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 }
 
 // TestDownloadSpeed 测试下载速度（通过代理，限时采样）
@@ -117,14 +156,14 @@ func (t *Tester) TestDownloadSpeed(ctx context.Context, proxyType string, proxyP
 	}
 
 	if testURL == "" {
-		testURL = defaultTestURL
+		testURL = t.downloadURL()
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建请求失败: %v", err)
 	}
-	setBrowserHeaders(req)
+	t.setBrowserHeaders(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -202,7 +241,7 @@ func (t *Tester) TestProxyLatency(ctx context.Context, proxyPort int, timeout ti
 	if err != nil {
 		return 0, err
 	}
-	setBrowserHeaders(req)
+	t.setBrowserHeaders(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("代理连通性测试失败: %v", err)

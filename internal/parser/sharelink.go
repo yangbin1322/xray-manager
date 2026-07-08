@@ -474,6 +474,19 @@ func (p *ShareLinkParser) ParseHysteria2(hy2URL string) (models.ProxyRule, error
 		rule.Settings.TLS.AllowInsecure = true
 	}
 
+	// 证书指纹固定（pinSHA256）：服务器用自签证书 + SNI 伪装，靠证书指纹校验。
+	// sing-box 无法直接使用该证书指纹格式，故记录后在生成配置时启用 insecure，
+	// 否则用系统 CA 校验一个伪装 SNI 的自签证书必然失败、节点连不上。
+	if pin := query.Get("pinSHA256"); pin != "" {
+		rule.Settings.Hy2PinSHA256 = pin
+		rule.Settings.TLS.AllowInsecure = true
+	}
+
+	// 端口跳跃（mport）：如 mport=35000-39000
+	if mport := query.Get("mport"); mport != "" {
+		rule.Settings.Hy2Ports = mport
+	}
+
 	// 混淆
 	if obfs := query.Get("obfs"); obfs != "" && obfs != "none" {
 		rule.Settings.Hy2Obfs = obfs

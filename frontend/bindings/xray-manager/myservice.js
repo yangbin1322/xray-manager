@@ -238,12 +238,22 @@ export function GetChainProxies() {
 }
 
 /**
+ * GetDefaultSpeedTestConfig 获取默认测速配置（供前端"恢复默认"使用）
+ * @returns {$CancellablePromise<models$0.SpeedTestConfig>}
+ */
+export function GetDefaultSpeedTestConfig() {
+    return $Call.ByID(1229100323).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
+}
+
+/**
  * GetGroups 获取所有分组
  * @returns {$CancellablePromise<models$0.Group[]>}
  */
 export function GetGroups() {
     return $Call.ByID(3885822517).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -253,7 +263,7 @@ export function GetGroups() {
  */
 export function GetHealthCheckConfig() {
     return $Call.ByID(1768486251).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -263,7 +273,7 @@ export function GetHealthCheckConfig() {
  */
 export function GetLoadBalancers() {
     return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType9($result);
     }));
 }
 
@@ -283,7 +293,17 @@ export function GetLogs() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType11($result);
+    }));
+}
+
+/**
+ * GetSpeedTestConfig 获取测速配置。为空的字段用默认值填充，便于前端展示当前生效值。
+ * @returns {$CancellablePromise<models$0.SpeedTestConfig>}
+ */
+export function GetSpeedTestConfig() {
+    return $Call.ByID(1770763514).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
     }));
 }
 
@@ -293,7 +313,7 @@ export function GetRules() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType13($result);
     }));
 }
 
@@ -311,7 +331,7 @@ export function GetSystemProxyStatus() {
  */
 export function ImportConfig() {
     return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType15($result);
     }));
 }
 
@@ -326,7 +346,7 @@ export function ImportConfig() {
  */
 export function ImportShareLinks(text, groupID, newGroupName) {
     return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -384,6 +404,15 @@ export function SetAutoStart(enabled) {
  */
 export function SetHealthCheckConfig(cfg) {
     return $Call.ByID(3960229671, cfg);
+}
+
+/**
+ * SetSpeedTestConfig 更新测速配置并立即生效
+ * @param {models$0.SpeedTestConfig} cfg
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSpeedTestConfig(cfg) {
+    return $Call.ByID(480942534, cfg);
 }
 
 /**
@@ -585,16 +614,17 @@ const $$createType0 = logger$0.LogEntry.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = models$0.ChainProxy.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = models$0.Group.createFrom;
-const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = models$0.HealthCheckConfig.createFrom;
-const $$createType7 = models$0.LoadBalanceNode.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = models$0.ProxyRule.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = models$0.Subscription.createFrom;
-const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = models$0.ImportResult.createFrom;
-const $$createType14 = $Create.Nullable($$createType13);
-const $$createType15 = models$0.ImportShareResult.createFrom;
-const $$createType16 = $Create.Nullable($$createType15);
+const $$createType4 = models$0.SpeedTestConfig.createFrom;
+const $$createType5 = models$0.Group.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = models$0.HealthCheckConfig.createFrom;
+const $$createType8 = models$0.LoadBalanceNode.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = models$0.ProxyRule.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = models$0.Subscription.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = models$0.ImportResult.createFrom;
+const $$createType15 = $Create.Nullable($$createType14);
+const $$createType16 = models$0.ImportShareResult.createFrom;
+const $$createType17 = $Create.Nullable($$createType16);

@@ -194,6 +194,20 @@ export async function setHealthCheckConfig(cfg) {
   return await MyService.SetHealthCheckConfig(cfg)
 }
 
+// ==================== 测速配置 ====================
+
+export async function getSpeedTestConfig() {
+  return await MyService.GetSpeedTestConfig()
+}
+
+export async function getDefaultSpeedTestConfig() {
+  return await MyService.GetDefaultSpeedTestConfig()
+}
+
+export async function setSpeedTestConfig(cfg) {
+  return await MyService.SetSpeedTestConfig(cfg)
+}
+
 export async function checkNodeHealth(ruleID) {
   return await MyService.CheckNodeHealth(ruleID)
 }

@@ -53,36 +53,66 @@
       </button>
     </div>
 
-    <!-- 健康检查设置对话框 -->
+    <!-- 设置对话框 -->
     <div v-if="showHealthSettings" class="dialog-overlay" @click.self="showHealthSettings = false">
-      <div class="dialog">
+      <div class="dialog dialog-settings">
         <div class="dialog-header">
-          <h3>健康检查设置</h3>
+          <h3>设置</h3>
           <button class="dialog-close" @click="showHealthSettings = false">&times;</button>
         </div>
+
+        <!-- 标签页 -->
+        <div class="settings-tabs">
+          <button
+            v-for="tab in settingsTabs" :key="tab.key"
+            :class="['settings-tab', { active: activeTab === tab.key }]"
+            @click="activeTab = tab.key"
+          >{{ tab.label }}</button>
+        </div>
+
         <div class="dialog-body">
-          <div class="form-group-line">
-            <label>
-              <input type="checkbox" v-model="healthCfg.enabled" />
-              启用后台自动检测（无需启动节点即可检测连通性）
-            </label>
+          <!-- 健康检查 -->
+          <div v-show="activeTab === 'health'">
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="healthCfg.enabled" />
+                启用后台自动检测（无需启动节点即可检测连通性）
+              </label>
+            </div>
+            <div class="form-group-line">
+              <label>检测周期（秒）：</label>
+              <input type="number" v-model.number="healthCfg.intervalSec" min="10" />
+            </div>
+            <div class="form-group-line">
+              <label>检测超时（秒）：</label>
+              <input type="number" v-model.number="healthCfg.timeoutSec" min="1" />
+            </div>
+            <div class="form-group-line">
+              <label>延迟较高阈值（毫秒）：</label>
+              <input type="number" v-model.number="healthCfg.latencyThreshold" min="50" />
+            </div>
           </div>
-          <div class="form-group-line">
-            <label>检测周期（秒）：</label>
-            <input type="number" v-model.number="healthCfg.intervalSec" min="10" />
-          </div>
-          <div class="form-group-line">
-            <label>检测超时（秒）：</label>
-            <input type="number" v-model.number="healthCfg.timeoutSec" min="1" />
-          </div>
-          <div class="form-group-line">
-            <label>延迟较高阈值（毫秒）：</label>
-            <input type="number" v-model.number="healthCfg.latencyThreshold" min="50" />
+
+          <!-- 测速 -->
+          <div v-show="activeTab === 'speed'">
+            <div class="form-group-block">
+              <label>下载测速 URL：</label>
+              <input type="text" v-model="speedCfg.url" class="full-input" placeholder="留空使用默认" />
+            </div>
+            <div class="form-group-block">
+              <label>请求头（每行一个，格式 <code>名称: 值</code>）：</label>
+              <textarea v-model="speedHeadersText" class="headers-textarea" rows="8"
+                placeholder="User-Agent: Mozilla/5.0 ..."></textarea>
+            </div>
+            <div class="settings-hint">
+              <button class="btn-link" @click="restoreSpeedDefaults">恢复默认</button>
+              <span>部分测速服务器需要特定请求头，否则会返回 500。</span>
+            </div>
           </div>
         </div>
         <div class="dialog-footer">
           <button class="btn-action" @click="showHealthSettings = false">取消</button>
-          <button class="btn-action btn-primary-solid" @click="saveHealthSettings">保存</button>
+          <button class="btn-action btn-primary-solid" @click="saveSettings">保存</button>
         </div>
       </div>
     </div>
@@ -118,23 +148,73 @@ function handleBatchEdit() {
 }
 
 const showHealthSettings = ref(false)
+const activeTab = ref('health')
+const settingsTabs = [
+  { key: 'health', label: '健康检查' },
+  { key: 'speed', label: '测速' },
+]
 const healthCfg = ref({ enabled: false, intervalSec: 60, timeoutSec: 5, latencyThreshold: 500 })
+const speedCfg = ref({ url: '', headers: {} })
+const speedHeadersText = ref('')
+
+// headers 对象 <-> "名称: 值" 多行文本
+function headersToText(headers) {
+  return Object.entries(headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')
+}
+function textToHeaders(text) {
+  const headers = {}
+  for (const line of (text || '').split('\n')) {
+    const s = line.trim()
+    if (!s) continue
+    const idx = s.indexOf(':')
+    if (idx <= 0) continue
+    const k = s.slice(0, idx).trim()
+    const v = s.slice(idx + 1).trim()
+    if (k) headers[k] = v
+  }
+  return headers
+}
 
 async function openHealthSettings() {
+  activeTab.value = 'health'
   try {
     const cfg = await api.getHealthCheckConfig()
     if (cfg) healthCfg.value = cfg
   } catch (e) {
     console.error('获取健康检查配置失败:', e)
   }
+  try {
+    const sc = await api.getSpeedTestConfig()
+    if (sc) {
+      speedCfg.value = { url: sc.url || '', headers: sc.headers || {} }
+      speedHeadersText.value = headersToText(sc.headers)
+    }
+  } catch (e) {
+    console.error('获取测速配置失败:', e)
+  }
   showHealthSettings.value = true
 }
 
-async function saveHealthSettings() {
+async function restoreSpeedDefaults() {
+  try {
+    const def = await api.getDefaultSpeedTestConfig()
+    speedCfg.value.url = def.url || ''
+    speedHeadersText.value = headersToText(def.headers)
+    appStore.showToast('已填入默认测速配置，保存后生效', 'info')
+  } catch (e) {
+    appStore.showToast(`获取默认配置失败: ${e}`, 'error')
+  }
+}
+
+async function saveSettings() {
   try {
     await api.setHealthCheckConfig(healthCfg.value)
+    await api.setSpeedTestConfig({
+      url: speedCfg.value.url.trim(),
+      headers: textToHeaders(speedHeadersText.value),
+    })
     showHealthSettings.value = false
-    appStore.showToast('健康检查设置已保存', 'success')
+    appStore.showToast('设置已保存', 'success')
   } catch (e) {
     appStore.showToast(`保存失败: ${e}`, 'error')
   }
@@ -323,9 +403,86 @@ function handleEnableSysProxy() {
   border-bottom: 1px solid var(--border-color);
 }
 
+.dialog-settings { width: 560px; }
 .dialog-header h3 { margin: 0; font-size: 16px; }
 .dialog-close { border: none; background: none; font-size: 20px; cursor: pointer; color: var(--text-secondary); }
-.dialog-body { padding: 20px; }
+.dialog-body { padding: 20px; max-height: 70vh; overflow-y: auto; }
+
+/* 标签页 */
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+.settings-tab {
+  padding: 10px 16px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+  font-weight: 500;
+}
+
+.form-group-block { margin-bottom: 12px; }
+.form-group-block label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.form-group-block code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.full-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+.headers-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+  resize: vertical;
+}
+.settings-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.btn-link {
+  border: none;
+  background: none;
+  color: var(--primary-color);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+}
 .dialog-footer {
   padding: 12px 20px;
   border-top: 1px solid var(--border-color);

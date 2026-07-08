@@ -32,9 +32,16 @@
 
         <div class="form-section">
           <h4>选择子节点</h4>
+          <input
+            v-model="nodeSearch"
+            type="text"
+            class="node-search"
+            placeholder="搜索节点（别名/协议/地址）..."
+          />
           <div class="node-select-list">
             <div v-if="rulesStore.rules.length === 0" class="empty-hint">暂无可用节点</div>
-            <label v-for="rule in rulesStore.rules" :key="rule.id" class="node-select-item">
+            <div v-else-if="filteredRules.length === 0" class="empty-hint">无匹配节点</div>
+            <label v-for="rule in filteredRules" :key="rule.id" class="node-select-item">
               <input type="checkbox" :value="rule.id" v-model="form.nodeIds" />
               <span>{{ rule.alias }} ({{ rule.protocol }} - {{ rule.serverAddr }})</span>
             </label>
@@ -72,6 +79,17 @@ const saving = ref(false)
 
 const isEditing = computed(() => !!props.editingLB)
 
+const nodeSearch = ref('')
+const filteredRules = computed(() => {
+  const kw = nodeSearch.value.trim().toLowerCase()
+  if (!kw) return rulesStore.rules
+  return rulesStore.rules.filter(r =>
+    (r.alias && r.alias.toLowerCase().includes(kw)) ||
+    (r.protocol && r.protocol.toLowerCase().includes(kw)) ||
+    (r.serverAddr && r.serverAddr.toLowerCase().includes(kw))
+  )
+})
+
 const defaultForm = () => ({
   alias: '',
   localType: 'mixed',
@@ -83,6 +101,7 @@ const form = ref(defaultForm())
 
 watch(() => props.visible, (v) => {
   if (v) {
+    nodeSearch.value = ''
     if (props.editingLB) {
       form.value = {
         alias: props.editingLB.alias || '',
@@ -203,6 +222,17 @@ function close() { emit('close') }
   box-sizing: border-box;
 }
 
+.node-search {
+  width: 100%;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
 .node-select-list {
   max-height: 200px;
   overflow-y: auto;

@@ -159,6 +159,8 @@ type ProxySettings struct {
 	Hy2ObfsPassword string `json:"hy2ObfsPassword,omitempty"` // 混淆密码
 	Hy2UpMbps       int    `json:"hy2UpMbps,omitempty"`       // 上行带宽限制 (Mbps)，0 表示自动（BBR）
 	Hy2DownMbps     int    `json:"hy2DownMbps,omitempty"`     // 下行带宽限制 (Mbps)，0 表示自动（BBR）
+	Hy2PinSHA256    string `json:"hy2PinSHA256,omitempty"`    // 证书指纹固定（自签证书）；sing-box 无法用证书指纹校验，故有此值时启用 insecure
+	Hy2Ports        string `json:"hy2Ports,omitempty"`        // 端口跳跃范围，如 "35000-39000"（对应 mport）
 
 	// TUIC v5 配置
 	TUICUserID       string `json:"tuicUserId,omitempty"`       // 用户 UUID
@@ -208,6 +210,13 @@ type Config struct {
 	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
 	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
+	SpeedTest     SpeedTestConfig   `json:"speedTest"`     // 测速配置
+}
+
+// SpeedTestConfig 测速配置（下载测速的目标 URL 与请求头）
+type SpeedTestConfig struct {
+	URL     string            `json:"url"`     // 测速下载 URL（空则用默认）
+	Headers map[string]string `json:"headers"` // 自定义请求头（空则用默认浏览器请求头）
 }
 
 // ExportData 导出数据结构（包含版本信息）

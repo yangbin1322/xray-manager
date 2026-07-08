@@ -232,6 +232,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 启动后台健康检查（按配置）
 		a.healthCheckManager.Configure(a.config.HealthCheck)
+
+		// 应用测速配置
+		a.speedTestManager.Configure(a.config.SpeedTest.URL, a.config.SpeedTest.Headers)
 	}
 
 	// 定期保存流量统计（避免每次流量更新都写盘）
@@ -322,6 +325,44 @@ func generateUniqueRuleID(existingRules []models.ProxyRule) string {
 	return id
 }
 
+// usedLocalPorts 收集配置中所有节点（普通/故障转移/链式代理）已占用的本地端口。
+// 需已持有 a.mu 锁。
+func (a *MyService) usedLocalPorts() map[int]bool {
+	used := make(map[int]bool)
+	for i := range a.config.Rules {
+		if p := a.config.Rules[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if p := a.config.LoadBalancers[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if p := a.config.ChainProxies[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
+	return used
+}
+
+// allocateLocalPort 分配一个既不与配置中其他节点冲突、系统又可监听的本地端口。
+// 相比直接用 utils.FindAvailablePort，额外排除了已分配给未启动节点的端口，
+// 避免多个未启动节点拿到同一端口。需已持有 a.mu 锁。
+func (a *MyService) allocateLocalPort() int {
+	used := a.usedLocalPorts()
+	for port := 10800; port < 65535; port++ {
+		if used[port] {
+			continue
+		}
+		if utils.CheckPortAvailable(port) {
+			return port
+		}
+	}
+	return 0
+}
+
 // AddRule 添加规则
 func (a *MyService) AddRule(rule models.ProxyRule) error {
 	a.mu.Lock()
@@ -346,6 +387,11 @@ func (a *MyService) AddRule(rule models.ProxyRule) error {
 				break
 			}
 		}
+	}
+
+	// 端口无效或已被其他节点占用时自动分配
+	if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] {
+		rule.LocalPort = a.allocateLocalPort()
 	}
 
 	a.config.Rules = append(a.config.Rules, rule)
@@ -1106,9 +1152,9 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		rule.ProcessID = 0
 		rule.RealIP = ""
 
-		// 分配可用端口（如果端口已被使用）
-		if rule.LocalPort <= 0 || !utils.CheckPortAvailable(rule.LocalPort) {
-			rule.LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		// 分配可用端口：端口无效、已被其他节点占用、或系统不可用时重新分配
+		if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] || !utils.CheckPortAvailable(rule.LocalPort) {
+			rule.LocalPort = a.allocateLocalPort()
 		}
 
 		a.config.Rules = append(a.config.Rules, rule)
@@ -1492,7 +1538,7 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 		rules[i].GroupName = group.Name
 		rules[i].SubscriptionURL = url
 		rules[i].Source = "subscription"
-		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		rules[i].LocalPort = a.allocateLocalPort()
 
 		a.config.Rules = append(a.config.Rules, rules[i])
 	}
@@ -1741,7 +1787,7 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 			newRules[i].GroupID = targetSub.GroupID
 			newRules[i].SubscriptionURL = targetSub.URL
 			newRules[i].Source = "subscription"
-			newRules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+			newRules[i].LocalPort = a.allocateLocalPort()
 
 			a.config.Rules = append(a.config.Rules, newRules[i])
 		}
@@ -2112,7 +2158,7 @@ func (a *MyService) ImportShareLinks(text, groupID, newGroupName string) (*model
 		rules[i].Source = "manual"
 		rules[i].GroupID = groupID
 		rules[i].GroupName = groupName
-		rules[i].LocalPort = utils.FindAvailablePort(10800 + len(a.config.Rules))
+		rules[i].LocalPort = a.allocateLocalPort()
 		a.config.Rules = append(a.config.Rules, rules[i])
 		result.SuccessCount++
 	}
@@ -2794,6 +2840,42 @@ func (a *MyService) SetHealthCheckConfig(cfg models.HealthCheckConfig) error {
 	defer a.mu.Unlock()
 	a.config.HealthCheck = a.healthCheckManager.GetConfig()
 	return a.saveConfig()
+}
+
+// GetSpeedTestConfig 获取测速配置。为空的字段用默认值填充，便于前端展示当前生效值。
+func (a *MyService) GetSpeedTestConfig() models.SpeedTestConfig {
+	a.mu.RLock()
+	cfg := a.config.SpeedTest
+	a.mu.RUnlock()
+
+	if cfg.URL == "" {
+		cfg.URL = speedtest.DefaultSpeedTestURL()
+	}
+	if len(cfg.Headers) == 0 {
+		cfg.Headers = speedtest.DefaultSpeedTestHeaders()
+	}
+	return cfg
+}
+
+// GetDefaultSpeedTestConfig 获取默认测速配置（供前端"恢复默认"使用）
+func (a *MyService) GetDefaultSpeedTestConfig() models.SpeedTestConfig {
+	return models.SpeedTestConfig{
+		URL:     speedtest.DefaultSpeedTestURL(),
+		Headers: speedtest.DefaultSpeedTestHeaders(),
+	}
+}
+
+// SetSpeedTestConfig 更新测速配置并立即生效
+func (a *MyService) SetSpeedTestConfig(cfg models.SpeedTestConfig) error {
+	a.mu.Lock()
+	a.config.SpeedTest = cfg
+	err := a.saveConfig()
+	a.mu.Unlock()
+
+	// 应用到测速器（空值时测速器内部回退到默认）
+	a.speedTestManager.Configure(cfg.URL, cfg.Headers)
+	a.log("[测速] 测速配置已更新")
+	return err
 }
 
 // markRulesChecking 将指定节点标记为检测中并返回其快照

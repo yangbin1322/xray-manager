@@ -262,6 +262,18 @@ func (p *Parser) parseClashProxy(proxy map[string]interface{}, index int) (model
 		if skipCertVerify, ok := proxy["skip-cert-verify"].(bool); ok {
 			rule.Settings.TLS.AllowInsecure = skipCertVerify
 		}
+		// 证书指纹固定（Clash Meta 的 fingerprint / sha256）：sing-box 无法用该指纹校验，启用 insecure
+		if fp, ok := proxy["fingerprint"].(string); ok && fp != "" {
+			rule.Settings.Hy2PinSHA256 = fp
+			rule.Settings.TLS.AllowInsecure = true
+		} else if fp, ok := proxy["sha256"].(string); ok && fp != "" {
+			rule.Settings.Hy2PinSHA256 = fp
+			rule.Settings.TLS.AllowInsecure = true
+		}
+		// 端口跳跃（Clash 的 ports 字段，如 "35000-39000"）
+		if ports, ok := proxy["ports"].(string); ok && ports != "" {
+			rule.Settings.Hy2Ports = ports
+		}
 		return rule, nil
 
 	case "tuic":

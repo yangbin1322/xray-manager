@@ -13,6 +13,7 @@ export {
     LoadBalanceNode,
     ProxyRule,
     ProxySettings,
+    SpeedTestConfig,
     Subscription,
     TLSSettings,
     TrafficStats,
