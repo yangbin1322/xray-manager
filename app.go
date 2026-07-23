@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type MyService struct {
 	mu                  sync.RWMutex
 
 	trafficDirty bool // 流量统计有未保存的变更
+	httpServer   *http.Server
 }
 
 func NewMyService() *MyService {
@@ -242,6 +244,10 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 	a.log("Xray 管理器已启动")
 
+	if err := a.startHTTPAPI(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -266,6 +272,8 @@ func (a *MyService) trafficSaveLoop(ctx context.Context) {
 
 // ServiceShutdown 在应用关闭时调用
 func (a *MyService) ServiceShutdown() error {
+	a.stopHTTPAPI()
+
 	// 停止健康检查
 	if a.healthCheckManager != nil {
 		a.healthCheckManager.Stop()
@@ -529,10 +537,10 @@ func (a *MyService) DeleteRule(id string) error {
 
 // nodeRef 批量操作时对一个节点的引用（普通节点/故障转移/链式代理）
 type nodeRef struct {
-	id       string
-	nodeType string // rule / lb / chain
+	id        string
+	nodeType  string // rule / lb / chain
 	localPort int
-	alias    string
+	alias     string
 }
 
 // collectNodeRefs 按 ID 收集节点引用及其类型（需要已持有读锁）
@@ -1832,6 +1840,42 @@ func (a *MyService) GetGroups() []models.Group {
 	return a.groupManager.GetAllGroups()
 }
 
+// UpdateGroup 更新分组名称和描述，并同步组内节点显示的分组名。
+func (a *MyService) UpdateGroup(groupID, name, description string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("分组名称不能为空")
+	}
+	if err := a.groupManager.UpdateGroup(groupID, name, description); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.config.Groups {
+		if a.config.Groups[i].ID == groupID {
+			a.config.Groups[i].Name = name
+			a.config.Groups[i].Description = description
+			break
+		}
+	}
+	for i := range a.config.Rules {
+		if a.config.Rules[i].GroupID == groupID {
+			a.config.Rules[i].GroupName = name
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].GroupID == groupID {
+			a.config.LoadBalancers[i].GroupName = name
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].GroupID == groupID {
+			a.config.ChainProxies[i].GroupName = name
+		}
+	}
+	return a.saveConfig()
+}
+
 // DeleteGroup 删除分组
 // DeleteGroup 删除分组（级联）：停止并删除分组内所有节点，再删除分组本身。
 // 调用方（前端）应先向用户确认。
@@ -3015,7 +3059,7 @@ func accumulateTraffic(t *models.TrafficStats, deltaUp, deltaDown int64, today s
 }
 
 // handleRealIP 处理成功获取真实IP的回调：按 localPort 回填到对应节点
-//（普通节点/故障转移/链式代理），并清除失败原因。
+// （普通节点/故障转移/链式代理），并清除失败原因。
 func (a *MyService) handleRealIP(localPort int, ip string) {
 	a.mu.Lock()
 	for i := range a.config.Rules {

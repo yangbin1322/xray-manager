@@ -109,6 +109,52 @@
               <span>部分测速服务器需要特定请求头，否则会返回 500。</span>
             </div>
           </div>
+
+          <!-- HTTP API -->
+          <div v-show="activeTab === 'httpApi'">
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="httpApiCfg.enabled" />
+                启用 HTTP API
+              </label>
+            </div>
+            <div class="form-group-line">
+              <label>监听地址：</label>
+              <select v-model="httpApiCfg.host" :disabled="!httpApiCfg.enabled">
+                <option value="127.0.0.1">127.0.0.1（仅本机）</option>
+                <option value="::1">::1（仅本机 IPv6）</option>
+                <option value="0.0.0.0">0.0.0.0（所有 IPv4 网卡）</option>
+                <option value="::">::（所有 IPv6 网卡）</option>
+              </select>
+            </div>
+            <div class="form-group-line">
+              <label>端口：</label>
+              <input type="number" v-model.number="httpApiCfg.port" min="1" max="65535"
+                :disabled="!httpApiCfg.enabled" />
+            </div>
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="httpApiCfg.authEnabled"
+                  :disabled="!httpApiCfg.enabled || requiresAuth" />
+                启用 Bearer Token 鉴权
+              </label>
+            </div>
+            <div v-if="httpApiCfg.authEnabled" class="form-group-block">
+              <label>访问 Token：</label>
+              <div class="token-input-row">
+                <input :type="showApiToken ? 'text' : 'password'" v-model="httpApiCfg.token"
+                  class="full-input" autocomplete="off" :disabled="!httpApiCfg.enabled" />
+                <button class="btn-action" type="button" @click="showApiToken = !showApiToken">
+                  {{ showApiToken ? '隐藏' : '显示' }}
+                </button>
+                <button class="btn-action" type="button" @click="generateApiToken">生成</button>
+              </div>
+            </div>
+            <div class="settings-hint http-api-hint">
+              <span v-if="requiresAuth">非本机监听必须启用鉴权。</span>
+              <span v-else>接口地址：{{ httpApiURL }}</span>
+            </div>
+          </div>
         </div>
         <div class="dialog-footer">
           <button class="btn-action" @click="showHealthSettings = false">取消</button>
@@ -120,7 +166,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
@@ -152,10 +198,22 @@ const activeTab = ref('health')
 const settingsTabs = [
   { key: 'health', label: '健康检查' },
   { key: 'speed', label: '测速' },
+  { key: 'httpApi', label: 'HTTP API' },
 ]
 const healthCfg = ref({ enabled: false, intervalSec: 60, timeoutSec: 5, latencyThreshold: 500 })
 const speedCfg = ref({ url: '', headers: {} })
 const speedHeadersText = ref('')
+const httpApiCfg = ref({ configured: true, enabled: true, host: '127.0.0.1', port: 9090, authEnabled: false, token: '' })
+const showApiToken = ref(false)
+const requiresAuth = computed(() => !['127.0.0.1', '::1', 'localhost'].includes(httpApiCfg.value.host))
+const httpApiURL = computed(() => {
+  const host = httpApiCfg.value.host.includes(':') ? `[${httpApiCfg.value.host}]` : httpApiCfg.value.host
+  return `http://${host}:${httpApiCfg.value.port}/api/v1`
+})
+
+watch(() => httpApiCfg.value.host, () => {
+  if (requiresAuth.value) httpApiCfg.value.authEnabled = true
+})
 
 // headers 对象 <-> "名称: 值" 多行文本
 function headersToText(headers) {
@@ -192,7 +250,20 @@ async function openHealthSettings() {
   } catch (e) {
     console.error('获取测速配置失败:', e)
   }
+  try {
+    const apiCfg = await api.getHTTPAPIConfig()
+    if (apiCfg) httpApiCfg.value = apiCfg
+  } catch (e) {
+    console.error('获取 HTTP API 配置失败:', e)
+  }
   showHealthSettings.value = true
+}
+
+function generateApiToken() {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  httpApiCfg.value.token = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  showApiToken.value = true
 }
 
 async function restoreSpeedDefaults() {
@@ -208,11 +279,13 @@ async function restoreSpeedDefaults() {
 
 async function saveSettings() {
   try {
+    if (requiresAuth.value) httpApiCfg.value.authEnabled = true
     await api.setHealthCheckConfig(healthCfg.value)
     await api.setSpeedTestConfig({
       url: speedCfg.value.url.trim(),
       headers: textToHeaders(speedHeadersText.value),
     })
+    await api.setHTTPAPIConfig(httpApiCfg.value)
     showHealthSettings.value = false
     appStore.showToast('设置已保存', 'success')
   } catch (e) {
@@ -516,6 +589,25 @@ function handleEnableSysProxy() {
   background: var(--bg-primary);
   color: var(--text-primary);
 }
+
+.form-group-line select {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.token-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-input-row .full-input { flex: 1; min-width: 0; }
+.http-api-hint { min-height: 20px; }
 
 .btn-primary-solid {
   background: var(--primary-color) !important;

@@ -208,6 +208,16 @@ export async function setSpeedTestConfig(cfg) {
   return await MyService.SetSpeedTestConfig(cfg)
 }
 
+// ==================== HTTP API 配置 ====================
+
+export async function getHTTPAPIConfig() {
+  return await MyService.GetHTTPAPIConfig()
+}
+
+export async function setHTTPAPIConfig(cfg) {
+  return await MyService.SetHTTPAPIConfig(cfg)
+}
+
 export async function checkNodeHealth(ruleID) {
   return await MyService.CheckNodeHealth(ruleID)
 }

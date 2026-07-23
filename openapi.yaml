@@ -1,0 +1,409 @@
+openapi: 3.0.3
+info:
+  title: Xray Manager HTTP API
+  version: 1.0.0
+  description: 管理 Xray Manager 节点、分组和订阅的 REST API。
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: System
+  - name: Nodes
+  - name: Groups
+  - name: Subscriptions
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: 检查 API 状态
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+  /nodes:
+    get:
+      tags: [Nodes]
+      summary: 获取全部节点
+      responses:
+        '200':
+          description: 节点列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Node' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Nodes]
+      summary: 创建节点
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeInput' }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/NodeResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /nodes/start:
+    post:
+      tags: [Nodes]
+      summary: 批量启动节点
+      requestBody: { $ref: '#/components/requestBodies/NodeIDs' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /nodes/stop:
+    post:
+      tags: [Nodes]
+      summary: 批量停止节点
+      requestBody: { $ref: '#/components/requestBodies/NodeIDs' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /local-proxies:
+    get:
+      tags: [Nodes]
+      summary: 获取全部规则的本地代理
+      description: 每个混合本地端口同时返回 HTTP 和 SOCKS5 URL，包括未启动的规则。
+      responses:
+        '200': { $ref: '#/components/responses/LocalProxyList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /local-proxies/enabled:
+    get:
+      tags: [Nodes]
+      summary: 获取已启动规则的本地代理
+      responses:
+        '200': { $ref: '#/components/responses/LocalProxyList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /nodes/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Nodes]
+      summary: 获取节点
+      responses:
+        '200': { description: 节点, content: { application/json: { schema: { $ref: '#/components/schemas/NodeResponse' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Nodes]
+      summary: 修改节点
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/NodeInput' } } } }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Nodes]
+      summary: 删除节点
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /nodes/{id}/start:
+    post:
+      tags: [Nodes]
+      summary: 启动节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /nodes/{id}/stop:
+    post:
+      tags: [Nodes]
+      summary: 停止节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /groups:
+    get:
+      tags: [Groups]
+      summary: 获取全部分组
+      responses:
+        '200': { description: 分组列表, content: { application/json: { schema: { $ref: '#/components/schemas/GroupListResponse' } } } }
+    post:
+      tags: [Groups]
+      summary: 创建分组
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/GroupInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/GroupResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /groups/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Groups]
+      summary: 获取分组
+      responses:
+        '200': { description: 分组, content: { application/json: { schema: { $ref: '#/components/schemas/GroupResponse' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Groups]
+      summary: 修改分组
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/GroupInput' } } } }
+      responses:
+        '200': { description: 修改成功, content: { application/json: { schema: { $ref: '#/components/schemas/GroupResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Groups]
+      summary: 级联删除分组及组内节点
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /groups/{id}/start:
+    post:
+      tags: [Groups]
+      summary: 启动分组内全部节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /groups/{id}/stop:
+    post:
+      tags: [Groups]
+      summary: 停止分组内全部节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /groups/{id}/local-proxies:
+    get:
+      tags: [Groups]
+      summary: 获取指定分组的本地代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/LocalProxyList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /subscriptions:
+    get:
+      tags: [Subscriptions]
+      summary: 获取全部订阅
+      responses:
+        '200': { description: 订阅列表, content: { application/json: { schema: { $ref: '#/components/schemas/SubscriptionListResponse' } } } }
+    post:
+      tags: [Subscriptions]
+      summary: 创建并拉取订阅
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SubscriptionInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/SubscriptionResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /subscriptions/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Subscriptions]
+      summary: 获取订阅
+      responses:
+        '200': { description: 订阅, content: { application/json: { schema: { $ref: '#/components/schemas/SubscriptionResponse' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Subscriptions]
+      summary: 修改订阅配置
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SubscriptionInput' } } } }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Subscriptions]
+      summary: 删除订阅及其节点
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /subscriptions/{id}/update:
+    post:
+      tags: [Subscriptions]
+      summary: 立即更新订阅
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /subscriptions/{id}/local-proxies:
+    get:
+      tags: [Subscriptions]
+      summary: 获取指定订阅的本地代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses:
+        '200': { $ref: '#/components/responses/LocalProxyList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Token
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  requestBodies:
+    NodeIDs:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ids]
+            properties:
+              ids: { type: array, minItems: 1, items: { type: string } }
+  responses:
+    Success:
+      description: 操作成功
+      content: { application/json: { schema: { $ref: '#/components/schemas/Response' } } }
+    BadRequest:
+      description: 请求参数无效
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unauthorized:
+      description: Token 缺失或无效
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    NotFound:
+      description: 资源不存在
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    LocalProxyList:
+      description: 本地代理列表
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Response'
+              - type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/LocalProxy' } }
+  schemas:
+    Response:
+      type: object
+      properties:
+        data: {}
+        error: { type: string }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: 节点不存在 }
+    LocalProxy:
+      type: object
+      required: [id, alias, localPort, httpUrl, socks5Url, enabled, source]
+      properties:
+        id: { type: string }
+        alias: { type: string }
+        localPort: { type: integer }
+        httpUrl: { type: string, example: 'http://127.0.0.1:1080' }
+        socks5Url: { type: string, example: 'socks5://127.0.0.1:1080' }
+        enabled: { type: boolean }
+        groupId: { type: string }
+        groupName: { type: string }
+        source: { type: string, enum: [manual, subscription] }
+    NodeInput:
+      type: object
+      required: [protocol, serverAddr, serverPort, settings]
+      properties:
+        alias: { type: string }
+        localType: { type: string, default: mixed }
+        localPort: { type: integer, minimum: 0, maximum: 65535, description: 0 表示自动分配 }
+        protocol: { type: string, enum: [shadowsocks, vmess, vless, trojan, http, socks, hysteria2, tuic] }
+        serverAddr: { type: string }
+        serverPort: { type: integer, minimum: 1, maximum: 65535 }
+        settings: { $ref: '#/components/schemas/ProxySettings' }
+        groupId: { type: string }
+    Node:
+      allOf:
+        - $ref: '#/components/schemas/NodeInput'
+        - type: object
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+            processId: { type: integer }
+            realIp: { type: string }
+            source: { type: string, enum: [manual, subscription] }
+            groupName: { type: string }
+            lastError: { type: string }
+            latency: { type: integer }
+            downloadSpeed: { type: number }
+            healthStatus: { type: string }
+    NodeResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/Node' } }
+    ProxySettings:
+      type: object
+      additionalProperties: false
+      properties:
+        ssMethod: { type: string }
+        ssPassword: { type: string, format: password }
+        vmessUserId: { type: string }
+        vmessAlterId: { type: integer }
+        vmessSecurity: { type: string }
+        vlessUserId: { type: string }
+        vlessFlow: { type: string }
+        vlessEncryption: { type: string }
+        trojanPassword: { type: string, format: password }
+        httpUsername: { type: string }
+        httpPassword: { type: string, format: password }
+        socksUsername: { type: string }
+        socksPassword: { type: string, format: password }
+        socksVersion: { type: string }
+        hy2Password: { type: string, format: password }
+        tuicUserId: { type: string }
+        tuicPassword: { type: string, format: password }
+        network: { type: string, enum: [tcp, ws, grpc, h2] }
+        security: { type: string, enum: [none, tls, reality] }
+        tls: { type: object, additionalProperties: true }
+        ws: { type: object, additionalProperties: true }
+        grpc: { type: object, additionalProperties: true }
+        h2: { type: object, additionalProperties: true }
+    GroupInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+    Group:
+      allOf:
+        - $ref: '#/components/schemas/GroupInput'
+        - type: object
+          properties:
+            id: { type: string }
+            source: { type: string, enum: [manual, subscription] }
+            subscriptionId: { type: string }
+            createdAt: { type: string }
+    GroupResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/Group' } }
+    GroupListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/Group' } } }
+    SubscriptionInput:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+        autoUpdate: { type: boolean, default: false }
+        updateInterval: { type: integer, minimum: 0, description: 小时 }
+        updateMode: { type: string, enum: [direct, system, proxy], default: direct }
+        updateProxyId: { type: string }
+    Subscription:
+      allOf:
+        - $ref: '#/components/schemas/SubscriptionInput'
+        - type: object
+          properties:
+            id: { type: string }
+            type: { type: string }
+            groupId: { type: string }
+            enabled: { type: boolean }
+            lastUpdate: { type: string }
+            nextUpdate: { type: string }
+            nodeCount: { type: integer }
+    SubscriptionResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/Subscription' } }
+    SubscriptionListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/Subscription' } } }

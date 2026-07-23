@@ -138,6 +138,43 @@ wails3 task linux:package
 
 ## 使用说明
 
+### HTTP API
+
+程序启动后默认监听 `127.0.0.1:9090`，API 前缀为 `/api/v1`。监听地址、端口、服务开关和 Bearer Token 鉴权可在程序的“设置 → HTTP API”中配置，保存后立即生效。监听非本机地址时必须启用鉴权。
+
+Swagger UI 文档地址为 `http://127.0.0.1:9090/api/docs/`，OpenAPI 规范地址为 `http://127.0.0.1:9090/api/openapi.yaml`。Swagger UI 的 “Authorize” 按钮可填写设置中的 Token。
+
+> Swagger UI 页面资源由 `unpkg.com` 加载；无法访问该 CDN 时仍可直接下载内置的 OpenAPI YAML。Token 会保存在程序目录的配置文件中，请限制该文件的访问权限，不要将 Token 提交到版本库。
+
+开启鉴权后的请求示例：
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-proxies/enabled
+```
+
+本地代理接口返回同一混合端口的 HTTP 与 SOCKS5 地址。全部接口也会返回尚未启动的节点配置；需要可立即使用的代理时，请调用 `/api/v1/local-proxies/enabled`。
+
+主要接口：
+
+| 方法 | 路径 | 功能 |
+|------|------|------|
+| GET / POST | `/api/v1/nodes` | 获取 / 创建节点 |
+| GET / PUT / DELETE | `/api/v1/nodes/{id}` | 获取 / 修改 / 删除节点 |
+| POST | `/api/v1/nodes/{id}/start`、`/stop` | 启动 / 停止节点 |
+| POST | `/api/v1/nodes/start`、`/stop` | 批量启停，Body 为 `{"ids":["rule_id"]}` |
+| GET | `/api/v1/local-proxies` | 获取全部规则的本地 HTTP/SOCKS5 代理地址 |
+| GET | `/api/v1/local-proxies/enabled` | 获取已启动规则的本地代理地址 |
+| GET | `/api/v1/groups/{id}/local-proxies` | 获取指定分组的本地代理地址 |
+| GET | `/api/v1/subscriptions/{id}/local-proxies` | 获取指定订阅的本地代理地址 |
+| GET / POST | `/api/v1/groups` | 获取 / 创建分组 |
+| GET / PUT / DELETE | `/api/v1/groups/{id}` | 获取 / 修改 / 删除分组（删除会级联删除节点） |
+| POST | `/api/v1/groups/{id}/start`、`/stop` | 启动 / 停止分组内节点 |
+| GET / POST | `/api/v1/subscriptions` | 获取 / 创建订阅 |
+| GET / PUT / DELETE | `/api/v1/subscriptions/{id}` | 获取 / 修改 / 删除订阅 |
+| POST | `/api/v1/subscriptions/{id}/update` | 立即更新订阅 |
+
+示例：`curl http://127.0.0.1:9090/api/v1/nodes`
+
 ### 添加代理规则
 
 1. 点击 **"添加规则"** 按钮

@@ -36,6 +36,7 @@ func (m *Manager) Load() (*models.Config, error) {
 		return &models.Config{
 			AutoStart: false,
 			Rules:     []models.ProxyRule{},
+			HTTPAPI:   defaultHTTPAPIConfig(),
 		}, nil
 	}
 
@@ -50,8 +51,20 @@ func (m *Manager) Load() (*models.Config, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
+	if !config.HTTPAPI.Configured {
+		config.HTTPAPI = defaultHTTPAPIConfig()
+	}
 
 	return &config, nil
+}
+
+func defaultHTTPAPIConfig() models.HTTPAPIConfig {
+	return models.HTTPAPIConfig{
+		Configured: true,
+		Enabled:    true,
+		Host:       "127.0.0.1",
+		Port:       9090,
+	}
 }
 
 // Save 保存配置

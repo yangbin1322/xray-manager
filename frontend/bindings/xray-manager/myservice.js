@@ -258,12 +258,22 @@ export function GetGroups() {
 }
 
 /**
+ * GetHTTPAPIConfig 获取当前 HTTP API 配置。
+ * @returns {$CancellablePromise<models$0.HTTPAPIConfig>}
+ */
+export function GetHTTPAPIConfig() {
+    return $Call.ByID(3207998301).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
  * GetHealthCheckConfig 获取健康检查配置
  * @returns {$CancellablePromise<models$0.HealthCheckConfig>}
  */
 export function GetHealthCheckConfig() {
     return $Call.ByID(1768486251).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType8($result);
     }));
 }
 
@@ -273,7 +283,7 @@ export function GetHealthCheckConfig() {
  */
 export function GetLoadBalancers() {
     return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType10($result);
     }));
 }
 
@@ -293,7 +303,7 @@ export function GetLogs() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType12($result);
     }));
 }
 
@@ -313,7 +323,7 @@ export function GetSpeedTestConfig() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -331,7 +341,7 @@ export function GetSystemProxyStatus() {
  */
 export function ImportConfig() {
     return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType16($result);
     }));
 }
 
@@ -346,7 +356,7 @@ export function ImportConfig() {
  */
 export function ImportShareLinks(text, groupID, newGroupName) {
     return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -395,6 +405,15 @@ export function SearchLogs(keyword, level) {
  */
 export function SetAutoStart(enabled) {
     return $Call.ByID(2368911042, enabled);
+}
+
+/**
+ * SetHTTPAPIConfig 保存配置并立即重启 HTTP API 服务。
+ * @param {models$0.HTTPAPIConfig} cfg
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetHTTPAPIConfig(cfg) {
+    return $Call.ByID(1402826505, cfg);
 }
 
 /**
@@ -572,6 +591,17 @@ export function UpdateChainProxy(chain) {
 }
 
 /**
+ * UpdateGroup 更新分组名称和描述，并同步组内节点显示的分组名。
+ * @param {string} groupID
+ * @param {string} name
+ * @param {string} description
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateGroup(groupID, name, description) {
+    return $Call.ByID(3709813701, groupID, name, description);
+}
+
+/**
  * UpdateLoadBalancer 更新故障转移节点
  * @param {models$0.LoadBalanceNode} lb
  * @returns {$CancellablePromise<void>}
@@ -617,14 +647,15 @@ const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = models$0.SpeedTestConfig.createFrom;
 const $$createType5 = models$0.Group.createFrom;
 const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = models$0.HealthCheckConfig.createFrom;
-const $$createType8 = models$0.LoadBalanceNode.createFrom;
-const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = models$0.ProxyRule.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = models$0.Subscription.createFrom;
-const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = models$0.ImportResult.createFrom;
-const $$createType15 = $Create.Nullable($$createType14);
-const $$createType16 = models$0.ImportShareResult.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
+const $$createType7 = models$0.HTTPAPIConfig.createFrom;
+const $$createType8 = models$0.HealthCheckConfig.createFrom;
+const $$createType9 = models$0.LoadBalanceNode.createFrom;
+const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = models$0.ProxyRule.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = models$0.Subscription.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = models$0.ImportResult.createFrom;
+const $$createType16 = $Create.Nullable($$createType15);
+const $$createType17 = models$0.ImportShareResult.createFrom;
+const $$createType18 = $Create.Nullable($$createType17);

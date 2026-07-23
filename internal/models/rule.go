@@ -211,6 +211,17 @@ type Config struct {
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
 	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
 	SpeedTest     SpeedTestConfig   `json:"speedTest"`     // 测速配置
+	HTTPAPI       HTTPAPIConfig     `json:"httpApi"`       // HTTP API 配置
+}
+
+// HTTPAPIConfig HTTP API 服务配置。
+type HTTPAPIConfig struct {
+	Configured  bool   `json:"configured"`
+	Enabled     bool   `json:"enabled"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	AuthEnabled bool   `json:"authEnabled"`
+	Token       string `json:"token,omitempty"`
 }
 
 // SpeedTestConfig 测速配置（下载测速的目标 URL 与请求头）

@@ -7,6 +7,7 @@ export {
     GRPCSettings,
     Group,
     H2Settings,
+    HTTPAPIConfig,
     HealthCheckConfig,
     ImportResult,
     ImportShareResult,

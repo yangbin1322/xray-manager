@@ -358,6 +358,72 @@ export class H2Settings {
 }
 
 /**
+ * HTTPAPIConfig HTTP API 服务配置。
+ */
+export class HTTPAPIConfig {
+    /**
+     * Creates a new HTTPAPIConfig instance.
+     * @param {Partial<HTTPAPIConfig>} [$$source = {}] - The source object to create the HTTPAPIConfig.
+     */
+    constructor($$source = {}) {
+        if (!("configured" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["configured"] = false;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("host" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["host"] = "";
+        }
+        if (!("port" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["port"] = 0;
+        }
+        if (!("authEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["authEnabled"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["token"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HTTPAPIConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {HTTPAPIConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HTTPAPIConfig(/** @type {Partial<HTTPAPIConfig>} */($$parsedSource));
+    }
+}
+
+/**
  * HealthCheckConfig 健康检查全局配置
  */
 export class HealthCheckConfig {
