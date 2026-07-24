@@ -57,9 +57,62 @@ func (p *ShareLinkParser) ParseLink(link string) (models.ProxyRule, error) {
 		return p.ParseHysteria2(link)
 	} else if strings.HasPrefix(link, "tuic://") {
 		return p.ParseTUIC(link)
+	} else if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+		return p.ParseHTTP(link)
+	} else if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") {
+		return p.ParseSOCKS(link)
 	}
 
 	return models.ProxyRule{}, fmt.Errorf("不支持的链接格式")
+}
+
+// ParseHTTP 解析 HTTP 代理分享链接。
+func (p *ShareLinkParser) ParseHTTP(link string) (models.ProxyRule, error) {
+	return p.parseURLProxy(link, "http")
+}
+
+// ParseSOCKS 解析 SOCKS 代理分享链接。
+func (p *ShareLinkParser) ParseSOCKS(link string) (models.ProxyRule, error) {
+	return p.parseURLProxy(link, "socks")
+}
+
+func (p *ShareLinkParser) parseURLProxy(link, protocol string) (models.ProxyRule, error) {
+	u, err := url.Parse(link)
+	if err != nil {
+		return models.ProxyRule{}, fmt.Errorf("解析 %s URL 失败: %v", strings.ToUpper(protocol), err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 || port > 65535 {
+		return models.ProxyRule{}, fmt.Errorf("%s 端口无效", strings.ToUpper(protocol))
+	}
+	rule := models.ProxyRule{
+		Protocol: protocol, LocalType: "mixed", Source: "manual",
+		ServerAddr: u.Hostname(), ServerPort: port,
+		Alias: protocolAlias(u, strings.ToUpper(protocol)+"节点"),
+	}
+	if u.User != nil {
+		username := u.User.Username()
+		password, _ := u.User.Password()
+		if protocol == "http" {
+			rule.Settings.HTTPUsername = username
+			rule.Settings.HTTPPassword = password
+		} else {
+			rule.Settings.SOCKSUsername = username
+			rule.Settings.SOCKSPassword = password
+			rule.Settings.SOCKSVersion = "socks5"
+		}
+	}
+	return rule, nil
+}
+
+func protocolAlias(u *url.URL, fallback string) string {
+	if u.Fragment == "" {
+		return fallback
+	}
+	if alias, err := url.QueryUnescape(u.Fragment); err == nil {
+		return alias
+	}
+	return u.Fragment
 }
 
 // ParseVMess 解析 vmess:// 链接

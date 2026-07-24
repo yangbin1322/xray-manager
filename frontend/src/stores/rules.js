@@ -18,7 +18,7 @@ export const useRulesStore = defineStore('rules', () => {
   const sortColumn = ref(null)
   const sortDirection = ref('asc')
   const loading = ref(false)
-  const clipboard = ref([]) // 复制的节点数据
+  const clipboard = ref([]) // 最近写入系统剪贴板的普通节点 ID
   const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
   // === 合并所有节点（规则 + 故障转移 + 链式代理） ===
@@ -290,46 +290,24 @@ export const useRulesStore = defineStore('rules', () => {
     }
   }
 
-  function copySelected() {
-    if (selectedIds.value.size === 0) return 0
-    clipboard.value = allNodes.value
-      .filter(n => selectedIds.value.has(n.id))
-      .map(n => JSON.parse(JSON.stringify(n)))
-    return clipboard.value.length
+  async function copySelected() {
+    if (selectedIds.value.size === 0) return { count: 0, skipped: 0 }
+    const selected = allNodes.value.filter(node => selectedIds.value.has(node.id))
+    const ruleIds = selected.filter(node => node._nodeType === 'rule').map(node => node.id)
+    const skipped = selected.length - ruleIds.length
+    if (ruleIds.length === 0) return { count: 0, skipped }
+    const text = await api.exportShareLinks(ruleIds)
+    await navigator.clipboard.writeText(text)
+    clipboard.value = ruleIds
+    return { count: ruleIds.length, skipped }
   }
 
   async function pasteNodes() {
-    if (clipboard.value.length === 0) return 0
-    let count = 0
-    for (const node of clipboard.value) {
-      const copy = JSON.parse(JSON.stringify(node))
-      copy.alias = (copy.alias || '') + ' (副本)'
-      // 清除运行时状态
-      delete copy.id
-      delete copy.enabled
-      delete copy.processId
-      delete copy.latency
-      delete copy.downloadSpeed
-      delete copy.realIp
-      delete copy.testStatus
-      delete copy._nodeType
-      try {
-        if (node._nodeType === 'lb') {
-          delete copy.protocol
-          await api.addLoadBalancer(copy)
-        } else if (node._nodeType === 'chain') {
-          delete copy.protocol
-          await api.addChainProxy(copy)
-        } else {
-          await api.addRule(copy)
-        }
-        count++
-      } catch (e) {
-        console.error('粘贴节点失败:', e)
-      }
-    }
-    if (count > 0) await loadRules()
-    return count
+    const text = (await navigator.clipboard.readText()).trim()
+    if (!text) return { successCount: 0, failCount: 0, errors: [] }
+    const result = await api.importShareLinks(text)
+    if (result?.successCount > 0) await loadRules()
+    return result
   }
 
   return {

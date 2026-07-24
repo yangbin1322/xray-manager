@@ -2,32 +2,13 @@ package utils
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
-// coreProcessNames 本应用管理的代理内核进程名（小写，不含扩展名）
-var coreProcessNames = map[string]bool{
-	"xray":     true,
-	"sing-box": true,
-}
-
-// isCoreProcess 判断进程名是否为本应用管理的代理内核
-func isCoreProcess(name string) bool {
-	name = strings.ToLower(strings.TrimSuffix(name, ".exe"))
-	return coreProcessNames[name]
-}
-
-// EnsurePortFree 确保端口未被占用：
-// 若端口上有残留的 xray/sing-box 进程则直接终止；若被其他程序占用则返回错误。
+// EnsurePortFree 确保端口未被占用。
+// 无法证明占用进程属于当前实例时绝不终止进程，避免多客户端之间互相误杀。
 // logFunc 可为 nil。
 func EnsurePortFree(port int, logFunc func(string)) error {
-	log := func(msg string) {
-		if logFunc != nil {
-			logFunc(msg)
-		}
-	}
-
 	// 快速路径：端口本就空闲（绝大多数情况），无需 fork netstat 查 PID
 	if CheckPortAvailable(port) {
 		return nil
@@ -38,28 +19,12 @@ func EnsurePortFree(port int, logFunc func(string)) error {
 		return nil
 	}
 
-	for _, pid := range pids {
+	if len(pids) > 0 {
+		pid := pids[0]
 		name := GetProcessName(pid)
-		if name == "" || isCoreProcess(name) {
-			log(fmt.Sprintf("[端口清理] 端口 %d 被残留进程占用 (PID:%d, 进程:%s)，正在终止", port, pid, name))
-			if err := KillPID(pid); err != nil {
-				log(fmt.Sprintf("[端口清理] 终止 PID %d 失败: %v", pid, err))
-			}
-		} else {
-			return fmt.Errorf("端口 %d 被其他程序占用 (PID:%d, 进程:%s)，请更换端口或手动结束该进程", port, pid, name)
-		}
+		return fmt.Errorf("端口 %d 已被占用 (PID:%d, 进程:%s)，可能属于其他客户端，请更换端口", port, pid, name)
 	}
-
-	// 等待端口释放（最多 3 秒），用轻量的 net.Listen 探测
-	for i := 0; i < 30; i++ {
-		if CheckPortAvailable(port) {
-			log(fmt.Sprintf("[端口清理] 端口 %d 已释放", port))
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return fmt.Errorf("端口 %d 清理后仍被占用", port)
+	return fmt.Errorf("端口 %d 已被占用，请更换端口", port)
 }
 
 // WaitPortReleased 等待端口释放，超时后强制终止残留的内核进程并再次确认。
@@ -80,12 +45,9 @@ func WaitPortReleased(port int, timeout time.Duration, logFunc func(string)) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 超时端口仍不可用，用 netstat 查 PID 并强制终止残留内核进程
+	// 超时端口仍不可用时仅记录，不终止未知进程，避免误杀其他客户端。
 	for _, pid := range GetPortPIDs(port) {
 		name := GetProcessName(pid)
-		if name == "" || isCoreProcess(name) {
-			log(fmt.Sprintf("[端口清理] 停止后端口 %d 仍被占用 (PID:%d, 进程:%s)，强制终止", port, pid, name))
-			_ = KillPID(pid)
-		}
+		log(fmt.Sprintf("[端口清理] 停止后端口 %d 仍被占用 (PID:%d, 进程:%s)，保留该进程以避免影响其他客户端", port, pid, name))
 	}
 }

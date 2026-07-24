@@ -16,11 +16,16 @@
 - 添加、编辑、删除代理规则，支持拖拽排序
 - 批量编辑：多选节点后统一编辑，每个节点一张可折叠卡片
 - 导入/导出规则为 JSON 文件（仅导出选中节点及其关联的分组/故障转移/链式代理）
-- 解析分享链接（vmess://、vless://、ss://、trojan://、hysteria2://、hy2://、tuic://）
+- **全局前置代理**：客户端内节点经指定前置节点出站，用于中转加速（设置 → 前置代理）
+- **检查更新 / 自动更新**：从 GitHub Releases 检测新版本，支持手动与启动时自动更新
+- **多选 Delete 快捷键**：选中节点后按 Delete 删除（弹窗确认）
+- 解析分享链接（vmess://、vless://、ss://、trojan://、http://、socks5://、hysteria2://、hy2://、tuic://）
+- 选中普通节点后按 Ctrl+C 可复制标准分享链接，支持粘贴到 v2rayN 等其他客户端；Ctrl+V 可从其他客户端复制的分享链接直接导入
 - Hysteria2 支持 pinSHA256（证书指纹，自动开启跳过证书验证）与端口跳跃（mport）
 - 多选：Shift 连选、Ctrl 点选，配合批量启停 / 删除 / 编辑 / 分组
 - 批量选择、启动、停止、删除
 - 本地代理统一为混合端口，同一端口同时支持 HTTP 和 SOCKS5，自动分配不重复的本地端口
+- 多客户端实例通过操作系统端口占位协调推荐端口，未启动节点也不会与其他实例重复分配；端口冲突时不会终止其他客户端的代理进程
 
 **故障转移与链式代理**
 - 链式代理：多节点链式串联，流量依次经过各节点转发
@@ -54,8 +59,8 @@
 **HTTP API**
 - 可在设置中启用或关闭 HTTP API，并配置监听地址与端口
 - 支持可选 Bearer Token 鉴权，非本机监听时强制启用鉴权
-- 提供节点、分组、订阅的查询、创建、修改、删除与启停接口
-- 支持获取全部、已启动、指定分组或指定订阅的本地 HTTP/SOCKS5 代理地址
+- 提供节点、分组、订阅、故障转移和链式代理的查询、创建、修改、删除与启停接口
+- 支持获取全部、已启动、指定分组、指定订阅或指定复合代理的本地 HTTP/SOCKS5 地址
 - 内置 OpenAPI 3.0 规范与 Swagger UI 文档
 
 **系统集成**
@@ -70,6 +75,16 @@
 
 ## 下载安装
 
+### v2.3.0 更新内容
+
+- 新增全局前置代理，可搜索并选择中转节点，普通节点、故障转移和链式代理均可经前置节点出站
+- 新增 GitHub Releases 更新检查、启动时自动检查及自动下载安装
+- 新增跨客户端实例的端口注册与占位，端口冲突时可选择需要重新分配的资源，不再终止其他客户端进程
+- 新增标准分享链接复制粘贴：选中普通节点后可用 Ctrl+C 导出，Ctrl+V 可直接导入分享链接
+- 分享链接新增 HTTP、SOCKS5、Hysteria2 和 TUIC 等协议的解析与编码支持
+- HTTP API 新增故障转移、链式代理和全局前置代理管理接口，并扩展本地代理查询范围
+- 节点列表新增已选数量提示和 Delete 快捷删除，前置代理选择支持按别名、协议、地址及端口搜索
+
 ### v2.2.0 更新内容
 
 - 新增可配置 HTTP 管理 API，默认监听 `127.0.0.1:9090`
@@ -82,7 +97,7 @@
 
 前往 [Releases](../../releases) 页面下载对应平台的安装包，或通过 GitHub Actions 获取最新构建产物。
 
-- **Windows** (amd64): 下载 `xray-manager-windows-amd64`，解压后运行 `xray-manager.exe`
+- **Windows** (amd64): 下载并运行 `xray-manager-windows-amd64.exe`
 - **macOS** (arm64 / Apple Silicon): 下载 `xray-manager-macos-arm64.dmg`，拖入 Applications 即可
 - **Linux** (amd64): 下载 `xray-manager-linux-amd64`，`chmod +x` 后运行；需桌面环境（图形界面），并安装运行库 `libgtk-3-0 libwebkit2gtk-4.1-0`
 
@@ -169,7 +184,7 @@ Swagger UI 文档地址为 `http://127.0.0.1:9090/api/docs/`，OpenAPI 规范地
 curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-proxies/enabled
 ```
 
-本地代理接口返回同一混合端口的 HTTP 与 SOCKS5 地址。全部接口也会返回尚未启动的节点配置；需要可立即使用的代理时，请调用 `/api/v1/local-proxies/enabled`。
+本地代理接口返回同一混合端口的 HTTP 与 SOCKS5 地址，并通过 `type` 区分 `rule`、`loadBalancer` 和 `chainProxy`。全部接口也会返回尚未启动的资源配置；需要可立即使用的代理时，请调用对应的 `/enabled` 接口。
 
 主要接口：
 
@@ -179,10 +194,21 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 | GET / PUT / DELETE | `/api/v1/nodes/{id}` | 获取 / 修改 / 删除节点 |
 | POST | `/api/v1/nodes/{id}/start`、`/stop` | 启动 / 停止节点 |
 | POST | `/api/v1/nodes/start`、`/stop` | 批量启停，Body 为 `{"ids":["rule_id"]}` |
-| GET | `/api/v1/local-proxies` | 获取全部规则的本地 HTTP/SOCKS5 代理地址 |
-| GET | `/api/v1/local-proxies/enabled` | 获取已启动规则的本地代理地址 |
-| GET | `/api/v1/groups/{id}/local-proxies` | 获取指定分组的本地代理地址 |
+| GET | `/api/v1/local-proxies` | 获取全部普通节点、故障转移和链式代理的本地地址 |
+| GET | `/api/v1/local-proxies/enabled` | 获取全部已启动资源的本地代理地址 |
+| GET | `/api/v1/groups/{id}/local-proxies` | 获取指定分组内三类资源的本地代理地址 |
 | GET | `/api/v1/subscriptions/{id}/local-proxies` | 获取指定订阅的本地代理地址 |
+| GET / POST | `/api/v1/load-balancers` | 获取 / 创建故障转移节点 |
+| GET / PUT / DELETE | `/api/v1/load-balancers/{id}` | 获取 / 修改 / 删除故障转移节点 |
+| POST | `/api/v1/load-balancers/{id}/start`、`/stop` | 启动 / 停止故障转移节点 |
+| GET | `/api/v1/load-balancers/{id}/local-proxy` | 获取指定故障转移的本地代理地址 |
+| GET | `/api/v1/load-balancers/local-proxies`、`/enabled` | 获取全部 / 已启动故障转移的本地代理地址 |
+| GET / PUT | `/api/v1/settings/pre-proxy` | 获取 / 设置全局前置代理 |
+| GET / POST | `/api/v1/chain-proxies` | 获取 / 创建链式代理 |
+| GET / PUT / DELETE | `/api/v1/chain-proxies/{id}` | 获取 / 修改 / 删除链式代理 |
+| POST | `/api/v1/chain-proxies/{id}/start`、`/stop` | 启动 / 停止链式代理 |
+| GET | `/api/v1/chain-proxies/{id}/local-proxy` | 获取指定链式代理的本地代理地址 |
+| GET | `/api/v1/chain-proxies/local-proxies`、`/enabled` | 获取全部 / 已启动链式代理的本地代理地址 |
 | GET / POST | `/api/v1/groups` | 获取 / 创建分组 |
 | GET / PUT / DELETE | `/api/v1/groups/{id}` | 获取 / 修改 / 删除分组（删除会级联删除节点） |
 | POST | `/api/v1/groups/{id}/start`、`/stop` | 启动 / 停止分组内节点 |

@@ -8,7 +8,7 @@
   <Identity 
     Name="com.wails..xray-manager"
     Publisher="CN=xray-manager"
-    Version="2.2.0.0"
+    Version="2.3.0.0"
     ProcessorArchitecture="x64" />
   
   <Properties>

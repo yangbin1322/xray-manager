@@ -162,23 +162,29 @@ function handleKeydown(e) {
 
   if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
     e.preventDefault()
-    const count = rulesStore.copySelected()
-    if (count > 0) {
-      appStore.showToast(`已复制 ${count} 个节点`, 'success')
-    }
+    rulesStore.copySelected().then(({ count, skipped }) => {
+      if (count > 0) appStore.showToast(`已复制 ${count} 个节点分享链接${skipped ? `，跳过 ${skipped} 个复合代理` : ''}`, 'success')
+      else if (skipped > 0) appStore.showToast('故障转移和链式代理没有通用分享链接，未复制', 'warning')
+    }).catch(error => appStore.showToast(`写入系统剪贴板失败: ${error}`, 'error'))
   }
 
   if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
     e.preventDefault()
-    if (rulesStore.clipboard.length === 0) {
-      appStore.showToast('剪贴板为空，请先选中节点并按 Ctrl+C 复制', 'warning')
-      return
-    }
-    rulesStore.pasteNodes().then(count => {
-      if (count > 0) {
-        appStore.showToast(`已粘贴 ${count} 个节点`, 'success')
-      }
-    })
+    rulesStore.pasteNodes().then(result => {
+      if (result?.successCount > 0) appStore.showToast(`已从系统剪贴板导入 ${result.successCount} 个节点`, 'success')
+      else appStore.showToast('剪贴板中没有可导入的节点分享链接', 'warning')
+    }).catch(error => appStore.showToast(`读取或导入剪贴板失败: ${error}`, 'error'))
+  }
+
+  // Delete：删除当前多选节点（弹窗确认）
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const count = rulesStore.selectedRuleIds.length
+    if (count === 0) return
+    e.preventDefault()
+    if (!confirm(`确定要删除选中的 ${count} 条规则吗?`)) return
+    rulesStore.deleteSelectedRules()
+      .then(() => appStore.showToast(`已删除 ${count} 条规则`, 'success'))
+      .catch(error => appStore.showToast(`删除失败: ${error}`, 'error'))
   }
 }
 

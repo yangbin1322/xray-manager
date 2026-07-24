@@ -212,6 +212,37 @@ type Config struct {
 	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
 	SpeedTest     SpeedTestConfig   `json:"speedTest"`     // 测速配置
 	HTTPAPI       HTTPAPIConfig     `json:"httpApi"`       // HTTP API 配置
+	PreProxyNodeID string            `json:"preProxyNodeId"` // 全局前置代理节点 ID（空表示未启用）
+	Update         UpdateConfig      `json:"update"`         // 检测更新 / 自动更新
+}
+
+// PreProxyConfig 全局前置代理配置（用于 API 回显）
+type PreProxyConfig struct {
+	NodeID string `json:"nodeId"` // 前置节点 ID，空表示未启用
+	Alias  string `json:"alias"`  // 节点别名（只读回显）
+}
+
+// UpdateConfig 应用更新设置
+type UpdateConfig struct {
+	Configured   bool `json:"configured"`   // 是否已由用户/程序写过（区分零值与显式关闭）
+	AutoCheck    bool `json:"autoCheck"`    // 启动时自动检查更新
+	AutoDownload bool `json:"autoDownload"` // 发现新版本时自动下载并安装
+}
+
+// UpdateInfo 更新检查结果（API 回显）
+type UpdateInfo struct {
+	CurrentVersion string `json:"currentVersion"`
+	LatestVersion  string `json:"latestVersion"`
+	HasUpdate      bool   `json:"hasUpdate"`
+	ReleaseName    string `json:"releaseName"`
+	ReleaseNotes   string `json:"releaseNotes"`
+	ReleaseURL     string `json:"releaseURL"`
+	AssetName      string `json:"assetName"`
+	AssetURL       string `json:"assetURL"`
+	AssetSize      int64  `json:"assetSize"`
+	PublishedAt    string `json:"publishedAt"`
+	CheckedAt      string `json:"checkedAt"`
+	Message        string `json:"message,omitempty"`
 }
 
 // HTTPAPIConfig HTTP API 服务配置。
@@ -222,6 +253,18 @@ type HTTPAPIConfig struct {
 	Port        int    `json:"port"`
 	AuthEnabled bool   `json:"authEnabled"`
 	Token       string `json:"token,omitempty"`
+}
+
+// PortConflict 描述启动时发现的跨客户端本地端口冲突。
+type PortConflict struct {
+	ResourceID          string `json:"resourceId"`
+	ResourceType        string `json:"resourceType"`
+	Alias               string `json:"alias"`
+	Port                int    `json:"port"`
+	OwnerExecutablePath string `json:"ownerExecutablePath"`
+	OwnerConfigPath     string `json:"ownerConfigPath"`
+	OwnerResourceType   string `json:"ownerResourceType"`
+	OwnerAlias          string `json:"ownerAlias"`
 }
 
 // SpeedTestConfig 测速配置（下载测速的目标 URL 与请求头）

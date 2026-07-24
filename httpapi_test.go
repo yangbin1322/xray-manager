@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,10 +12,13 @@ import (
 )
 
 type fakeHTTPAPIService struct {
-	rules     []models.ProxyRule
-	groups    []models.Group
-	subs      []models.Subscription
-	startedID string
+	rules       []models.ProxyRule
+	groups      []models.Group
+	subs        []models.Subscription
+	lbs         []models.LoadBalanceNode
+	chains      []models.ChainProxy
+	startedID   string
+	preProxyID  string
 }
 
 func (f *fakeHTTPAPIService) GetRules() []models.ProxyRule { return f.rules }
@@ -42,8 +46,65 @@ func (f *fakeHTTPAPIService) AddSubscription(string, string, bool, int, string, 
 func (f *fakeHTTPAPIService) EditSubscription(string, string, string, bool, int, string, string) error {
 	return nil
 }
-func (f *fakeHTTPAPIService) UpdateSubscriptionByID(string) error { return nil }
-func (f *fakeHTTPAPIService) DeleteSubscription(string) error     { return nil }
+func (f *fakeHTTPAPIService) UpdateSubscriptionByID(string) error        { return nil }
+func (f *fakeHTTPAPIService) DeleteSubscription(string) error            { return nil }
+func (f *fakeHTTPAPIService) GetLoadBalancers() []models.LoadBalanceNode { return f.lbs }
+func (f *fakeHTTPAPIService) AddLoadBalancer(item models.LoadBalanceNode) error {
+	item.ID = "lb_new"
+	f.lbs = append(f.lbs, item)
+	return nil
+}
+func (f *fakeHTTPAPIService) UpdateLoadBalancer(item models.LoadBalanceNode) error {
+	for i := range f.lbs {
+		if f.lbs[i].ID == item.ID {
+			f.lbs[i] = item
+		}
+	}
+	return nil
+}
+func (f *fakeHTTPAPIService) DeleteLoadBalancer(string) error      { return nil }
+func (f *fakeHTTPAPIService) StartLoadBalancer(string) error       { return nil }
+func (f *fakeHTTPAPIService) StopLoadBalancer(string) error        { return nil }
+func (f *fakeHTTPAPIService) GetChainProxies() []models.ChainProxy { return f.chains }
+func (f *fakeHTTPAPIService) AddChainProxy(item models.ChainProxy) error {
+	item.ID = "chain_new"
+	f.chains = append(f.chains, item)
+	return nil
+}
+func (f *fakeHTTPAPIService) UpdateChainProxy(item models.ChainProxy) error {
+	for i := range f.chains {
+		if f.chains[i].ID == item.ID {
+			f.chains[i] = item
+		}
+	}
+	return nil
+}
+func (f *fakeHTTPAPIService) DeleteChainProxy(string) error { return nil }
+func (f *fakeHTTPAPIService) StartChainProxy(string) error  { return nil }
+func (f *fakeHTTPAPIService) StopChainProxy(string) error   { return nil }
+func (f *fakeHTTPAPIService) GetPreProxy() models.PreProxyConfig {
+	cfg := models.PreProxyConfig{NodeID: f.preProxyID}
+	for _, r := range f.rules {
+		if r.ID == f.preProxyID {
+			cfg.Alias = r.Alias
+			break
+		}
+	}
+	return cfg
+}
+func (f *fakeHTTPAPIService) SetPreProxy(id string) error {
+	if id == "" {
+		f.preProxyID = ""
+		return nil
+	}
+	for _, r := range f.rules {
+		if r.ID == id {
+			f.preProxyID = id
+			return nil
+		}
+	}
+	return fmt.Errorf("前置代理节点不存在: %s", id)
+}
 
 func TestHTTPAPIRequiresConfiguredToken(t *testing.T) {
 	handler := newHTTPAPIHandler(&fakeHTTPAPIService{}, "secret")
@@ -93,6 +154,12 @@ func TestOpenAPISpecDocumentsAllBusinessRoutes(t *testing.T) {
 		"/groups", "/groups/{id}", "/groups/{id}/start", "/groups/{id}/stop",
 		"/groups/{id}/local-proxies", "/subscriptions", "/subscriptions/{id}",
 		"/subscriptions/{id}/update", "/subscriptions/{id}/local-proxies",
+		"/load-balancers", "/load-balancers/{id}", "/load-balancers/{id}/start",
+		"/load-balancers/{id}/stop", "/load-balancers/{id}/local-proxy",
+		"/load-balancers/local-proxies", "/load-balancers/local-proxies/enabled",
+		"/chain-proxies", "/chain-proxies/{id}", "/chain-proxies/{id}/start",
+		"/chain-proxies/{id}/stop", "/chain-proxies/{id}/local-proxy",
+		"/chain-proxies/local-proxies", "/chain-proxies/local-proxies/enabled",
 	}
 	for _, path := range wantPaths {
 		if _, exists := document.Paths[path]; !exists {
@@ -145,6 +212,29 @@ func TestHTTPAPIRejectsInvalidSubscription(t *testing.T) {
 	}
 }
 
+func TestHTTPAPIRejectsInvalidCompositeProxyRequests(t *testing.T) {
+	handler := newHTTPAPIHandler(&fakeHTTPAPIService{}, "")
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "load balancer without nodes", path: "/api/v1/load-balancers", body: `{"alias":"LB","localPort":2080,"nodeIds":[]}`},
+		{name: "load balancer invalid port", path: "/api/v1/load-balancers", body: `{"alias":"LB","localPort":70000,"nodeIds":["rule_1"]}`},
+		{name: "chain with one node", path: "/api/v1/chain-proxies", body: `{"alias":"Chain","localPort":3080,"chainNodes":["rule_1"]}`},
+		{name: "chain without alias", path: "/api/v1/chain-proxies", body: `{"localPort":3080,"chainNodes":["rule_1","rule_2"]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, bytes.NewBufferString(test.body)))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestValidateHTTPAPIConfig(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -177,6 +267,8 @@ func TestHTTPAPILocalProxyFilters(t *testing.T) {
 		},
 		groups: []models.Group{{ID: "group_1"}, {ID: "group_2"}},
 		subs:   []models.Subscription{{ID: "sub_1", GroupID: "group_2"}},
+		lbs:    []models.LoadBalanceNode{{ID: "lb_enabled", Alias: "LB", LocalPort: 2080, Enabled: true, GroupID: "group_1"}},
+		chains: []models.ChainProxy{{ID: "chain_stopped", Alias: "Chain", LocalPort: 3080, GroupID: "group_1"}},
 	}
 	handler := newHTTPAPIHandler(service, "")
 
@@ -187,10 +279,12 @@ func TestHTTPAPILocalProxyFilters(t *testing.T) {
 		wantText   string
 		wantStatus int
 	}{
-		{path: "/api/v1/local-proxies", wantIDs: []string{"enabled", "stopped"}, wantText: "socks5://127.0.0.1:1080", wantStatus: http.StatusOK},
-		{path: "/api/v1/local-proxies/enabled", wantIDs: []string{"enabled"}, rejectIDs: []string{"stopped"}, wantStatus: http.StatusOK},
-		{path: "/api/v1/groups/group_1/local-proxies", wantIDs: []string{"enabled"}, wantStatus: http.StatusOK},
+		{path: "/api/v1/local-proxies", wantIDs: []string{"enabled", "stopped", "lb_enabled", "chain_stopped"}, wantText: "socks5://127.0.0.1:1080", wantStatus: http.StatusOK},
+		{path: "/api/v1/local-proxies/enabled", wantIDs: []string{"enabled", "lb_enabled"}, rejectIDs: []string{"stopped", "chain_stopped"}, wantStatus: http.StatusOK},
+		{path: "/api/v1/groups/group_1/local-proxies", wantIDs: []string{"enabled", "lb_enabled", "chain_stopped"}, wantStatus: http.StatusOK},
 		{path: "/api/v1/subscriptions/sub_1/local-proxies", wantIDs: []string{"stopped"}, wantStatus: http.StatusOK},
+		{path: "/api/v1/load-balancers/local-proxies/enabled", wantIDs: []string{"lb_enabled"}, wantText: `"type":"loadBalancer"`, wantStatus: http.StatusOK},
+		{path: "/api/v1/chain-proxies/local-proxies", wantIDs: []string{"chain_stopped"}, wantText: `"type":"chainProxy"`, wantStatus: http.StatusOK},
 		{path: "/api/v1/groups/missing/local-proxies", wantStatus: http.StatusNotFound},
 	}
 
@@ -223,10 +317,14 @@ func TestHTTPAPIRouteContract(t *testing.T) {
 		rules:  []models.ProxyRule{{ID: "rule_1", Protocol: "vmess", ServerAddr: "example.com", ServerPort: 443, Settings: models.ProxySettings{}}},
 		groups: []models.Group{{ID: "group_1", Name: "Group"}},
 		subs:   []models.Subscription{{ID: "sub_1", Name: "Sub", URL: "https://example.com/sub", GroupID: "group_1"}},
+		lbs:    []models.LoadBalanceNode{{ID: "lb_1", Alias: "LB", LocalPort: 2080, NodeIDs: []string{"rule_1"}}},
+		chains: []models.ChainProxy{{ID: "chain_1", Alias: "Chain", LocalPort: 3080, ChainNodes: []string{"rule_1", "lb_1"}}},
 	}
 	handler := newHTTPAPIHandler(service, "")
 	nodeBody := `{"alias":"test","protocol":"vmess","serverAddr":"example.com","serverPort":443,"settings":{}}`
 	subscriptionBody := `{"name":"Sub","url":"https://example.com/sub","updateMode":"direct"}`
+	loadBalancerBody := `{"alias":"LB","localPort":2080,"nodeIds":["rule_1"]}`
+	chainProxyBody := `{"alias":"Chain","localPort":3080,"chainNodes":["rule_1","lb_1"]}`
 
 	tests := []struct {
 		method string
@@ -259,6 +357,28 @@ func TestHTTPAPIRouteContract(t *testing.T) {
 		{http.MethodDelete, "/api/v1/subscriptions/sub_1", "", http.StatusOK},
 		{http.MethodPost, "/api/v1/subscriptions/sub_1/update", "", http.StatusOK},
 		{http.MethodGet, "/api/v1/subscriptions/sub_1/local-proxies", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/load-balancers", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/load-balancers", loadBalancerBody, http.StatusCreated},
+		{http.MethodGet, "/api/v1/load-balancers/lb_1", "", http.StatusOK},
+		{http.MethodPut, "/api/v1/load-balancers/lb_1", loadBalancerBody, http.StatusOK},
+		{http.MethodDelete, "/api/v1/load-balancers/lb_1", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/load-balancers/lb_1/start", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/load-balancers/lb_1/stop", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/load-balancers/lb_1/local-proxy", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/load-balancers/local-proxies", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/load-balancers/local-proxies/enabled", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/chain-proxies", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/chain-proxies", chainProxyBody, http.StatusCreated},
+		{http.MethodGet, "/api/v1/chain-proxies/chain_1", "", http.StatusOK},
+		{http.MethodPut, "/api/v1/chain-proxies/chain_1", chainProxyBody, http.StatusOK},
+		{http.MethodDelete, "/api/v1/chain-proxies/chain_1", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/chain-proxies/chain_1/start", "", http.StatusOK},
+		{http.MethodPost, "/api/v1/chain-proxies/chain_1/stop", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/chain-proxies/chain_1/local-proxy", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/chain-proxies/local-proxies", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/chain-proxies/local-proxies/enabled", "", http.StatusOK},
+		{http.MethodGet, "/api/v1/settings/pre-proxy", "", http.StatusOK},
+		{http.MethodPut, "/api/v1/settings/pre-proxy", `{"nodeId":""}`, http.StatusOK},
 	}
 
 	for _, test := range tests {
@@ -270,5 +390,65 @@ func TestHTTPAPIRouteContract(t *testing.T) {
 				t.Fatalf("expected %d, got %d: %s", test.status, response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+
+func TestHTTPAPIPreProxy(t *testing.T) {
+	svc := &fakeHTTPAPIService{
+		rules: []models.ProxyRule{
+			{ID: "rule1", Alias: "HK", Protocol: "vmess", ServerAddr: "1.1.1.1", ServerPort: 443},
+		},
+	}
+	handler := newHTTPAPIHandler(svc, "")
+
+	// get empty
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/pre-proxy", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// set
+	body := bytes.NewBufferString(`{"nodeId":"rule1"}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings/pre-proxy", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.preProxyID != "rule1" {
+		t.Fatalf("preProxyID want rule1, got %s", svc.preProxyID)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"nodeId":"rule1"`)) {
+		t.Fatalf("response missing nodeId: %s", rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"alias":"HK"`)) {
+		t.Fatalf("response missing alias: %s", rec.Body.String())
+	}
+
+	// invalid
+	body = bytes.NewBufferString(`{"nodeId":"missing"}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings/pre-proxy", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid node expected 400, got %d", rec.Code)
+	}
+
+	// clear
+	body = bytes.NewBufferString(`{"nodeId":""}`)
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/settings/pre-proxy", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear expected 200, got %d", rec.Code)
+	}
+	if svc.preProxyID != "" {
+		t.Fatalf("preProxyID should be cleared")
 	}
 }

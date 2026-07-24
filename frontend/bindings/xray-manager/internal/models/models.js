@@ -834,6 +834,126 @@ export class LoadBalanceNode {
 }
 
 /**
+ * PortConflict 描述启动时发现的跨客户端本地端口冲突。
+ */
+export class PortConflict {
+    /**
+     * Creates a new PortConflict instance.
+     * @param {Partial<PortConflict>} [$$source = {}] - The source object to create the PortConflict.
+     */
+    constructor($$source = {}) {
+        if (!("resourceId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["resourceId"] = "";
+        }
+        if (!("resourceType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["resourceType"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+        if (!("port" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["port"] = 0;
+        }
+        if (!("ownerExecutablePath" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ownerExecutablePath"] = "";
+        }
+        if (!("ownerConfigPath" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ownerConfigPath"] = "";
+        }
+        if (!("ownerResourceType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ownerResourceType"] = "";
+        }
+        if (!("ownerAlias" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ownerAlias"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PortConflict instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PortConflict}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PortConflict(/** @type {Partial<PortConflict>} */($$parsedSource));
+    }
+}
+
+/**
+ * PreProxyConfig 全局前置代理配置（用于 API 回显）
+ */
+export class PreProxyConfig {
+    /**
+     * Creates a new PreProxyConfig instance.
+     * @param {Partial<PreProxyConfig>} [$$source = {}] - The source object to create the PreProxyConfig.
+     */
+    constructor($$source = {}) {
+        if (!("nodeId" in $$source)) {
+            /**
+             * 前置节点 ID，空表示未启用
+             * @member
+             * @type {string}
+             */
+            this["nodeId"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * 节点别名（只读回显）
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PreProxyConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PreProxyConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PreProxyConfig(/** @type {Partial<PreProxyConfig>} */($$parsedSource));
+    }
+}
+
+/**
  * ProxyRule 代理规则结构
  */
 export class ProxyRule {
@@ -1659,6 +1779,162 @@ export class TrafficStats {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new TrafficStats(/** @type {Partial<TrafficStats>} */($$parsedSource));
+    }
+}
+
+/**
+ * UpdateConfig 应用更新设置
+ */
+export class UpdateConfig {
+    /**
+     * Creates a new UpdateConfig instance.
+     * @param {Partial<UpdateConfig>} [$$source = {}] - The source object to create the UpdateConfig.
+     */
+    constructor($$source = {}) {
+        if (!("configured" in $$source)) {
+            /**
+             * 是否已由用户/程序写过（区分零值与显式关闭）
+             * @member
+             * @type {boolean}
+             */
+            this["configured"] = false;
+        }
+        if (!("autoCheck" in $$source)) {
+            /**
+             * 启动时自动检查更新
+             * @member
+             * @type {boolean}
+             */
+            this["autoCheck"] = false;
+        }
+        if (!("autoDownload" in $$source)) {
+            /**
+             * 发现新版本时自动下载并安装
+             * @member
+             * @type {boolean}
+             */
+            this["autoDownload"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdateConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UpdateConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UpdateConfig(/** @type {Partial<UpdateConfig>} */($$parsedSource));
+    }
+}
+
+/**
+ * UpdateInfo 更新检查结果（API 回显）
+ */
+export class UpdateInfo {
+    /**
+     * Creates a new UpdateInfo instance.
+     * @param {Partial<UpdateInfo>} [$$source = {}] - The source object to create the UpdateInfo.
+     */
+    constructor($$source = {}) {
+        if (!("currentVersion" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["currentVersion"] = "";
+        }
+        if (!("latestVersion" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["latestVersion"] = "";
+        }
+        if (!("hasUpdate" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["hasUpdate"] = false;
+        }
+        if (!("releaseName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["releaseName"] = "";
+        }
+        if (!("releaseNotes" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["releaseNotes"] = "";
+        }
+        if (!("releaseURL" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["releaseURL"] = "";
+        }
+        if (!("assetName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["assetName"] = "";
+        }
+        if (!("assetURL" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["assetURL"] = "";
+        }
+        if (!("assetSize" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["assetSize"] = 0;
+        }
+        if (!("publishedAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["publishedAt"] = "";
+        }
+        if (!("checkedAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["checkedAt"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["message"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdateInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UpdateInfo}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UpdateInfo(/** @type {Partial<UpdateInfo>} */($$parsedSource));
     }
 }
 

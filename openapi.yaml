@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Xray Manager HTTP API
-  version: 1.0.0
-  description: 管理 Xray Manager 节点、分组和订阅的 REST API。
+  version: 1.1.0
+  description: 管理 Xray Manager 节点、分组、订阅、故障转移和链式代理的 REST API。
 servers:
   - url: /api/v1
 security:
@@ -12,6 +12,8 @@ tags:
   - name: Nodes
   - name: Groups
   - name: Subscriptions
+  - name: Load Balancers
+  - name: Chain Proxies
 paths:
   /health:
     get:
@@ -66,15 +68,15 @@ paths:
   /local-proxies:
     get:
       tags: [Nodes]
-      summary: 获取全部规则的本地代理
-      description: 每个混合本地端口同时返回 HTTP 和 SOCKS5 URL，包括未启动的规则。
+      summary: 获取全部本地代理
+      description: 返回普通节点、故障转移和链式代理的 HTTP/SOCKS5 URL，包括未启动的资源。
       responses:
         '200': { $ref: '#/components/responses/LocalProxyList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
   /local-proxies/enabled:
     get:
       tags: [Nodes]
-      summary: 获取已启动规则的本地代理
+      summary: 获取全部已启动资源的本地代理
       responses:
         '200': { $ref: '#/components/responses/LocalProxyList' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -116,6 +118,118 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Success' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /load-balancers:
+    get:
+      tags: [Load Balancers]
+      summary: 获取全部故障转移节点
+      responses:
+        '200': { description: 故障转移列表, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerListResponse' } } } }
+    post:
+      tags: [Load Balancers]
+      summary: 创建故障转移节点
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /load-balancers/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Load Balancers]
+      summary: 获取故障转移节点
+      responses: { '200': { description: 故障转移节点, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [Load Balancers]
+      summary: 修改故障转移节点
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerInput' } } } }
+      responses: { '200': { description: 修改成功, content: { application/json: { schema: { $ref: '#/components/schemas/LoadBalancerResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      tags: [Load Balancers]
+      summary: 删除故障转移节点
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /load-balancers/{id}/start:
+    post:
+      tags: [Load Balancers]
+      summary: 启动故障转移节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /load-balancers/{id}/stop:
+    post:
+      tags: [Load Balancers]
+      summary: 停止故障转移节点
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /load-balancers/{id}/local-proxy:
+    get:
+      tags: [Load Balancers]
+      summary: 获取指定故障转移节点的本地代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { description: 本地代理, content: { application/json: { schema: { $ref: '#/components/schemas/LocalProxyResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /load-balancers/local-proxies:
+    get:
+      tags: [Load Balancers]
+      summary: 获取全部故障转移本地代理
+      responses: { '200': { $ref: '#/components/responses/LocalProxyList' } }
+  /load-balancers/local-proxies/enabled:
+    get:
+      tags: [Load Balancers]
+      summary: 获取已启动的故障转移本地代理
+      responses: { '200': { $ref: '#/components/responses/LocalProxyList' } }
+  /chain-proxies:
+    get:
+      tags: [Chain Proxies]
+      summary: 获取全部链式代理
+      responses:
+        '200': { description: 链式代理列表, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyListResponse' } } } }
+    post:
+      tags: [Chain Proxies]
+      summary: 创建链式代理
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /chain-proxies/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Chain Proxies]
+      summary: 获取链式代理
+      responses: { '200': { description: 链式代理, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [Chain Proxies]
+      summary: 修改链式代理
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyInput' } } } }
+      responses: { '200': { description: 修改成功, content: { application/json: { schema: { $ref: '#/components/schemas/ChainProxyResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      tags: [Chain Proxies]
+      summary: 删除链式代理
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /chain-proxies/{id}/start:
+    post:
+      tags: [Chain Proxies]
+      summary: 启动链式代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /chain-proxies/{id}/stop:
+    post:
+      tags: [Chain Proxies]
+      summary: 停止链式代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /chain-proxies/{id}/local-proxy:
+    get:
+      tags: [Chain Proxies]
+      summary: 获取指定链式代理的本地代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { description: 本地代理, content: { application/json: { schema: { $ref: '#/components/schemas/LocalProxyResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+  /chain-proxies/local-proxies:
+    get:
+      tags: [Chain Proxies]
+      summary: 获取全部链式本地代理
+      responses: { '200': { $ref: '#/components/responses/LocalProxyList' } }
+  /chain-proxies/local-proxies/enabled:
+    get:
+      tags: [Chain Proxies]
+      summary: 获取已启动的链式本地代理
+      responses: { '200': { $ref: '#/components/responses/LocalProxyList' } }
   /groups:
     get:
       tags: [Groups]
@@ -222,6 +336,49 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/LocalProxyList' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /settings/pre-proxy:
+    get:
+      tags: [Settings]
+      summary: 获取全局前置代理
+      description: 客户端全局前置代理节点。启动普通节点/故障转移/链式代理时会经此前置节点出站，用于加速。
+      responses:
+        '200':
+          description: 前置代理配置
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PreProxyConfig' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [Settings]
+      summary: 设置全局前置代理
+      description: body.nodeId 为普通节点 ID；传空字符串清除。已运行节点需重新启动后生效。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nodeId: { type: string, description: 前置节点 ID，空表示清除 }
+      responses:
+        '200':
+          description: 更新后的前置代理配置
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PreProxyConfig' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -268,6 +425,12 @@ components:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/LocalProxy' } }
   schemas:
+    PreProxyConfig:
+      type: object
+      properties:
+        nodeId: { type: string, description: 前置节点 ID，空表示未启用 }
+        alias: { type: string, description: 节点别名 }
+
     Response:
       type: object
       properties:
@@ -280,9 +443,10 @@ components:
         error: { type: string, example: 节点不存在 }
     LocalProxy:
       type: object
-      required: [id, alias, localPort, httpUrl, socks5Url, enabled, source]
+      required: [id, type, alias, localPort, httpUrl, socks5Url, enabled, source]
       properties:
         id: { type: string }
+        type: { type: string, enum: [rule, loadBalancer, chainProxy] }
         alias: { type: string }
         localPort: { type: integer }
         httpUrl: { type: string, example: 'http://127.0.0.1:1080' }
@@ -291,6 +455,11 @@ components:
         groupId: { type: string }
         groupName: { type: string }
         source: { type: string, enum: [manual, subscription] }
+    LocalProxyResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/LocalProxy' } }
     NodeInput:
       type: object
       required: [protocol, serverAddr, serverPort, settings]
@@ -323,6 +492,76 @@ components:
         - $ref: '#/components/schemas/Response'
         - type: object
           properties: { data: { $ref: '#/components/schemas/Node' } }
+    LoadBalancerInput:
+      type: object
+      required: [alias, localPort, nodeIds]
+      properties:
+        alias: { type: string }
+        localType: { type: string, default: mixed }
+        localPort: { type: integer, minimum: 1, maximum: 65535 }
+        nodeIds: { type: array, minItems: 1, items: { type: string }, description: 参与故障转移的普通节点 ID }
+        groupId: { type: string }
+    LoadBalancer:
+      allOf:
+        - $ref: '#/components/schemas/LoadBalancerInput'
+        - type: object
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+            processId: { type: integer }
+            realIp: { type: string }
+            lastError: { type: string }
+            groupName: { type: string }
+            latency: { type: integer }
+            downloadSpeed: { type: number }
+            healthStatus: { type: string }
+            lastStartTime: { type: string }
+            lastStopTime: { type: string }
+    LoadBalancerResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/LoadBalancer' } }
+    LoadBalancerListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/LoadBalancer' } } }
+    ChainProxyInput:
+      type: object
+      required: [alias, localPort, chainNodes]
+      properties:
+        alias: { type: string }
+        localType: { type: string, default: mixed }
+        localPort: { type: integer, minimum: 1, maximum: 65535 }
+        chainNodes: { type: array, minItems: 2, items: { type: string }, description: 按流量顺序排列的普通节点或故障转移节点 ID }
+        groupId: { type: string }
+    ChainProxy:
+      allOf:
+        - $ref: '#/components/schemas/ChainProxyInput'
+        - type: object
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+            processId: { type: integer }
+            realIp: { type: string }
+            lastError: { type: string }
+            groupName: { type: string }
+            latency: { type: integer }
+            downloadSpeed: { type: number }
+            healthStatus: { type: string }
+            lastStartTime: { type: string }
+            lastStopTime: { type: string }
+    ChainProxyResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ChainProxy' } }
+    ChainProxyListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/ChainProxy' } } }
     ProxySettings:
       type: object
       additionalProperties: false

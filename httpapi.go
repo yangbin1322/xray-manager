@@ -64,6 +64,20 @@ type httpAPIService interface {
 	EditSubscription(string, string, string, bool, int, string, string) error
 	UpdateSubscriptionByID(string) error
 	DeleteSubscription(string) error
+	GetLoadBalancers() []models.LoadBalanceNode
+	AddLoadBalancer(models.LoadBalanceNode) error
+	UpdateLoadBalancer(models.LoadBalanceNode) error
+	DeleteLoadBalancer(string) error
+	StartLoadBalancer(string) error
+	StopLoadBalancer(string) error
+	GetChainProxies() []models.ChainProxy
+	AddChainProxy(models.ChainProxy) error
+	UpdateChainProxy(models.ChainProxy) error
+	DeleteChainProxy(string) error
+	StartChainProxy(string) error
+	StopChainProxy(string) error
+	GetPreProxy() models.PreProxyConfig
+	SetPreProxy(string) error
 }
 
 type httpAPI struct {
@@ -87,6 +101,7 @@ type subscriptionRequest struct {
 
 type localProxy struct {
 	ID        string `json:"id"`
+	Type      string `json:"type"`
 	Alias     string `json:"alias"`
 	LocalPort int    `json:"localPort"`
 	HTTPURL   string `json:"httpUrl"`
@@ -234,6 +249,26 @@ func newHTTPAPIHandler(service httpAPIService, token string) http.Handler {
 	apiMux.HandleFunc("POST /api/v1/nodes/{id}/stop", api.stopNode)
 	apiMux.HandleFunc("GET /api/v1/local-proxies", api.listLocalProxies)
 	apiMux.HandleFunc("GET /api/v1/local-proxies/enabled", api.listEnabledLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/load-balancers", api.listLoadBalancers)
+	apiMux.HandleFunc("POST /api/v1/load-balancers", api.createLoadBalancer)
+	apiMux.HandleFunc("GET /api/v1/load-balancers/local-proxies", api.listLoadBalancerLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/load-balancers/local-proxies/enabled", api.listEnabledLoadBalancerLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/load-balancers/{id}", api.getLoadBalancer)
+	apiMux.HandleFunc("PUT /api/v1/load-balancers/{id}", api.updateLoadBalancer)
+	apiMux.HandleFunc("DELETE /api/v1/load-balancers/{id}", api.deleteLoadBalancer)
+	apiMux.HandleFunc("POST /api/v1/load-balancers/{id}/start", api.startLoadBalancer)
+	apiMux.HandleFunc("POST /api/v1/load-balancers/{id}/stop", api.stopLoadBalancer)
+	apiMux.HandleFunc("GET /api/v1/load-balancers/{id}/local-proxy", api.getLoadBalancerLocalProxy)
+	apiMux.HandleFunc("GET /api/v1/chain-proxies", api.listChainProxies)
+	apiMux.HandleFunc("POST /api/v1/chain-proxies", api.createChainProxy)
+	apiMux.HandleFunc("GET /api/v1/chain-proxies/local-proxies", api.listChainProxyLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/chain-proxies/local-proxies/enabled", api.listEnabledChainProxyLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/chain-proxies/{id}", api.getChainProxy)
+	apiMux.HandleFunc("PUT /api/v1/chain-proxies/{id}", api.updateChainProxy)
+	apiMux.HandleFunc("DELETE /api/v1/chain-proxies/{id}", api.deleteChainProxy)
+	apiMux.HandleFunc("POST /api/v1/chain-proxies/{id}/start", api.startChainProxy)
+	apiMux.HandleFunc("POST /api/v1/chain-proxies/{id}/stop", api.stopChainProxy)
+	apiMux.HandleFunc("GET /api/v1/chain-proxies/{id}/local-proxy", api.getChainProxyLocalProxy)
 	apiMux.HandleFunc("GET /api/v1/groups", api.listGroups)
 	apiMux.HandleFunc("POST /api/v1/groups", api.createGroup)
 	apiMux.HandleFunc("GET /api/v1/groups/{id}", api.getGroup)
@@ -249,6 +284,8 @@ func newHTTPAPIHandler(service httpAPIService, token string) http.Handler {
 	apiMux.HandleFunc("DELETE /api/v1/subscriptions/{id}", api.deleteSubscription)
 	apiMux.HandleFunc("POST /api/v1/subscriptions/{id}/update", api.refreshSubscription)
 	apiMux.HandleFunc("GET /api/v1/subscriptions/{id}/local-proxies", api.listSubscriptionLocalProxies)
+	apiMux.HandleFunc("GET /api/v1/settings/pre-proxy", api.getPreProxy)
+	apiMux.HandleFunc("PUT /api/v1/settings/pre-proxy", api.setPreProxy)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/docs", func(w http.ResponseWriter, r *http.Request) {
@@ -291,13 +328,35 @@ func (a *httpAPI) listGroups(w http.ResponseWriter, _ *http.Request) {
 func (a *httpAPI) listSubscriptions(w http.ResponseWriter, _ *http.Request) {
 	writeAPI(w, http.StatusOK, a.service.GetSubscriptions(), "")
 }
+func (a *httpAPI) listLoadBalancers(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, a.service.GetLoadBalancers(), "")
+}
+func (a *httpAPI) listChainProxies(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, a.service.GetChainProxies(), "")
+}
 
 func (a *httpAPI) listLocalProxies(w http.ResponseWriter, _ *http.Request) {
-	writeAPI(w, http.StatusOK, buildLocalProxies(a.service.GetRules(), "", false), "")
+	writeAPI(w, http.StatusOK, a.buildLocalProxies("", false), "")
 }
 
 func (a *httpAPI) listEnabledLocalProxies(w http.ResponseWriter, _ *http.Request) {
-	writeAPI(w, http.StatusOK, buildLocalProxies(a.service.GetRules(), "", true), "")
+	writeAPI(w, http.StatusOK, a.buildLocalProxies("", true), "")
+}
+
+func (a *httpAPI) listLoadBalancerLocalProxies(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), "", false), "")
+}
+
+func (a *httpAPI) listEnabledLoadBalancerLocalProxies(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), "", true), "")
+}
+
+func (a *httpAPI) listChainProxyLocalProxies(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, buildChainLocalProxies(a.service.GetChainProxies(), "", false), "")
+}
+
+func (a *httpAPI) listEnabledChainProxyLocalProxies(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, buildChainLocalProxies(a.service.GetChainProxies(), "", true), "")
 }
 
 func (a *httpAPI) listGroupLocalProxies(w http.ResponseWriter, r *http.Request) {
@@ -306,21 +365,28 @@ func (a *httpAPI) listGroupLocalProxies(w http.ResponseWriter, r *http.Request) 
 		writeAPI(w, http.StatusNotFound, nil, "分组不存在")
 		return
 	}
-	writeAPI(w, http.StatusOK, buildLocalProxies(a.service.GetRules(), groupID, false), "")
+	writeAPI(w, http.StatusOK, a.buildLocalProxies(groupID, false), "")
 }
 
 func (a *httpAPI) listSubscriptionLocalProxies(w http.ResponseWriter, r *http.Request) {
 	subscriptionID := r.PathValue("id")
 	for _, subscription := range a.service.GetSubscriptions() {
 		if subscription.ID == subscriptionID {
-			writeAPI(w, http.StatusOK, buildLocalProxies(a.service.GetRules(), subscription.GroupID, false), "")
+			writeAPI(w, http.StatusOK, buildRuleLocalProxies(a.service.GetRules(), subscription.GroupID, false), "")
 			return
 		}
 	}
 	writeAPI(w, http.StatusNotFound, nil, "订阅不存在")
 }
 
-func buildLocalProxies(rules []models.ProxyRule, groupID string, enabledOnly bool) []localProxy {
+func (a *httpAPI) buildLocalProxies(groupID string, enabledOnly bool) []localProxy {
+	proxies := buildRuleLocalProxies(a.service.GetRules(), groupID, enabledOnly)
+	proxies = append(proxies, buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), groupID, enabledOnly)...)
+	proxies = append(proxies, buildChainLocalProxies(a.service.GetChainProxies(), groupID, enabledOnly)...)
+	return proxies
+}
+
+func buildRuleLocalProxies(rules []models.ProxyRule, groupID string, enabledOnly bool) []localProxy {
 	proxies := make([]localProxy, 0)
 	for _, rule := range rules {
 		if rule.LocalPort <= 0 || (groupID != "" && rule.GroupID != groupID) || (enabledOnly && !rule.Enabled) {
@@ -329,6 +395,7 @@ func buildLocalProxies(rules []models.ProxyRule, groupID string, enabledOnly boo
 		address := net.JoinHostPort("127.0.0.1", strconv.Itoa(rule.LocalPort))
 		proxies = append(proxies, localProxy{
 			ID:        rule.ID,
+			Type:      "rule",
 			Alias:     rule.Alias,
 			LocalPort: rule.LocalPort,
 			HTTPURL:   "http://" + address,
@@ -340,6 +407,37 @@ func buildLocalProxies(rules []models.ProxyRule, groupID string, enabledOnly boo
 		})
 	}
 	return proxies
+}
+
+func buildLoadBalancerLocalProxies(items []models.LoadBalanceNode, groupID string, enabledOnly bool) []localProxy {
+	proxies := make([]localProxy, 0)
+	for _, item := range items {
+		if item.LocalPort <= 0 || (groupID != "" && item.GroupID != groupID) || (enabledOnly && !item.Enabled) {
+			continue
+		}
+		proxies = append(proxies, newLocalProxy(item.ID, "loadBalancer", item.Alias, item.LocalPort, item.Enabled, item.GroupID, item.GroupName, "manual"))
+	}
+	return proxies
+}
+
+func buildChainLocalProxies(items []models.ChainProxy, groupID string, enabledOnly bool) []localProxy {
+	proxies := make([]localProxy, 0)
+	for _, item := range items {
+		if item.LocalPort <= 0 || (groupID != "" && item.GroupID != groupID) || (enabledOnly && !item.Enabled) {
+			continue
+		}
+		proxies = append(proxies, newLocalProxy(item.ID, "chainProxy", item.Alias, item.LocalPort, item.Enabled, item.GroupID, item.GroupName, "manual"))
+	}
+	return proxies
+}
+
+func newLocalProxy(id, proxyType, alias string, port int, enabled bool, groupID, groupName, source string) localProxy {
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	return localProxy{
+		ID: id, Type: proxyType, Alias: alias, LocalPort: port,
+		HTTPURL: "http://" + address, SOCKS5URL: "socks5://" + address,
+		Enabled: enabled, GroupID: groupID, GroupName: groupName, Source: source,
+	}
 }
 
 func groupExists(groups []models.Group, groupID string) bool {
@@ -379,6 +477,46 @@ func (a *httpAPI) getSubscription(w http.ResponseWriter, r *http.Request) {
 	writeAPI(w, http.StatusNotFound, nil, "订阅不存在")
 }
 
+func (a *httpAPI) getLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	for _, item := range a.service.GetLoadBalancers() {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "故障转移节点不存在")
+}
+
+func (a *httpAPI) getChainProxy(w http.ResponseWriter, r *http.Request) {
+	for _, item := range a.service.GetChainProxies() {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "链式代理不存在")
+}
+
+func (a *httpAPI) getLoadBalancerLocalProxy(w http.ResponseWriter, r *http.Request) {
+	for _, item := range buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), "", false) {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "故障转移节点不存在")
+}
+
+func (a *httpAPI) getChainProxyLocalProxy(w http.ResponseWriter, r *http.Request) {
+	for _, item := range buildChainLocalProxies(a.service.GetChainProxies(), "", false) {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "链式代理不存在")
+}
+
 func (a *httpAPI) createNode(w http.ResponseWriter, r *http.Request) {
 	before := nodeIDs(a.service.GetRules())
 	var rule models.ProxyRule
@@ -409,6 +547,58 @@ func (a *httpAPI) updateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAPI(w, http.StatusOK, map[string]string{"status": "updated"}, "")
+}
+
+func (a *httpAPI) createLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	before := loadBalancerIDs(a.service.GetLoadBalancers())
+	var item models.LoadBalanceNode
+	if !decodeAPI(w, r, &item) || !validateLoadBalancer(w, &item) {
+		return
+	}
+	if err := a.service.AddLoadBalancer(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeAPI(w, http.StatusCreated, findNewLoadBalancer(a.service.GetLoadBalancers(), before), "")
+}
+
+func (a *httpAPI) updateLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	var item models.LoadBalanceNode
+	if !decodeAPI(w, r, &item) || !validateLoadBalancer(w, &item) {
+		return
+	}
+	item.ID = r.PathValue("id")
+	if err := a.service.UpdateLoadBalancer(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	a.getLoadBalancer(w, r)
+}
+
+func (a *httpAPI) createChainProxy(w http.ResponseWriter, r *http.Request) {
+	before := chainProxyIDs(a.service.GetChainProxies())
+	var item models.ChainProxy
+	if !decodeAPI(w, r, &item) || !validateChainProxy(w, &item) {
+		return
+	}
+	if err := a.service.AddChainProxy(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeAPI(w, http.StatusCreated, findNewChainProxy(a.service.GetChainProxies(), before), "")
+}
+
+func (a *httpAPI) updateChainProxy(w http.ResponseWriter, r *http.Request) {
+	var item models.ChainProxy
+	if !decodeAPI(w, r, &item) || !validateChainProxy(w, &item) {
+		return
+	}
+	item.ID = r.PathValue("id")
+	if err := a.service.UpdateChainProxy(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	a.getChainProxy(w, r)
 }
 func (a *httpAPI) createGroup(w http.ResponseWriter, r *http.Request) {
 	before := groupIDs(a.service.GetGroups())
@@ -495,6 +685,24 @@ func (a *httpAPI) deleteSubscription(w http.ResponseWriter, r *http.Request) {
 func (a *httpAPI) refreshSubscription(w http.ResponseWriter, r *http.Request) {
 	a.run(w, func() error { return a.service.UpdateSubscriptionByID(r.PathValue("id")) })
 }
+func (a *httpAPI) deleteLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.DeleteLoadBalancer(r.PathValue("id")) })
+}
+func (a *httpAPI) startLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StartLoadBalancer(r.PathValue("id")) })
+}
+func (a *httpAPI) stopLoadBalancer(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StopLoadBalancer(r.PathValue("id")) })
+}
+func (a *httpAPI) deleteChainProxy(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.DeleteChainProxy(r.PathValue("id")) })
+}
+func (a *httpAPI) startChainProxy(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StartChainProxy(r.PathValue("id")) })
+}
+func (a *httpAPI) stopChainProxy(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StopChainProxy(r.PathValue("id")) })
+}
 
 func (a *httpAPI) startNodes(w http.ResponseWriter, r *http.Request) {
 	a.nodesAction(w, r, a.service.StartNodes)
@@ -550,6 +758,65 @@ func validateSubscription(w http.ResponseWriter, request *subscriptionRequest) b
 	return true
 }
 
+func validateLoadBalancer(w http.ResponseWriter, item *models.LoadBalanceNode) bool {
+	item.Alias = strings.TrimSpace(item.Alias)
+	if item.Alias == "" {
+		writeAPI(w, http.StatusBadRequest, nil, "故障转移名称不能为空")
+		return false
+	}
+	if item.LocalPort < 1 || item.LocalPort > 65535 {
+		writeAPI(w, http.StatusBadRequest, nil, "本地端口必须在 1 到 65535 之间")
+		return false
+	}
+	if len(item.NodeIDs) == 0 {
+		writeAPI(w, http.StatusBadRequest, nil, "故障转移节点需要至少一个子节点")
+		return false
+	}
+	if item.LocalType == "" {
+		item.LocalType = "mixed"
+	}
+	return true
+}
+
+
+func (a *httpAPI) getPreProxy(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, a.service.GetPreProxy(), "")
+}
+
+func (a *httpAPI) setPreProxy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		NodeID string `json:"nodeId"`
+	}
+	if !decodeAPI(w, r, &body) {
+		return
+	}
+	if err := a.service.SetPreProxy(body.NodeID); err != nil {
+		writeAPI(w, http.StatusBadRequest, nil, err.Error())
+		return
+	}
+	writeAPI(w, http.StatusOK, a.service.GetPreProxy(), "")
+}
+
+func validateChainProxy(w http.ResponseWriter, item *models.ChainProxy) bool {
+	item.Alias = strings.TrimSpace(item.Alias)
+	if item.Alias == "" {
+		writeAPI(w, http.StatusBadRequest, nil, "链式代理名称不能为空")
+		return false
+	}
+	if item.LocalPort < 1 || item.LocalPort > 65535 {
+		writeAPI(w, http.StatusBadRequest, nil, "本地端口必须在 1 到 65535 之间")
+		return false
+	}
+	if len(item.ChainNodes) < 2 {
+		writeAPI(w, http.StatusBadRequest, nil, "链式代理需要至少两个节点")
+		return false
+	}
+	if item.LocalType == "" {
+		item.LocalType = "mixed"
+	}
+	return true
+}
+
 func nodeIDs(items []models.ProxyRule) map[string]bool {
 	result := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -565,6 +832,20 @@ func groupIDs(items []models.Group) map[string]bool {
 	return result
 }
 func subscriptionIDs(items []models.Subscription) map[string]bool {
+	result := make(map[string]bool, len(items))
+	for _, item := range items {
+		result[item.ID] = true
+	}
+	return result
+}
+func loadBalancerIDs(items []models.LoadBalanceNode) map[string]bool {
+	result := make(map[string]bool, len(items))
+	for _, item := range items {
+		result[item.ID] = true
+	}
+	return result
+}
+func chainProxyIDs(items []models.ChainProxy) map[string]bool {
 	result := make(map[string]bool, len(items))
 	for _, item := range items {
 		result[item.ID] = true
@@ -588,6 +869,22 @@ func findNewGroup(items []models.Group, before map[string]bool) any {
 	return map[string]string{"status": "created"}
 }
 func findNewSubscription(items []models.Subscription, before map[string]bool) any {
+	for _, item := range items {
+		if !before[item.ID] {
+			return item
+		}
+	}
+	return map[string]string{"status": "created"}
+}
+func findNewLoadBalancer(items []models.LoadBalanceNode, before map[string]bool) any {
+	for _, item := range items {
+		if !before[item.ID] {
+			return item
+		}
+	}
+	return map[string]string{"status": "created"}
+}
+func findNewChainProxy(items []models.ChainProxy, before map[string]bool) any {
 	for _, item := range items {
 		if !before[item.ID] {
 			return item

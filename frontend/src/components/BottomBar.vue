@@ -46,7 +46,7 @@
           <button class="dialog-close" @click="showBatchImport = false">&times;</button>
         </div>
         <div class="dialog-body">
-          <p class="import-hint">支持 vmess:// / vless:// / ss:// / trojan:// / hysteria2:// / hy2:// / tuic:// 链接，每行一个</p>
+          <p class="import-hint">支持 vmess:// / vless:// / ss:// / trojan:// / http:// / socks5:// / hysteria2:// / hy2:// / tuic:// 链接，每行一个</p>
           <textarea
             v-model="importText"
             class="import-textarea"

@@ -12,11 +12,15 @@ export {
     ImportResult,
     ImportShareResult,
     LoadBalanceNode,
+    PortConflict,
+    PreProxyConfig,
     ProxyRule,
     ProxySettings,
     SpeedTestConfig,
     Subscription,
     TLSSettings,
     TrafficStats,
+    UpdateConfig,
+    UpdateInfo,
     WSSettings
 } from "./models.js";

@@ -322,7 +322,8 @@ func BuildChainConfig(localPort int, chainRules []*models.ProxyRule) (*Config, e
 }
 
 // BuildLoadBalanceConfig 构建故障转移配置（urltest 自动选择延迟最低的节点）
-func BuildLoadBalanceConfig(localPort int, nodes []*models.ProxyRule) (*Config, error) {
+// preProxy 非空时，各子节点通过 detour 经前置代理出站（子节点自身等于前置节点时除外）
+func BuildLoadBalanceConfig(localPort int, nodes []*models.ProxyRule, preProxy *models.ProxyRule) (*Config, error) {
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
@@ -331,11 +332,23 @@ func BuildLoadBalanceConfig(localPort int, nodes []*models.ProxyRule) (*Config, 
 
 	var outbounds []map[string]interface{}
 	var memberTags []string
+
+	if preProxy != nil {
+		preOutbound, err := BuildOutbound(preProxy, "pre_proxy")
+		if err != nil {
+			return nil, err
+		}
+		outbounds = append(outbounds, preOutbound)
+	}
+
 	for i, node := range nodes {
 		tag := fmt.Sprintf("proxy_%d", i)
 		outbound, err := BuildOutbound(node, tag)
 		if err != nil {
 			return nil, err
+		}
+		if preProxy != nil && node.ID != preProxy.ID {
+			outbound["detour"] = "pre_proxy"
 		}
 		outbounds = append(outbounds, outbound)
 		memberTags = append(memberTags, tag)

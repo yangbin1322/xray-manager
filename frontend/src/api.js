@@ -62,6 +62,18 @@ export async function importShareLinks(text, groupId = '', newGroupName = '') {
   return await MyService.ImportShareLinks(text, groupId, newGroupName)
 }
 
+export async function getPendingPortConflicts() {
+  return await MyService.GetPendingPortConflicts()
+}
+
+export async function resolvePortConflicts(resourceIDs) {
+  return await MyService.ResolvePortConflicts(resourceIDs)
+}
+
+export async function exportShareLinks(ruleIds) {
+  return await MyService.ExportShareLinks(ruleIds)
+}
+
 // ==================== 分组管理 ====================
 
 export async function getGroups() {
@@ -234,6 +246,44 @@ export async function checkAllNodesHealth() {
 
 export async function resetRuleTraffic(ruleID = '') {
   return await MyService.ResetRuleTraffic(ruleID)
+}
+
+
+
+// ==================== 应用更新 ====================
+
+export async function getAppVersion() {
+  return await MyService.GetAppVersion()
+}
+
+export async function getUpdateConfig() {
+  return await MyService.GetUpdateConfig()
+}
+
+export async function setUpdateConfig(cfg) {
+  return await MyService.SetUpdateConfig(cfg)
+}
+
+export async function checkForUpdate() {
+  return await MyService.CheckForUpdate()
+}
+
+export async function downloadAndInstallUpdate() {
+  return await MyService.DownloadAndInstallUpdate()
+}
+
+export async function openReleasePage() {
+  return await MyService.OpenReleasePage()
+}
+
+// ==================== 全局前置代理 ====================
+
+export async function getPreProxy() {
+  return await MyService.GetPreProxy()
+}
+
+export async function setPreProxy(nodeID) {
+  return await MyService.SetPreProxy(nodeID)
 }
 
 // ==================== 系统代理 ====================

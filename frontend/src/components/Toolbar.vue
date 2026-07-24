@@ -20,6 +20,11 @@
       />
     </div>
 
+    <!-- 选中数量 -->
+    <div v-if="selectedCount > 0" class="selected-count" title="当前选中节点数">
+      已选 <strong>{{ selectedCount }}</strong>
+    </div>
+
     <!-- 操作按钮 -->
     <div class="toolbar-actions">
       <button class="btn-action" @click="rulesStore.startSelectedRules()" title="启动选中">启动选中</button>
@@ -66,7 +71,7 @@
           <button
             v-for="tab in settingsTabs" :key="tab.key"
             :class="['settings-tab', { active: activeTab === tab.key }]"
-            @click="activeTab = tab.key"
+            @click="onSettingsTabChange(tab.key)"
           >{{ tab.label }}</button>
         </div>
 
@@ -155,6 +160,74 @@
               <span v-else>接口地址：{{ httpApiURL }}</span>
             </div>
           </div>
+
+          <!-- 全局前置代理 -->
+          <div v-show="activeTab === 'preProxy'">
+            <div class="form-group-block">
+              <label>前置代理节点：</label>
+              <input
+                v-model="preProxySearch"
+                type="search"
+                class="full-input pre-proxy-search"
+                placeholder="搜索节点（别名/协议/地址/端口）..."
+              />
+              <select v-model="preProxyNodeId" class="full-input">
+                <option value="">不使用（直连出站）</option>
+                <option v-for="r in filteredPreProxyRules" :key="r.id" :value="r.id">
+                  {{ r.alias }} ({{ r.protocol }} {{ r.serverAddr }}:{{ r.serverPort }})
+                </option>
+                <option v-if="preProxySearch.trim() && filteredPreProxyRules.length === 0" disabled>
+                  无匹配节点
+                </option>
+              </select>
+            </div>
+            <div v-if="preProxyStale" class="settings-hint" style="color: var(--danger, #e74c3c);">
+              当前配置的前置节点已不存在，请重新选择或清除。
+            </div>
+            <div class="settings-hint">
+              客户端内启动的普通节点、故障转移、链式代理将先经该节点出站，再连接目标节点，可用于中转加速。
+              前置节点自身启动时不会再次套娃。修改后需重新启动已运行节点才生效。
+            </div>
+          </div>
+
+          <!-- 检查更新 -->
+          <div v-show="activeTab === 'update'">
+            <div class="form-group-line">
+              <label>当前版本：</label>
+              <span>v{{ appVersion || '...' }}</span>
+            </div>
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="updateCfg.autoCheck" />
+                启动时自动检查更新
+              </label>
+            </div>
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="updateCfg.autoDownload" />
+                发现新版本后自动下载并安装
+              </label>
+            </div>
+            <div class="form-group-block" style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn-action" type="button" :disabled="updateChecking" @click="handleCheckUpdate">
+                {{ updateChecking ? '检查中...' : '检查更新' }}
+              </button>
+              <button class="btn-action btn-primary-solid" type="button"
+                :disabled="updateInstalling || updateChecking"
+                @click="handleInstallUpdate">
+                {{ updateInstalling ? '更新中...' : '下载并更新' }}
+              </button>
+              <button class="btn-action" type="button" @click="handleOpenRelease">打开 Releases</button>
+            </div>
+            <div v-if="updateInfo" class="settings-hint">
+              <div>{{ updateInfo.message || (updateInfo.hasUpdate ? ('发现新版本 v' + updateInfo.latestVersion) : '已是最新版本') }}</div>
+              <div v-if="updateInfo.hasUpdate && updateInfo.assetName">安装包：{{ updateInfo.assetName }}</div>
+              <pre v-if="updateInfo.releaseNotes" class="update-notes">{{ updateInfo.releaseNotes }}</pre>
+            </div>
+            <div class="settings-hint">
+              从 GitHub Releases 检测更新。可执行文件更新将在退出后自动替换并重启；安装包/DMG 会打开文件由你完成安装。
+            </div>
+          </div>
         </div>
         <div class="dialog-footer">
           <button class="btn-action" @click="showHealthSettings = false">取消</button>
@@ -175,6 +248,7 @@ const emit = defineEmits(['batchEdit'])
 
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
+const selectedCount = computed(() => rulesStore.selectedRuleIds.length)
 
 function handleBatchEdit() {
   // 收集选中的普通节点（故障转移/链式代理不支持批量编辑）
@@ -198,13 +272,37 @@ const activeTab = ref('health')
 const settingsTabs = [
   { key: 'health', label: '健康检查' },
   { key: 'speed', label: '测速' },
+  { key: 'preProxy', label: '前置代理' },
+  { key: 'update', label: '检查更新' },
   { key: 'httpApi', label: 'HTTP API' },
 ]
 const healthCfg = ref({ enabled: false, intervalSec: 60, timeoutSec: 5, latencyThreshold: 500 })
 const speedCfg = ref({ url: '', headers: {} })
 const speedHeadersText = ref('')
 const httpApiCfg = ref({ configured: true, enabled: true, host: '127.0.0.1', port: 9090, authEnabled: false, token: '' })
+const preProxyNodeId = ref('')
+const preProxySavedId = ref('')
+const preProxySearch = ref('')
+const updateCfg = ref({ configured: true, autoCheck: true, autoDownload: false })
+const appVersion = ref('')
+const updateInfo = ref(null)
+const updateChecking = ref(false)
+const updateInstalling = ref(false)
 const showApiToken = ref(false)
+const preProxyStale = computed(() => {
+  const id = preProxyNodeId.value
+  if (!id) return false
+  return !rulesStore.rules.some(r => r.id === id)
+})
+const filteredPreProxyRules = computed(() => {
+  const keyword = preProxySearch.value.trim().toLowerCase()
+  if (!keyword) return rulesStore.rules
+  return rulesStore.rules.filter(rule => {
+    if (rule.id === preProxyNodeId.value) return true
+    return [rule.alias, rule.protocol, rule.serverAddr, rule.serverPort]
+      .some(value => String(value ?? '').toLowerCase().includes(keyword))
+  })
+})
 const requiresAuth = computed(() => !['127.0.0.1', '::1', 'localhost'].includes(httpApiCfg.value.host))
 const httpApiURL = computed(() => {
   const host = httpApiCfg.value.host.includes(':') ? `[${httpApiCfg.value.host}]` : httpApiCfg.value.host
@@ -235,6 +333,7 @@ function textToHeaders(text) {
 
 async function openHealthSettings() {
   activeTab.value = 'health'
+  preProxySearch.value = ''
   try {
     const cfg = await api.getHealthCheckConfig()
     if (cfg) healthCfg.value = cfg
@@ -255,6 +354,27 @@ async function openHealthSettings() {
     if (apiCfg) httpApiCfg.value = apiCfg
   } catch (e) {
     console.error('获取 HTTP API 配置失败:', e)
+  }
+  try {
+    const pre = await api.getPreProxy()
+    const id = (pre && pre.nodeId) || ''
+    preProxyNodeId.value = id
+    preProxySavedId.value = id
+  } catch (e) {
+    console.error('获取前置代理配置失败:', e)
+    preProxyNodeId.value = ''
+    preProxySavedId.value = ''
+  }
+  try {
+    appVersion.value = await api.getAppVersion()
+  } catch (e) {
+    console.error('获取版本失败:', e)
+  }
+  try {
+    const uc = await api.getUpdateConfig()
+    if (uc) updateCfg.value = uc
+  } catch (e) {
+    console.error('获取更新配置失败:', e)
   }
   showHealthSettings.value = true
 }
@@ -286,10 +406,73 @@ async function saveSettings() {
       headers: textToHeaders(speedHeadersText.value),
     })
     await api.setHTTPAPIConfig(httpApiCfg.value)
+    await api.setPreProxy(preProxyNodeId.value || '')
+    preProxySavedId.value = preProxyNodeId.value || ''
+    await api.setUpdateConfig({
+      configured: true,
+      autoCheck: !!updateCfg.value.autoCheck,
+      autoDownload: !!updateCfg.value.autoDownload,
+    })
     showHealthSettings.value = false
-    appStore.showToast('设置已保存', 'success')
+    appStore.showToast('设置已保存（前置代理变更需重启节点后生效）', 'success')
   } catch (e) {
     appStore.showToast(`保存失败: ${e}`, 'error')
+  }
+}
+
+async function onSettingsTabChange(key) {
+  activeTab.value = key
+  if (key === 'update' && !updateInfo.value && !updateChecking.value) {
+    await handleCheckUpdate()
+  }
+}
+
+async function handleCheckUpdate() {
+  updateChecking.value = true
+  try {
+    updateInfo.value = await api.checkForUpdate()
+    if (updateInfo.value?.hasUpdate) {
+      appStore.showToast(updateInfo.value.message || `发现新版本 v${updateInfo.value.latestVersion}`, 'info', 5000)
+    } else {
+      appStore.showToast(updateInfo.value?.message || '当前已是最新版本', 'success')
+    }
+  } catch (e) {
+    appStore.showToast(`检查更新失败: ${e}`, 'error')
+  } finally {
+    updateChecking.value = false
+  }
+}
+
+async function handleInstallUpdate() {
+  try {
+    if (!updateInfo.value) {
+      updateChecking.value = true
+      try {
+        updateInfo.value = await api.checkForUpdate()
+      } finally {
+        updateChecking.value = false
+      }
+    }
+    if (!updateInfo.value?.hasUpdate) {
+      appStore.showToast(updateInfo.value?.message || '当前已是最新版本', 'info')
+      return
+    }
+    if (!confirm(`确定下载并安装 v${updateInfo.value.latestVersion}？\n可执行文件更新会自动退出并重启程序。`)) return
+    updateInstalling.value = true
+    const msg = await api.downloadAndInstallUpdate()
+    appStore.showToast(msg || '更新已开始', 'success', 6000)
+  } catch (e) {
+    appStore.showToast(`更新失败: ${e}`, 'error', 6000)
+  } finally {
+    updateInstalling.value = false
+  }
+}
+
+async function handleOpenRelease() {
+  try {
+    await api.openReleasePage()
+  } catch (e) {
+    appStore.showToast(`打开 Releases 失败: ${e}`, 'error')
   }
 }
 
@@ -410,6 +593,22 @@ function handleEnableSysProxy() {
   color: var(--text-primary);
 }
 
+.selected-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--primary-light);
+  color: var(--primary-color);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+}
+.selected-count strong {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .toolbar-actions {
   display: flex;
   gap: 6px;
@@ -528,6 +727,7 @@ function handleEnableSysProxy() {
   color: var(--text-primary);
   box-sizing: border-box;
 }
+.pre-proxy-search { margin-bottom: 8px; }
 .headers-textarea {
   width: 100%;
   padding: 8px 10px;
@@ -539,6 +739,18 @@ function handleEnableSysProxy() {
   color: var(--text-primary);
   box-sizing: border-box;
   resize: vertical;
+}
+.update-notes {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px;
 }
 .settings-hint {
   display: flex;

@@ -422,7 +422,8 @@ func buildSOCKSSettings(rule *models.ProxyRule) map[string]interface{} {
 
 // BuildLoadBalanceConfig 构建故障转移配置
 // nodes: 子节点列表，lb: 故障转移节点本身
-func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRule) (*XrayConfig, error) {
+// preProxy 非空时，所有子节点出站通过前置代理建立连接（子节点自身等于前置节点时除外）
+func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRule, preProxy *models.ProxyRule) (*XrayConfig, error) {
 	if len(nodes) == 0 {
 		return nil, fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
@@ -439,6 +440,30 @@ func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRul
 	// 为每个子节点创建出站
 	var outbounds []OutboundConfig
 	var balancerSelectors []string
+
+	// 全局前置代理出站（如有）
+	if preProxy != nil {
+		preOutbound := OutboundConfig{
+			Tag:      "pre_proxy",
+			Protocol: preProxy.Protocol,
+		}
+		switch preProxy.Protocol {
+		case "shadowsocks":
+			preOutbound.Settings = buildShadowsocksSettings(preProxy)
+		case "vmess":
+			preOutbound.Settings = buildVMessSettings(preProxy)
+		case "vless":
+			preOutbound.Settings = buildVLessSettings(preProxy)
+		case "trojan":
+			preOutbound.Settings = buildTrojanSettings(preProxy)
+		case "http":
+			preOutbound.Settings = buildHTTPSettings(preProxy)
+		case "socks":
+			preOutbound.Settings = buildSOCKSSettings(preProxy)
+		}
+		preOutbound.StreamSettings = buildStreamSettings(preProxy)
+		outbounds = append(outbounds, preOutbound)
+	}
 
 	for i, node := range nodes {
 		tag := fmt.Sprintf("proxy_%d", i)
@@ -462,6 +487,14 @@ func BuildLoadBalanceConfig(lb *models.LoadBalanceNode, nodes []*models.ProxyRul
 			outbound.Settings = buildSOCKSSettings(node)
 		}
 		outbound.StreamSettings = buildStreamSettings(node)
+
+		// 前置代理：落地节点通过 pre_proxy 建立传输层连接
+		if preProxy != nil && node.ID != preProxy.ID {
+			outbound.ProxySettings = &ProxySettingsConfig{
+				Tag:            "pre_proxy",
+				TransportLayer: true,
+			}
+		}
 
 		outbounds = append(outbounds, outbound)
 		balancerSelectors = append(balancerSelectors, tag)

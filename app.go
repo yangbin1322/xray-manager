@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +17,12 @@ import (
 	"xray-manager/internal/logger"
 	"xray-manager/internal/models"
 	"xray-manager/internal/parser"
+	"xray-manager/internal/portregistry"
 	"xray-manager/internal/process"
 	"xray-manager/internal/singbox"
 	"xray-manager/internal/speedtest"
 	"xray-manager/internal/subscription"
+	"xray-manager/internal/updater"
 	"xray-manager/internal/utils"
 	"xray-manager/internal/xray"
 
@@ -40,8 +44,13 @@ type MyService struct {
 	config              *models.Config
 	mu                  sync.RWMutex
 
-	trafficDirty bool // 流量统计有未保存的变更
-	httpServer   *http.Server
+	trafficDirty     bool // 流量统计有未保存的变更
+	httpServer       *http.Server
+	portReservations map[int]net.Listener
+	portRegistry     *portregistry.Registry
+	executablePath   string
+	configPath       string
+	portConflicts    []models.PortConflict
 }
 
 func NewMyService() *MyService {
@@ -65,6 +74,13 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		return err
 	}
 	a.configManager = configManager
+	a.configPath = configManager.GetConfigPath()
+	a.executablePath, _ = os.Executable()
+	a.portRegistry, err = portregistry.New()
+	if err != nil {
+		a.logError("初始化全局端口注册表失败", err)
+		return err
+	}
 
 	// 初始化进程管理器
 	a.processManager = process.NewManager(func(message string) {
@@ -159,7 +175,19 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		if a.config.ChainProxies == nil {
 			a.config.ChainProxies = []models.ChainProxy{}
 		}
+		if !a.config.Update.Configured {
+			a.config.Update.Configured = true
+			a.config.Update.AutoCheck = true
+			a.config.Update.AutoDownload = false
+		}
+
+
 		a.groupManager.LoadGroups(a.config.Groups)
+
+		if err := a.syncPortRegistryLocked(false); err != nil {
+			a.logError("同步全局端口注册表失败", err)
+			return err
+		}
 
 		// 初始化订阅数据
 		if a.config.Subscriptions == nil {
@@ -196,9 +224,14 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 自动启动已启用的规则
 		for i := range a.config.Rules {
 			rule := &a.config.Rules[i]
+			if rule.Enabled && a.hasPortConflictLocked(rule.ID) {
+				a.log(fmt.Sprintf("[端口冲突] 规则 %s 暂不自动启动，等待用户处理", rule.Alias))
+				rule.Enabled = false
+				continue
+			}
 			if rule.Enabled {
 				a.log(fmt.Sprintf("自动启动规则: %s", rule.Alias))
-				if err := a.processManager.Start(rule); err != nil {
+				if err := a.startRuleInternal(rule); err != nil {
 					a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), err)
 					rule.Enabled = false
 				}
@@ -208,6 +241,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 自动启动已启用的故障转移节点
 		for i := range a.config.LoadBalancers {
 			lb := &a.config.LoadBalancers[i]
+			if lb.Enabled && a.hasPortConflictLocked(lb.ID) {
+				a.log(fmt.Sprintf("[端口冲突] 故障转移 %s 暂不自动启动，等待用户处理", lb.Alias))
+				lb.Enabled = false
+				continue
+			}
 			if lb.Enabled {
 				a.log(fmt.Sprintf("自动启动故障转移: %s", lb.Alias))
 				if err := a.startLoadBalancerInternal(lb); err != nil {
@@ -220,6 +258,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 自动启动已启用的链式代理
 		for i := range a.config.ChainProxies {
 			chain := &a.config.ChainProxies[i]
+			if chain.Enabled && a.hasPortConflictLocked(chain.ID) {
+				a.log(fmt.Sprintf("[端口冲突] 链式代理 %s 暂不自动启动，等待用户处理", chain.Alias))
+				chain.Enabled = false
+				continue
+			}
 			if chain.Enabled {
 				a.log(fmt.Sprintf("自动启动链式代理: %s", chain.Alias))
 				if err := a.startChainProxyInternal(chain); err != nil {
@@ -237,6 +280,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 应用测速配置
 		a.speedTestManager.Configure(a.config.SpeedTest.URL, a.config.SpeedTest.Headers)
+
+		// 为所有未启动节点保留本地端口，避免多个客户端实例分配到同一端口。
+		a.reserveStoppedPorts()
 	}
 
 	// 定期保存流量统计（避免每次流量更新都写盘）
@@ -247,6 +293,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 	if err := a.startHTTPAPI(); err != nil {
 		return err
 	}
+
+	// 后台检查更新（不阻塞启动）
+	go a.maybeAutoUpdate()
 
 	return nil
 }
@@ -273,6 +322,7 @@ func (a *MyService) trafficSaveLoop(ctx context.Context) {
 // ServiceShutdown 在应用关闭时调用
 func (a *MyService) ServiceShutdown() error {
 	a.stopHTTPAPI()
+	a.releaseAllPortReservations()
 
 	// 停止健康检查
 	if a.healthCheckManager != nil {
@@ -355,18 +405,81 @@ func (a *MyService) usedLocalPorts() map[int]bool {
 	return used
 }
 
+func (a *MyService) reservePortLocked(port int) bool {
+	if port <= 0 || port > 65535 {
+		return false
+	}
+	if a.portReservations == nil {
+		a.portReservations = make(map[int]net.Listener)
+	}
+	if _, exists := a.portReservations[port]; exists {
+		return true
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port)))
+	if err != nil {
+		return false
+	}
+	a.portReservations[port] = listener
+	return true
+}
+
+func (a *MyService) releasePortReservationLocked(port int) {
+	if listener, exists := a.portReservations[port]; exists {
+		_ = listener.Close()
+		delete(a.portReservations, port)
+	}
+}
+
+func (a *MyService) reserveStoppedPorts() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, rule := range a.config.Rules {
+		if !rule.Enabled {
+			a.reservePortLocked(rule.LocalPort)
+		}
+	}
+	for _, item := range a.config.LoadBalancers {
+		if !item.Enabled {
+			a.reservePortLocked(item.LocalPort)
+		}
+	}
+	for _, item := range a.config.ChainProxies {
+		if !item.Enabled {
+			a.reservePortLocked(item.LocalPort)
+		}
+	}
+}
+
+func (a *MyService) releaseAllPortReservations() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for port := range a.portReservations {
+		a.releasePortReservationLocked(port)
+	}
+}
+
+func (a *MyService) runWithReleasedPortLocked(port int, action func() error) error {
+	a.releasePortReservationLocked(port)
+	if err := action(); err != nil {
+		a.reservePortLocked(port)
+		return err
+	}
+	return nil
+}
+
 // allocateLocalPort 分配一个既不与配置中其他节点冲突、系统又可监听的本地端口。
 // 相比直接用 utils.FindAvailablePort，额外排除了已分配给未启动节点的端口，
 // 避免多个未启动节点拿到同一端口。需已持有 a.mu 锁。
 func (a *MyService) allocateLocalPort() int {
 	used := a.usedLocalPorts()
-	for port := 10800; port < 65535; port++ {
+	for port := utils.DefaultRecommendPortStart; port < 65535; port++ {
 		if used[port] {
 			continue
 		}
-		if utils.CheckPortAvailable(port) {
+		if a.reservePortLocked(port) && a.reserveTemporaryPortLocked(port) {
 			return port
 		}
+		a.releasePortReservationLocked(port)
 	}
 	return 0
 }
@@ -397,9 +510,19 @@ func (a *MyService) AddRule(rule models.ProxyRule) error {
 		}
 	}
 
-	// 端口无效或已被其他节点占用时自动分配
-	if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] {
+	if rule.LocalPort > 0 {
+		if err := a.claimPortLocked("rule", rule.ID, rule.Alias, rule.LocalPort); err != nil {
+			return err
+		}
+		if !a.reservePortLocked(rule.LocalPort) {
+			a.releaseRegisteredPortLocked(rule.ID)
+			return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", rule.LocalPort)
+		}
+	} else {
 		rule.LocalPort = a.allocateLocalPort()
+	}
+	if rule.LocalPort == 0 {
+		return fmt.Errorf("没有可用的本地端口")
 	}
 
 	a.config.Rules = append(a.config.Rules, rule)
@@ -463,6 +586,23 @@ func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 
 	for i := range a.config.Rules {
 		if a.config.Rules[i].ID == id {
+			oldPort := a.config.Rules[i].LocalPort
+			if updatedRule.LocalPort != oldPort {
+				if a.config.Rules[i].Enabled {
+					return fmt.Errorf("请先停止规则再修改本地端口")
+				}
+				if updatedRule.LocalPort <= 0 {
+					return fmt.Errorf("本地端口 %d 无效", updatedRule.LocalPort)
+				}
+				if err := a.claimPortLocked("rule", id, updatedRule.Alias, updatedRule.LocalPort); err != nil {
+					return err
+				}
+				if !a.reservePortLocked(updatedRule.LocalPort) {
+					_ = a.claimPortLocked("rule", id, a.config.Rules[i].Alias, oldPort)
+					return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", updatedRule.LocalPort)
+				}
+				a.releasePortReservationLocked(oldPort)
+			}
 			a.applyRuleUpdateLocked(i, updatedRule)
 
 			if err := a.saveConfig(); err != nil {
@@ -519,9 +659,16 @@ func (a *MyService) DeleteRule(id string) error {
 					return err
 				}
 			}
+			a.releasePortReservationLocked(rule.LocalPort)
 
 			// 删除规则
 			a.config.Rules = append(a.config.Rules[:i], a.config.Rules[i+1:]...)
+
+			// 若删除的是全局前置代理节点，自动清空设置
+			if a.config.PreProxyNodeID == id {
+				a.config.PreProxyNodeID = ""
+				a.log("已清空全局前置代理（节点已删除）")
+			}
 
 			if err := a.saveConfig(); err != nil {
 				return err
@@ -589,7 +736,7 @@ func (a *MyService) StartNodes(ids []string) error {
 			for i := range a.config.Rules {
 				r := &a.config.Rules[i]
 				if r.ID == ref.id && !r.Enabled {
-					if err := a.processManager.Start(r); err != nil {
+					if err := a.runWithReleasedPortLocked(r.LocalPort, func() error { return a.startRuleInternal(r) }); err != nil {
 						a.logError(fmt.Sprintf("启动规则 %s 失败", r.Alias), err)
 					} else {
 						r.Enabled = true
@@ -601,7 +748,7 @@ func (a *MyService) StartNodes(ids []string) error {
 			for i := range a.config.LoadBalancers {
 				lb := &a.config.LoadBalancers[i]
 				if lb.ID == ref.id && !lb.Enabled {
-					if err := a.startLoadBalancerInternal(lb); err != nil {
+					if err := a.runWithReleasedPortLocked(lb.LocalPort, func() error { return a.startLoadBalancerInternal(lb) }); err != nil {
 						a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
 					}
 					break
@@ -611,7 +758,7 @@ func (a *MyService) StartNodes(ids []string) error {
 			for i := range a.config.ChainProxies {
 				c := &a.config.ChainProxies[i]
 				if c.ID == ref.id && !c.Enabled {
-					if err := a.startChainProxyInternal(c); err != nil {
+					if err := a.runWithReleasedPortLocked(c.LocalPort, func() error { return a.startChainProxyInternal(c) }); err != nil {
 						a.logError(fmt.Sprintf("启动链式代理 %s 失败", c.Alias), err)
 					}
 					break
@@ -662,18 +809,21 @@ func (a *MyService) StopNodes(ids []string) error {
 			a.config.Rules[i].Enabled = false
 			a.config.Rules[i].ProcessID = 0
 			a.config.Rules[i].RealIP = ""
+			a.reservePortLocked(a.config.Rules[i].LocalPort)
 		}
 	}
 	for i := range a.config.LoadBalancers {
 		if refSet[a.config.LoadBalancers[i].ID] {
 			a.config.LoadBalancers[i].Enabled = false
 			a.config.LoadBalancers[i].ProcessID = 0
+			a.reservePortLocked(a.config.LoadBalancers[i].LocalPort)
 		}
 	}
 	for i := range a.config.ChainProxies {
 		if refSet[a.config.ChainProxies[i].ID] {
 			a.config.ChainProxies[i].Enabled = false
 			a.config.ChainProxies[i].ProcessID = 0
+			a.reservePortLocked(a.config.ChainProxies[i].LocalPort)
 		}
 	}
 	err := a.saveConfig()
@@ -696,7 +846,7 @@ func (a *MyService) StartRule(id string) error {
 				return fmt.Errorf("规则 %s 已经在运行", rule.Alias)
 			}
 
-			if err := a.processManager.Start(rule); err != nil {
+			if err := a.runWithReleasedPortLocked(rule.LocalPort, func() error { return a.startRuleInternal(rule) }); err != nil {
 				// 启动失败：记录原因供前端显示，保持未启用
 				rule.Enabled = false
 				rule.LastError = err.Error()
@@ -743,6 +893,7 @@ func (a *MyService) StopRule(id string) error {
 			rule.Enabled = false
 			rule.ProcessID = 0
 			rule.RealIP = ""
+			a.reservePortLocked(rule.LocalPort)
 
 			if err := a.saveConfig(); err != nil {
 				return err
@@ -794,10 +945,175 @@ func (a *MyService) GetAutoStart() bool {
 
 // saveConfig 保存配置（内部方法，不加锁）
 func (a *MyService) saveConfig() error {
+	if err := a.syncPortRegistryLocked(false); err != nil {
+		return err
+	}
 	if a.configManager != nil {
 		return a.configManager.Save(a.config)
 	}
 	return nil
+}
+
+func (a *MyService) portEntriesLocked() []portregistry.Entry {
+	if a.config == nil || a.portRegistry == nil {
+		return nil
+	}
+	entries := make([]portregistry.Entry, 0, len(a.config.Rules)+len(a.config.LoadBalancers)+len(a.config.ChainProxies))
+	for _, rule := range a.config.Rules {
+		entries = append(entries, a.portEntry("rule", rule.ID, rule.Alias, rule.LocalPort))
+	}
+	for _, lb := range a.config.LoadBalancers {
+		entries = append(entries, a.portEntry("loadBalancer", lb.ID, lb.Alias, lb.LocalPort))
+	}
+	for _, chain := range a.config.ChainProxies {
+		entries = append(entries, a.portEntry("chainProxy", chain.ID, chain.Alias, chain.LocalPort))
+	}
+	return entries
+}
+
+func (a *MyService) portEntry(resourceType, resourceID, alias string, port int) portregistry.Entry {
+	return portregistry.Entry{ExecutablePath: a.executablePath, ConfigPath: a.configPath, ResourceID: resourceID, ResourceType: resourceType, Alias: alias, Port: port}
+}
+
+func (a *MyService) claimPortLocked(resourceType, resourceID, alias string, port int) error {
+	if a.portRegistry == nil {
+		return nil
+	}
+	return a.portRegistry.Claim(a.portEntry(resourceType, resourceID, alias, port))
+}
+
+func (a *MyService) reserveTemporaryPortLocked(port int) bool {
+	if a.portRegistry == nil {
+		return true
+	}
+	entry := a.portEntry("reservation", fmt.Sprintf("reservation_%d_%d", os.Getpid(), time.Now().UnixNano()), "待添加节点", port)
+	return a.portRegistry.ReserveTemporary(entry, 10*time.Minute) == nil
+}
+
+func (a *MyService) releaseRegisteredPortLocked(resourceID string) {
+	if a.portRegistry != nil {
+		_ = a.portRegistry.Release(a.executablePath, a.configPath, resourceID)
+	}
+}
+
+func (a *MyService) syncPortRegistryLocked(resolveConflicts bool) error {
+	if a.portRegistry == nil || a.config == nil {
+		return nil
+	}
+	conflicts, err := a.portRegistry.ReplaceOwner(a.executablePath, a.configPath, a.portEntriesLocked())
+	a.setPortConflictsLocked(conflicts)
+	if err != nil || len(conflicts) == 0 || !resolveConflicts {
+		return err
+	}
+	for resourceID, conflict := range conflicts {
+		newPort := a.allocateLocalPort()
+		if newPort == 0 {
+			return fmt.Errorf("%v；且没有可用端口可供重新分配", conflict)
+		}
+		if !a.setResourcePortLocked(resourceID, newPort) {
+			return fmt.Errorf("全局端口注册表包含未知资源 %s", resourceID)
+		}
+		a.log(fmt.Sprintf("[端口冲突] %v，已自动改用端口 %d", conflict, newPort))
+	}
+	conflicts, err = a.portRegistry.ReplaceOwner(a.executablePath, a.configPath, a.portEntriesLocked())
+	a.setPortConflictsLocked(conflicts)
+	if err != nil {
+		return err
+	}
+	if len(conflicts) > 0 {
+		for _, conflict := range conflicts {
+			return conflict
+		}
+	}
+	return a.configManager.Save(a.config)
+}
+
+func (a *MyService) setPortConflictsLocked(conflicts map[string]*portregistry.ConflictError) {
+	a.portConflicts = a.portConflicts[:0]
+	for _, entry := range a.portEntriesLocked() {
+		conflict := conflicts[entry.ResourceID]
+		if conflict == nil {
+			continue
+		}
+		a.portConflicts = append(a.portConflicts, models.PortConflict{
+			ResourceID: entry.ResourceID, ResourceType: entry.ResourceType, Alias: entry.Alias, Port: entry.Port,
+			OwnerExecutablePath: conflict.Owner.ExecutablePath, OwnerConfigPath: conflict.Owner.ConfigPath,
+			OwnerResourceType: conflict.Owner.ResourceType, OwnerAlias: conflict.Owner.Alias,
+		})
+	}
+}
+
+func (a *MyService) hasPortConflictLocked(resourceID string) bool {
+	for _, conflict := range a.portConflicts {
+		if conflict.ResourceID == resourceID {
+			return true
+		}
+	}
+	return false
+}
+
+// GetPendingPortConflicts 获取启动时尚未处理的全部端口冲突。
+func (a *MyService) GetPendingPortConflicts() []models.PortConflict {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]models.PortConflict(nil), a.portConflicts...)
+}
+
+// ResolvePortConflicts 仅为选中的冲突资源自动分配新端口。
+func (a *MyService) ResolvePortConflicts(resourceIDs []string) ([]models.PortConflict, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	selected := make(map[string]bool, len(resourceIDs))
+	for _, resourceID := range resourceIDs {
+		selected[resourceID] = true
+	}
+	for _, conflict := range append([]models.PortConflict(nil), a.portConflicts...) {
+		if !selected[conflict.ResourceID] {
+			continue
+		}
+		newPort := a.allocateLocalPort()
+		if newPort == 0 {
+			return a.portConflicts, fmt.Errorf("节点「%s」没有可用端口可供重新分配", conflict.Alias)
+		}
+		if !a.setResourcePortLocked(conflict.ResourceID, newPort) {
+			return a.portConflicts, fmt.Errorf("节点 %s 不存在", conflict.ResourceID)
+		}
+		a.log(fmt.Sprintf("[端口冲突] 节点「%s」从端口 %d 自动改为 %d", conflict.Alias, conflict.Port, newPort))
+	}
+	if err := a.syncPortRegistryLocked(false); err != nil {
+		return a.portConflicts, err
+	}
+	if a.configManager != nil {
+		if err := a.configManager.Save(a.config); err != nil {
+			return a.portConflicts, err
+		}
+	}
+	if a.app != nil {
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	}
+	return append([]models.PortConflict(nil), a.portConflicts...), nil
+}
+
+func (a *MyService) setResourcePortLocked(resourceID string, port int) bool {
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == resourceID {
+			a.config.Rules[i].LocalPort = port
+			return true
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].ID == resourceID {
+			a.config.LoadBalancers[i].LocalPort = port
+			return true
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].ID == resourceID {
+			a.config.ChainProxies[i].LocalPort = port
+			return true
+		}
+	}
+	return false
 }
 
 // log 输出日志
@@ -1275,12 +1591,27 @@ func (a *MyService) loadRules() {
 
 // CheckPortAvailable 检查端口是否可用
 func (a *MyService) CheckPortAvailable(port int) bool {
+	a.mu.RLock()
+	_, reservedBySelf := a.portReservations[port]
+	a.mu.RUnlock()
+	if reservedBySelf {
+		return true
+	}
 	return utils.CheckPortAvailable(port)
 }
 
-// RecommendPort 推荐可用端口
+// RecommendPort 推荐可用端口（默认从 11000 起）
 func (a *MyService) RecommendPort() int {
-	return utils.RecommendPort()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	used := a.usedLocalPorts()
+	for port := utils.DefaultRecommendPortStart; port < 65535; port++ {
+		if !used[port] && a.reservePortLocked(port) && a.reserveTemporaryPortLocked(port) {
+			return port
+		}
+		a.releasePortReservationLocked(port)
+	}
+	return 0
 }
 
 // ==================== 测速相关 API ====================
@@ -1725,6 +2056,9 @@ func (a *MyService) DeleteSubscription(subID string) error {
 			// 停止正在运行的节点
 			_ = a.processManager.Stop(rule.LocalPort)
 		}
+		if rule.GroupID == groupID {
+			a.releasePortReservationLocked(rule.LocalPort)
+		}
 	}
 	a.config.Rules = newRules
 
@@ -1806,6 +2140,7 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 		if oldRule.Enabled {
 			_ = a.processManager.Stop(oldRule.LocalPort)
 		}
+		a.releasePortReservationLocked(oldRule.LocalPort)
 
 		// 从配置中删除
 		for i := range a.config.Rules {
@@ -1897,6 +2232,7 @@ func (a *MyService) DeleteGroup(groupID string) error {
 					stopped++
 				}
 			}
+			a.releasePortReservationLocked(lb.LocalPort)
 			removed++
 			continue
 		}
@@ -1915,6 +2251,7 @@ func (a *MyService) DeleteGroup(groupID string) error {
 					stopped++
 				}
 			}
+			a.releasePortReservationLocked(chain.LocalPort)
 			removed++
 			continue
 		}
@@ -1934,6 +2271,7 @@ func (a *MyService) DeleteGroup(groupID string) error {
 					stopped++
 				}
 			}
+			a.releasePortReservationLocked(rule.LocalPort)
 			removed++
 			continue // 不加入 remaining，即删除
 		}
@@ -1970,7 +2308,7 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 	for i := range a.config.Rules {
 		rule := &a.config.Rules[i]
 		if rule.GroupID == groupID && !rule.Enabled {
-			if err := a.processManager.Start(rule); err != nil {
+			if err := a.runWithReleasedPortLocked(rule.LocalPort, func() error { return a.startRuleInternal(rule) }); err != nil {
 				a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), err)
 				continue
 			}
@@ -1982,7 +2320,7 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 	for i := range a.config.LoadBalancers {
 		lb := &a.config.LoadBalancers[i]
 		if lb.GroupID == groupID && !lb.Enabled {
-			if err := a.startLoadBalancerInternal(lb); err != nil {
+			if err := a.runWithReleasedPortLocked(lb.LocalPort, func() error { return a.startLoadBalancerInternal(lb) }); err != nil {
 				a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
 				continue
 			}
@@ -1993,7 +2331,7 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 	for i := range a.config.ChainProxies {
 		chain := &a.config.ChainProxies[i]
 		if chain.GroupID == groupID && !chain.Enabled {
-			if err := a.startChainProxyInternal(chain); err != nil {
+			if err := a.runWithReleasedPortLocked(chain.LocalPort, func() error { return a.startChainProxyInternal(chain) }); err != nil {
 				a.logError(fmt.Sprintf("启动链式代理 %s 失败", chain.Alias), err)
 				continue
 			}
@@ -2024,6 +2362,7 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 				continue
 			}
 			rule.Enabled = false
+			a.reservePortLocked(rule.LocalPort)
 			count++
 		}
 	}
@@ -2036,6 +2375,7 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 			}
 			lb.Enabled = false
 			lb.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(lb.LocalPort)
 			count++
 		}
 	}
@@ -2048,6 +2388,7 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 			}
 			chain.Enabled = false
 			chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(chain.LocalPort)
 			count++
 		}
 	}
@@ -2134,6 +2475,39 @@ func (a *MyService) SaveRuleOrder(orderedIDs []string) error {
 }
 
 // ==================== 批量导入 API (Feature 4) ====================
+
+// ExportShareLinks 将指定普通节点导出为每行一个的标准分享链接。
+func (a *MyService) ExportShareLinks(ruleIDs []string) (string, error) {
+	if len(ruleIDs) == 0 {
+		return "", fmt.Errorf("请选择要复制的普通节点")
+	}
+	idSet := make(map[string]bool, len(ruleIDs))
+	for _, id := range ruleIDs {
+		idSet[id] = true
+	}
+	a.mu.RLock()
+	rules := make([]models.ProxyRule, 0, len(ruleIDs))
+	for _, rule := range a.config.Rules {
+		if idSet[rule.ID] {
+			rules = append(rules, rule)
+		}
+	}
+	a.mu.RUnlock()
+	if len(rules) == 0 {
+		return "", fmt.Errorf("未找到可复制的普通节点")
+	}
+
+	encoder := parser.NewShareLinkParser()
+	links := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		link, err := encoder.EncodeLink(rule)
+		if err != nil {
+			return "", fmt.Errorf("导出节点 %s 失败: %v", rule.Alias, err)
+		}
+		links = append(links, link)
+	}
+	return strings.Join(links, "\n"), nil
+}
 
 // ImportShareLinks 批量导入分享链接（返回详细结果）。
 // groupID：导入到的现有分组 ID（空=不分组）；
@@ -2441,6 +2815,20 @@ func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 	if len(lb.NodeIDs) == 0 {
 		return fmt.Errorf("故障转移节点需要至少一个子节点")
 	}
+	if lb.LocalPort > 0 {
+		if err := a.claimPortLocked("loadBalancer", lb.ID, lb.Alias, lb.LocalPort); err != nil {
+			return err
+		}
+		if !a.reservePortLocked(lb.LocalPort) {
+			a.releaseRegisteredPortLocked(lb.ID)
+			return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", lb.LocalPort)
+		}
+	} else {
+		lb.LocalPort = a.allocateLocalPort()
+	}
+	if lb.LocalPort == 0 {
+		return fmt.Errorf("没有可用的本地端口")
+	}
 
 	// 映射分组名称
 	if lb.GroupID != "" {
@@ -2472,6 +2860,7 @@ func (a *MyService) DeleteLoadBalancer(id string) error {
 			if lb.Enabled {
 				_ = a.processManager.Stop(lb.LocalPort)
 			}
+			a.releasePortReservationLocked(lb.LocalPort)
 			a.config.LoadBalancers = append(a.config.LoadBalancers[:i], a.config.LoadBalancers[i+1:]...)
 			return a.saveConfig()
 		}
@@ -2484,10 +2873,27 @@ func (a *MyService) DeleteLoadBalancer(id string) error {
 func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if len(lb.NodeIDs) == 0 {
+		return fmt.Errorf("故障转移节点需要至少一个子节点")
+	}
 
 	for i := range a.config.LoadBalancers {
 		if a.config.LoadBalancers[i].ID == lb.ID {
 			wasEnabled := a.config.LoadBalancers[i].Enabled
+			oldPort := a.config.LoadBalancers[i].LocalPort
+			if lb.LocalPort != oldPort {
+				if lb.LocalPort <= 0 {
+					return fmt.Errorf("本地端口 %d 无效", lb.LocalPort)
+				}
+				if err := a.claimPortLocked("loadBalancer", lb.ID, lb.Alias, lb.LocalPort); err != nil {
+					return err
+				}
+				if !a.reservePortLocked(lb.LocalPort) {
+					_ = a.claimPortLocked("loadBalancer", lb.ID, a.config.LoadBalancers[i].Alias, oldPort)
+					return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", lb.LocalPort)
+				}
+				a.releasePortReservationLocked(oldPort)
+			}
 
 			// 如果正在运行且端口或节点变了，需要先停止
 			if wasEnabled {
@@ -2537,7 +2943,7 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 
 	// 构建故障转移配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核），附加流量统计 API
 	apiPort := process.FindApiPort(lb.LocalPort)
-	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes, apiPort)
+	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes, apiPort, a.getPreProxyRuleLocked())
 	if err != nil {
 		return err
 	}
@@ -2579,7 +2985,7 @@ func (a *MyService) StartLoadBalancer(id string) error {
 				return fmt.Errorf("故障转移节点已在运行")
 			}
 
-			if err := a.startLoadBalancerInternal(lb); err != nil {
+			if err := a.runWithReleasedPortLocked(lb.LocalPort, func() error { return a.startLoadBalancerInternal(lb) }); err != nil {
 				// 启动失败：记录原因供前端显示，保持未启用
 				lb.Enabled = false
 				lb.LastError = err.Error()
@@ -2615,6 +3021,7 @@ func (a *MyService) StopLoadBalancer(id string) error {
 
 			lb.Enabled = false
 			lb.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(lb.LocalPort)
 			return a.saveConfig()
 		}
 	}
@@ -2642,6 +3049,20 @@ func (a *MyService) AddChainProxy(chain models.ChainProxy) error {
 
 	if len(chain.ChainNodes) < 2 {
 		return fmt.Errorf("链式代理需要至少2个节点")
+	}
+	if chain.LocalPort > 0 {
+		if err := a.claimPortLocked("chainProxy", chain.ID, chain.Alias, chain.LocalPort); err != nil {
+			return err
+		}
+		if !a.reservePortLocked(chain.LocalPort) {
+			a.releaseRegisteredPortLocked(chain.ID)
+			return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", chain.LocalPort)
+		}
+	} else {
+		chain.LocalPort = a.allocateLocalPort()
+	}
+	if chain.LocalPort == 0 {
+		return fmt.Errorf("没有可用的本地端口")
 	}
 
 	// 映射分组名称
@@ -2674,6 +3095,7 @@ func (a *MyService) DeleteChainProxy(id string) error {
 			if chain.Enabled {
 				_ = a.processManager.Stop(chain.LocalPort)
 			}
+			a.releasePortReservationLocked(chain.LocalPort)
 			a.config.ChainProxies = append(a.config.ChainProxies[:i], a.config.ChainProxies[i+1:]...)
 			return a.saveConfig()
 		}
@@ -2686,10 +3108,27 @@ func (a *MyService) DeleteChainProxy(id string) error {
 func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if len(chain.ChainNodes) < 2 {
+		return fmt.Errorf("链式代理需要至少2个节点")
+	}
 
 	for i := range a.config.ChainProxies {
 		if a.config.ChainProxies[i].ID == chain.ID {
 			wasEnabled := a.config.ChainProxies[i].Enabled
+			oldPort := a.config.ChainProxies[i].LocalPort
+			if chain.LocalPort != oldPort {
+				if chain.LocalPort <= 0 {
+					return fmt.Errorf("本地端口 %d 无效", chain.LocalPort)
+				}
+				if err := a.claimPortLocked("chainProxy", chain.ID, chain.Alias, chain.LocalPort); err != nil {
+					return err
+				}
+				if !a.reservePortLocked(chain.LocalPort) {
+					_ = a.claimPortLocked("chainProxy", chain.ID, a.config.ChainProxies[i].Alias, oldPort)
+					return fmt.Errorf("本地端口 %d 已被系统中的其他进程占用", chain.LocalPort)
+				}
+				a.releasePortReservationLocked(oldPort)
+			}
 
 			// 如果正在运行，需要先停止
 			if wasEnabled {
@@ -2737,6 +3176,9 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 		return err
 	}
 
+	// 全局前置代理：插到链最前端（已在链中则不重复添加）
+	chainRules = a.prependPreProxyLocked(chainRules)
+
 	// 构建链式代理配置（含 Hysteria2/TUIC 节点时自动切换 sing-box 内核），附加流量统计 API
 	apiPort := process.FindApiPort(chain.LocalPort)
 	configJSON, coreType, err := buildChainConfigJSON(chain.LocalPort, chainRules, apiPort)
@@ -2780,7 +3222,7 @@ func (a *MyService) StartChainProxy(id string) error {
 				return fmt.Errorf("链式代理已在运行")
 			}
 
-			if err := a.startChainProxyInternal(chain); err != nil {
+			if err := a.runWithReleasedPortLocked(chain.LocalPort, func() error { return a.startChainProxyInternal(chain) }); err != nil {
 				// 启动失败：记录原因供前端显示，保持未启用
 				chain.Enabled = false
 				chain.LastError = err.Error()
@@ -2816,11 +3258,264 @@ func (a *MyService) StopChainProxy(id string) error {
 
 			chain.Enabled = false
 			chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(chain.LocalPort)
 			return a.saveConfig()
 		}
 	}
 
 	return fmt.Errorf("链式代理不存在")
+}
+
+// ==================== 全局前置代理 ====================
+
+// getPreProxyRuleLocked 返回当前配置的全局前置代理节点（调用方需已持有锁）。
+// 未配置、节点不存在时返回 nil。
+func (a *MyService) getPreProxyRuleLocked() *models.ProxyRule {
+	id := a.config.PreProxyNodeID
+	if id == "" {
+		return nil
+	}
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == id {
+			return &a.config.Rules[i]
+		}
+	}
+	return nil
+}
+
+// prependPreProxyLocked 将全局前置代理插入链首（已在链中则不重复）。
+func (a *MyService) prependPreProxyLocked(chainRules []*models.ProxyRule) []*models.ProxyRule {
+	pre := a.getPreProxyRuleLocked()
+	if pre == nil {
+		return chainRules
+	}
+	for _, r := range chainRules {
+		if r != nil && r.ID == pre.ID {
+			return chainRules
+		}
+	}
+	return append([]*models.ProxyRule{pre}, chainRules...)
+}
+
+// startRuleInternal 启动普通节点（内部方法，不加锁）。
+// 若配置了全局前置代理且目标不是前置节点本身，则按 前置→落地 两跳链启动。
+func (a *MyService) startRuleInternal(rule *models.ProxyRule) error {
+	pre := a.getPreProxyRuleLocked()
+	if pre == nil || pre.ID == rule.ID {
+		return a.processManager.Start(rule)
+	}
+
+	apiPort := process.FindApiPort(rule.LocalPort)
+	configJSON, coreType, err := buildChainConfigJSON(rule.LocalPort, []*models.ProxyRule{pre, rule}, apiPort)
+	if err != nil {
+		return err
+	}
+	return a.processManager.StartWithOptions(rule, process.StartOptions{
+		ConfigJSON:  configJSON,
+		CoreType:    coreType,
+		ApiPort:     apiPort,
+		FetchRealIP: true,
+	})
+}
+
+// GetPreProxy 获取全局前置代理配置
+func (a *MyService) GetPreProxy() models.PreProxyConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	cfg := models.PreProxyConfig{NodeID: a.config.PreProxyNodeID}
+	if cfg.NodeID == "" {
+		return cfg
+	}
+	for _, r := range a.config.Rules {
+		if r.ID == cfg.NodeID {
+			cfg.Alias = r.Alias
+			return cfg
+		}
+	}
+	// 节点已不存在：仍返回 ID，别名留空，便于前端提示失效
+	return cfg
+}
+
+// SetPreProxy 设置全局前置代理。nodeID 为空表示清除。
+// 已启动的节点不会自动重启，需重新启动后生效。
+func (a *MyService) SetPreProxy(nodeID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if nodeID == "" {
+		if a.config.PreProxyNodeID == "" {
+			return nil
+		}
+		a.config.PreProxyNodeID = ""
+		a.log("已清除全局前置代理")
+		return a.saveConfig()
+	}
+
+	var found bool
+	var alias string
+	for _, r := range a.config.Rules {
+		if r.ID == nodeID {
+			found = true
+			alias = r.Alias
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("前置代理节点不存在: %s", nodeID)
+	}
+
+	a.config.PreProxyNodeID = nodeID
+	a.log(fmt.Sprintf("全局前置代理已设置为: %s（重新启动节点后生效）", alias))
+	return a.saveConfig()
+}
+
+// ==================== 应用更新 ====================
+
+// GetAppVersion 返回当前应用版本
+func (a *MyService) GetAppVersion() string {
+	return updater.NormalizeVersion(AppVersion)
+}
+
+// GetUpdateConfig 获取更新设置
+func (a *MyService) GetUpdateConfig() models.UpdateConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	cfg := a.config.Update
+	return cfg
+}
+
+// SetUpdateConfig 保存更新设置
+func (a *MyService) SetUpdateConfig(cfg models.UpdateConfig) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cfg.Configured = true
+	a.config.Update = cfg
+	a.log(fmt.Sprintf("更新设置已保存: autoCheck=%v autoDownload=%v", cfg.AutoCheck, cfg.AutoDownload))
+	return a.saveConfig()
+}
+
+// CheckForUpdate 检查 GitHub Releases 是否有新版本
+func (a *MyService) CheckForUpdate() (models.UpdateInfo, error) {
+	info, err := updater.CheckLatest(AppVersion)
+	if err != nil {
+		return models.UpdateInfo{CurrentVersion: updater.NormalizeVersion(AppVersion)}, err
+	}
+	result := models.UpdateInfo{
+		CurrentVersion: info.CurrentVersion,
+		LatestVersion:  info.LatestVersion,
+		HasUpdate:      info.HasUpdate,
+		ReleaseName:    info.ReleaseName,
+		ReleaseNotes:   info.ReleaseNotes,
+		ReleaseURL:     info.ReleaseURL,
+		AssetName:      info.AssetName,
+		AssetURL:       info.AssetURL,
+		AssetSize:      info.AssetSize,
+		PublishedAt:    info.PublishedAt,
+		CheckedAt:      info.CheckedAt,
+	}
+	if !result.HasUpdate {
+		result.Message = "当前已是最新版本"
+	} else if result.AssetURL == "" {
+		result.Message = "发现新版本，但未找到当前平台对应的安装包"
+	} else {
+		result.Message = fmt.Sprintf("发现新版本 v%s", result.LatestVersion)
+	}
+	a.log(fmt.Sprintf("[更新] 检查完成: 当前=%s 最新=%s hasUpdate=%v asset=%s",
+		result.CurrentVersion, result.LatestVersion, result.HasUpdate, result.AssetName))
+	return result, nil
+}
+
+// DownloadAndInstallUpdate 下载并应用最新版本（可执行文件将在退出后替换并重启）
+func (a *MyService) DownloadAndInstallUpdate() (string, error) {
+	info, err := updater.CheckLatest(AppVersion)
+	if err != nil {
+		return "", err
+	}
+	if !info.HasUpdate {
+		return "当前已是最新版本", nil
+	}
+	if info.AssetURL == "" {
+		// 打不开具体资源时，打开 Release 页面
+		if a.app != nil && info.ReleaseURL != "" {
+			_ = a.app.Browser.OpenURL(info.ReleaseURL)
+		}
+		return "", fmt.Errorf("未找到当前平台的更新包，已打开 Releases 页面")
+	}
+
+	dest := filepath.Join(os.TempDir(), "xray-manager-update", info.AssetName)
+	a.log(fmt.Sprintf("[更新] 开始下载 %s -> %s", info.AssetName, dest))
+	if err := updater.Download(info.AssetURL, dest); err != nil {
+		return "", err
+	}
+	a.log(fmt.Sprintf("[更新] 下载完成: %s", dest))
+
+	needQuit, err := updater.ApplyDownloadedUpdate(dest)
+	if err != nil {
+		return "", err
+	}
+	if needQuit {
+		a.log("[更新] 已安排替换程序，即将退出以完成更新")
+		// 异步退出，让前端先收到返回值
+		go func() {
+			time.Sleep(800 * time.Millisecond)
+			if a.app != nil {
+				a.app.Quit()
+			} else {
+				os.Exit(0)
+			}
+		}()
+		return "更新包已下载，程序将退出并自动完成安装", nil
+	}
+	return "更新包已下载并打开，请按提示完成安装", nil
+}
+
+// OpenReleasePage 打开最新 Release 页面
+func (a *MyService) OpenReleasePage() error {
+	info, err := updater.CheckLatest(AppVersion)
+	url := fmt.Sprintf("https://github.com/%s/%s/releases", githubOwner, githubRepo)
+	if err == nil && info.ReleaseURL != "" {
+		url = info.ReleaseURL
+	}
+	if a.app == nil {
+		return fmt.Errorf("应用未初始化")
+	}
+	return a.app.Browser.OpenURL(url)
+}
+
+// maybeAutoUpdate 启动后按配置检查/自动更新（后台执行）
+func (a *MyService) maybeAutoUpdate() {
+	a.mu.RLock()
+	cfg := a.config.Update
+	a.mu.RUnlock()
+	if !cfg.AutoCheck {
+		return
+	}
+	info, err := a.CheckForUpdate()
+	if err != nil {
+		a.log(fmt.Sprintf("[更新] 自动检查失败: %v", err))
+		return
+	}
+	if !info.HasUpdate {
+		return
+	}
+	if a.app != nil {
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "updateAvailable", Data: info})
+	}
+	if !cfg.AutoDownload {
+		return
+	}
+	msg, err := a.DownloadAndInstallUpdate()
+	if err != nil {
+		a.log(fmt.Sprintf("[更新] 自动更新失败: %v", err))
+		if a.app != nil {
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "updateError", Data: err.Error()})
+		}
+		return
+	}
+	if a.app != nil {
+		a.app.Event.EmitEvent(&application.CustomEvent{Name: "updateProgress", Data: msg})
+	}
 }
 
 // ==================== 健康检查 API ====================
@@ -3138,6 +3833,9 @@ func (a *MyService) handleNodeFailed(localPort int, reason string) {
 			}
 		}
 	}
+	if matched {
+		a.reservePortLocked(localPort)
+	}
 	_ = a.saveConfig()
 	a.mu.Unlock()
 
@@ -3372,7 +4070,7 @@ func (a *MyService) resolveNodeProxy(proxyID string) (string, func(), error) {
 		}
 
 		tempPort := utils.FindAvailablePort(15800)
-		configJSON, coreType, err := buildLoadBalanceConfigJSON(&lb, tempPort, nodes, 0)
+		configJSON, coreType, err := buildLoadBalanceConfigJSON(&lb, tempPort, nodes, 0, nil)
 		if err != nil {
 			return "", nil, err
 		}
@@ -3458,9 +4156,15 @@ func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule, apiPort
 // buildLoadBalanceConfigJSON 构建故障转移配置。
 // 子节点包含 Hysteria2/TUIC 时使用 sing-box 内核，否则使用 xray。
 // apiPort > 0 时附加流量统计 API。
-func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule, apiPort int) (string, string, error) {
-	if singbox.RulesNeedSingBox(nodes) {
-		cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes)
+// preProxy 非空时，子节点经前置代理出站。
+func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule, apiPort int, preProxy *models.ProxyRule) (string, string, error) {
+	// 前置代理若需 sing-box 内核，整体也切到 sing-box
+	needSB := singbox.RulesNeedSingBox(nodes)
+	if !needSB && preProxy != nil {
+		needSB = singbox.NeedsSingBox(preProxy.Protocol)
+	}
+	if needSB {
+		cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes, preProxy)
 		if err != nil {
 			return "", "", err
 		}
@@ -3473,7 +4177,7 @@ func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes
 
 	lbCopy := *lb
 	lbCopy.LocalPort = localPort
-	cfg, err := xray.BuildLoadBalanceConfig(&lbCopy, nodes)
+	cfg, err := xray.BuildLoadBalanceConfig(&lbCopy, nodes, preProxy)
 	if err != nil {
 		return "", "", err
 	}

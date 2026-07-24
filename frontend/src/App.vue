@@ -61,6 +61,14 @@
       @close="showBatchEditor = false; batchNodes = []"
     />
 
+    <PortConflictDialog
+      :visible="showPortConflicts"
+      :conflicts="portConflicts"
+      :saving="resolvingPortConflicts"
+      @keep="showPortConflicts = false"
+      @resolve="resolveSelectedPortConflicts"
+    />
+
     <!-- Toast 通知 -->
     <ToastContainer />
   </div>
@@ -84,6 +92,8 @@ import SubscriptionDialog from './components/SubscriptionDialog.vue'
 import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
 import ChainProxyDialog from './components/ChainProxyDialog.vue'
 import BatchNodeEditor from './components/BatchNodeEditor.vue'
+import PortConflictDialog from './components/PortConflictDialog.vue'
+import * as api from './api.js'
 
 const rulesStore = useRulesStore()
 const groupsStore = useGroupsStore()
@@ -100,6 +110,24 @@ const editingChain = ref(null)
 const showBatchEditor = ref(false)
 const batchNodes = ref([])
 const batchSkipped = ref(0)
+const showPortConflicts = ref(false)
+const portConflicts = ref([])
+const resolvingPortConflicts = ref(false)
+
+async function resolveSelectedPortConflicts(resourceIds) {
+  resolvingPortConflicts.value = true
+  try {
+    const remaining = await api.resolvePortConflicts(resourceIds) || []
+    portConflicts.value = remaining
+    showPortConflicts.value = false
+    await rulesStore.loadRules()
+    appStore.showToast(`已为 ${resourceIds.length} 个节点重新分配端口`, 'success')
+  } catch (e) {
+    appStore.showToast(`端口重新分配失败: ${e}`, 'error', 5000)
+  } finally {
+    resolvingPortConflicts.value = false
+  }
+}
 
 function handleBatchEdit({ nodes, skippedCount }) {
   batchNodes.value = nodes
@@ -175,6 +203,18 @@ function listenToBackendEvents() {
     const d = event.data || {}
     appStore.showToast(`节点「${d.alias || ''}」启动后不通（${d.reason || '未知原因'}），已自动停用`, 'error', 5000)
   })
+
+  // 启动自动检查发现新版本
+  Events.On('updateAvailable', (event) => {
+    const d = event.data || {}
+    appStore.showToast(d.message || `发现新版本 v${d.latestVersion || ''}`, 'info', 8000)
+  })
+  Events.On('updateError', (event) => {
+    appStore.showToast(`自动更新失败: ${event.data || ''}`, 'error', 6000)
+  })
+  Events.On('updateProgress', (event) => {
+    appStore.showToast(String(event.data || '更新进行中'), 'success', 6000)
+  })
 }
 
 // 初始化
@@ -187,6 +227,8 @@ onMounted(async () => {
   await groupsStore.loadSubscriptions()
   await appStore.loadAutoStart()
   await appStore.loadSysProxyStatus()
+  portConflicts.value = await api.getPendingPortConflicts() || []
+  showPortConflicts.value = portConflicts.value.length > 0
 })
 </script>
 
