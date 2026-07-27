@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "2.4.0"
+		"file_version": "2.4.1"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "2.4.0",
+			"ProductVersion": "2.4.1",
 			"CompanyName": "xray-manager",
 			"FileDescription": "Xray 代理管理工具，支持多规则配置与一键切换",
 			"LegalCopyright": "(c) 2025, xray-manager",

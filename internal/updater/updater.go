@@ -319,6 +319,11 @@ func scheduleReplace(newBinary string) error {
 	}
 }
 
+// toCRLF 把 LF 换行统一为 CRLF（已是 CRLF 的不重复转换）。
+func toCRLF(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\n", "\r\n")
+}
+
 func scheduleReplaceWindows(exe, newBinary string) error {
 	bat := filepath.Join(os.TempDir(), fmt.Sprintf("xray-manager-update-%d.bat", time.Now().UnixNano()))
 	// 等待当前进程退出后复制并重启
@@ -334,7 +339,11 @@ copy /Y "%%SOURCE%%" "%%TARGET%%" >nul
 start "" "%%TARGET%%"
 del "%%~f0"
 `, exe, newBinary, filepath.Base(exe), filepath.Base(exe))
-	if err := os.WriteFile(bat, []byte(content), 0644); err != nil {
+	// 批处理必须以 CRLF 换行：cmd.exe 解析 .bat 时按字节偏移推进，安装目录
+	// 含中文（或其他多字节字符）时，纯 LF 会让它在错误的位置切行，表现为
+	// 'ARGET'、'local' 之类的残缺命令，变量赋值失败，更新静默中止。
+	// 纯 ASCII 路径下偏移恰好对齐，所以该缺陷只在中文路径上暴露。
+	if err := os.WriteFile(bat, []byte(toCRLF(content)), 0644); err != nil {
 		return err
 	}
 	cmd := exec.Command("cmd", "/C", "start", "", bat)
