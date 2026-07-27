@@ -3,11 +3,11 @@ Version=1.0
 Name=xray-manager
 Comment=Xray 代理管理工具，支持多规则配置与一键切换
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/.xray-manager.exe %u
+Exec=/usr/local/bin/xray-manager %u
 Terminal=false
 Type=Application
-Icon=.xray-manager.exe
+Icon=xray-manager
 Categories=Utility;
-StartupWMClass=.xray-manager.exe
+StartupWMClass=xray-manager
 
  

@@ -5,7 +5,7 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME ".xray-manager"
+    !define INFO_PROJECTNAME "xray-manager"
 !endif
 !ifndef INFO_COMPANYNAME
     !define INFO_COMPANYNAME "xray-manager"
@@ -14,10 +14,10 @@
     !define INFO_PRODUCTNAME "xray-manager"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "2.3.0"
+    !define INFO_PRODUCTVERSION "2.4.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "© 2025, xray-manager"
+    !define INFO_COPYRIGHT "(c) 2025, xray-manager"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"
