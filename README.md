@@ -32,6 +32,13 @@
 - 故障转移：多节点主备切换，主节点故障时自动切换到备用节点
 - 二者均支持测速、健康检测、流量监控，可作为系统代理
 
+**动态会话代理（住宅代理多出口 IP）**
+- 单个端口按客户端用户名动态切换住宅代理出口 IP，无需为每个会话开一个端口
+- 客户端在代理用户名中传入会话标识，按模板（含 `{session}` 占位符）拼成上游真实用户名
+- 混合端口：HTTP 与 SOCKS5 客户端均可接入，SOCKS5 侧会话标识取自用户名认证
+- 可选前置加速节点（普通节点 / 链式 / 故障转移），用于直连境外网关很慢或不通的情况
+- 上游密码保存在本机，客户端只需知道会话标识；可另设客户端密码防止本机其他程序滥用
+
 **节点测速与健康检测**
 - 测速：普通节点直连测 TCP 延迟 + 通过代理测下载速度（限时采样，慢速网络不超时）
 - 测速 URL 与请求 Header 可在设置中自定义（默认沿用内置浏览器 UA）
@@ -59,7 +66,7 @@
 **HTTP API**
 - 可在设置中启用或关闭 HTTP API，并配置监听地址与端口
 - 支持可选 Bearer Token 鉴权，非本机监听时强制启用鉴权
-- 提供节点、分组、订阅、故障转移和链式代理的查询、创建、修改、删除与启停接口
+- 提供节点、分组、订阅、故障转移、链式代理和动态会话代理的查询、创建、修改、删除与启停接口
 - 支持获取全部、已启动、指定分组、指定订阅或指定复合代理的本地 HTTP/SOCKS5 地址
 - 内置 OpenAPI 3.0 规范与 Swagger UI 文档
 
@@ -74,6 +81,16 @@
 - 嵌入式二进制：使用 go:embed 打包 Xray 与 sing-box 双内核，开箱即用无需额外安装
 
 ## 下载安装
+
+### v2.4.0 更新内容
+
+- 新增**动态会话代理**：单个端口按客户端传入的用户名动态切换住宅代理出口 IP，不必再为每个会话开一个端口
+- 会话代理为混合端口，HTTP 与 SOCKS5 客户端均可接入；上游用户名支持 `{session}` 模板拼接或原样透传
+- 会话代理可选前置加速节点（普通节点 / 链式 / 故障转移），并支持「跟随全局前置代理」自动联动
+- 会话代理提供实时统计（活跃连接、累计连接、会话数、上下行流量），新会话首次出现时记录日志便于核对模板
+- 新增会话代理的 HTTP API 与 OpenAPI 文档，支持查询、创建、修改、删除与启停
+- 节点编辑器在 HTTP/SOCKS 用户名含会话标识时给出提示，避免误用普通节点（其用户名写死在内核配置中，只会有单一出口 IP）
+- HTTP API 端口被占用时不再中止应用启动，改为记录日志后继续运行
 
 ### v2.3.0 更新内容
 
@@ -209,6 +226,9 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 | POST | `/api/v1/chain-proxies/{id}/start`、`/stop` | 启动 / 停止链式代理 |
 | GET | `/api/v1/chain-proxies/{id}/local-proxy` | 获取指定链式代理的本地代理地址 |
 | GET | `/api/v1/chain-proxies/local-proxies`、`/enabled` | 获取全部 / 已启动链式代理的本地代理地址 |
+| GET / POST | `/api/v1/session-relays` | 获取 / 创建动态会话代理（返回含实时统计） |
+| GET / PUT / DELETE | `/api/v1/session-relays/{id}` | 获取 / 修改 / 删除动态会话代理 |
+| POST | `/api/v1/session-relays/{id}/start`、`/stop` | 启动 / 停止动态会话代理 |
 | GET / POST | `/api/v1/groups` | 获取 / 创建分组 |
 | GET / PUT / DELETE | `/api/v1/groups/{id}` | 获取 / 修改 / 删除分组（删除会级联删除节点） |
 | POST | `/api/v1/groups/{id}/start`、`/stop` | 启动 / 停止分组内节点 |
@@ -217,6 +237,39 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 | POST | `/api/v1/subscriptions/{id}/update` | 立即更新订阅 |
 
 示例：`curl http://127.0.0.1:9090/api/v1/nodes`
+
+#### 动态会话代理接口
+
+创建时的字段说明（省略的字段取默认值）：
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/v1/session-relays \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alias": "住宅代理-美国",
+    "localPort": 19100,
+    "upstreamAddr": "gw.dataimpulse.com:823",
+    "usernameTemplate": "login__cr.us;sessid.{session}",
+    "upstreamPassword": "上游密码",
+    "localPassword": "",
+    "preProxyNodeId": "",
+    "groupId": ""
+  }'
+```
+
+| 字段 | 说明 |
+|------|------|
+| `localPort` | 混合端口，HTTP 与 SOCKS5 客户端均可接入；填 `0` 或省略则自动分配 |
+| `upstreamAddr` | 上游住宅网关，必须是 `host:port` |
+| `usernameTemplate` | 含 `{session}` 占位符；**留空表示原样透传**客户端传入的完整用户名 |
+| `upstreamPassword` | 上游固定密码，保存在本机，客户端无需知道 |
+| `localPassword` | 客户端需提供的密码，留空则不校验（仅监听本机时可留空） |
+| `preProxyNodeId` | 留空 = 直连上游；`__global__` = 跟随全局前置代理；也可填具体节点 / 链式 / 故障转移的 ID |
+
+创建后处于停止状态，需再调用 `/start`。`GET` 返回中的 `activeConns`、`totalConns`、`sessionCount` 为实时统计，仅在运行时有值。
+
+注意：前置加速节点必须**已经启动**，中继只做转发、不会代为拉起内核进程；未启动时 `/start` 会失败并在 `lastError` 中说明原因。
 
 ### 添加代理规则
 
@@ -235,6 +288,33 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 
 1. 点击 **"添加故障转移"**
 2. 选择参与的子节点（支持搜索框快速筛选），启动后默认走第一个节点，故障时切换到后续备用节点
+
+### 动态会话代理
+
+适用于住宅代理服务商把会话标识编码在用户名里的场景（如 DataImpulse 的 `sessid`），
+一个端口即可对应任意数量的出口 IP。
+
+1. 点击 **"添加会话代理"**
+2. 填写上游网关地址（如 `gw.dataimpulse.com:823`）和上游密码
+3. 填写用户名模板，其中 `{session}` 会被替换为客户端传入的会话标识：
+   `login__cr.au;sessid.{session}`（留空则原样透传客户端用户名）
+4. 需要加速时选择一个**已启动**的前置节点，中继会经它连上游网关
+5. 启动后按会话标识访问，换用户名即换出口 IP：
+
+```bash
+# HTTP 客户端
+curl -x "http://123:x@127.0.0.1:端口" https://api.ipify.org
+curl -x "http://45:x@127.0.0.1:端口"  https://api.ipify.org   # 另一个出口 IP
+
+# SOCKS5 客户端（用 socks5h 让域名交由远端解析）
+curl -x "socks5h://123:x@127.0.0.1:端口" https://api.ipify.org
+```
+
+说明：
+
+- SOCKS5 客户端必须启用用户名认证，否则无法携带会话标识（未设客户端密码时密码可任意填）
+- 出口 IP 由客户端用户名决定，因此这类节点不提供测速与健康检测
+- 上游只支持 TCP CONNECT，SOCKS5 的 BIND / UDP ASSOCIATE 会被拒绝
 
 ### 测速与健康检测
 
@@ -264,6 +344,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 xray-manager/
 ├── main.go                     # 程序入口、系统托盘
 ├── app.go                      # 应用核心逻辑（API 方法）
+├── sessionrelay.go             # 动态会话代理的增删改查与启停
 ├── frontend/                   # Vue 3 前端
 │   └── src/
 │       ├── components/         # 组件（NodeList, NodeEditor, Sidebar 等）
@@ -275,6 +356,7 @@ xray-manager/
 │   ├── process/                # 进程管理（Xray/sing-box 内核、端口清理、流量轮询）
 │   ├── xray/                   # Xray 配置生成器
 │   ├── singbox/                # sing-box 配置生成器（Hysteria2/TUIC）
+│   ├── relay/                  # 动态会话代理中继（凭证改写、HTTP/SOCKS5 入站、前置代理拨号）
 │   ├── subscription/           # 订阅解析
 │   ├── parser/                 # 分享链接解析
 │   ├── speedtest/              # 节点测速

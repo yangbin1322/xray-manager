@@ -174,6 +174,32 @@ export async function stopChainProxy(id) {
   return await MyService.StopChainProxy(id)
 }
 
+// ==================== 动态会话代理 ====================
+
+export async function getSessionRelays() {
+  return await MyService.GetSessionRelays()
+}
+
+export async function addSessionRelay(relay) {
+  return await MyService.AddSessionRelay(relay)
+}
+
+export async function updateSessionRelay(relay) {
+  return await MyService.UpdateSessionRelay(relay)
+}
+
+export async function deleteSessionRelay(id) {
+  return await MyService.DeleteSessionRelay(id)
+}
+
+export async function startSessionRelay(id) {
+  return await MyService.StartSessionRelay(id)
+}
+
+export async function stopSessionRelay(id) {
+  return await MyService.StopSessionRelay(id)
+}
+
 // ==================== 测速 ====================
 
 export async function testRuleSpeed(ruleID) {

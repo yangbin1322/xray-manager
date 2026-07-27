@@ -10,6 +10,7 @@ export const useRulesStore = defineStore('rules', () => {
   const rules = ref([])
   const loadBalancers = ref([])
   const chainProxies = ref([])
+  const sessionRelays = ref([])
   const selectedIds = ref(new Set())
   const lastSelectedId = ref(null) // Shift 范围选的锚点（上次点击的行）
   const statusFilter = ref('all') // all | running | stopped
@@ -21,12 +22,16 @@ export const useRulesStore = defineStore('rules', () => {
   const clipboard = ref([]) // 最近写入系统剪贴板的普通节点 ID
   const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
-  // === 合并所有节点（规则 + 故障转移 + 链式代理） ===
+  // === 合并所有节点（规则 + 故障转移 + 链式代理 + 动态会话代理） ===
   const allNodes = computed(() => {
     const ruleNodes = rules.value.map(r => ({ ...r, _nodeType: 'rule' }))
     const lbNodes = loadBalancers.value.map(lb => ({ ...lb, _nodeType: 'lb', protocol: 'loadbalance' }))
     const chainNodes = chainProxies.value.map(c => ({ ...c, _nodeType: 'chain', protocol: 'chain' }))
-    return [...ruleNodes, ...lbNodes, ...chainNodes]
+    // 会话代理的上游网关填入 serverAddr，便于列表统一展示和搜索
+    const relayNodes = sessionRelays.value.map(r => ({
+      ...r, _nodeType: 'relay', protocol: 'relay', serverAddr: r.upstreamAddr,
+    }))
+    return [...ruleNodes, ...lbNodes, ...chainNodes, ...relayNodes]
   })
 
   // === 计算属性 ===
@@ -93,6 +98,7 @@ export const useRulesStore = defineStore('rules', () => {
       rules.value = await api.getRules() || []
       try { loadBalancers.value = await api.getLoadBalancers() || [] } catch { loadBalancers.value = [] }
       try { chainProxies.value = await api.getChainProxies() || [] } catch { chainProxies.value = [] }
+      try { sessionRelays.value = await api.getSessionRelays() || [] } catch { sessionRelays.value = [] }
     } catch (e) {
       console.error('加载规则失败:', e)
     } finally {
@@ -140,6 +146,8 @@ export const useRulesStore = defineStore('rules', () => {
           await api.deleteLoadBalancer(id)
         } else if (node._nodeType === 'chain') {
           await api.deleteChainProxy(id)
+        } else if (node._nodeType === 'relay') {
+          await api.deleteSessionRelay(id)
         } else {
           await api.deleteRule(id)
         }
@@ -193,6 +201,34 @@ export const useRulesStore = defineStore('rules', () => {
   function applyTrafficUpdate(snap) {
     if (!snap || !snap.ruleId) return
     traffic.value = { ...traffic.value, [snap.ruleId]: snap }
+  }
+
+  // 应用会话代理统计（relayStatsUpdate 事件）。
+  // 会话代理不经内核进程，统计由后端定时推送而非随 trafficUpdate 到达。
+  function applyRelayStats(snap) {
+    if (!snap || !snap.relayId) return
+    const idx = sessionRelays.value.findIndex(r => r.id === snap.relayId)
+    if (idx >= 0) {
+      sessionRelays.value[idx] = {
+        ...sessionRelays.value[idx],
+        activeConns: snap.activeConns,
+        totalConns: snap.totalConns,
+        sessionCount: snap.sessionCount,
+      }
+    }
+    // 复用流量表，让列表的实时流量/累计列与其他节点类型一致
+    traffic.value = {
+      ...traffic.value,
+      [snap.relayId]: {
+        ruleId: snap.relayId,
+        upSpeed: snap.upSpeed,
+        downSpeed: snap.downSpeed,
+        totalUp: snap.bytesUp,
+        totalDown: snap.bytesDown,
+        todayUp: snap.bytesUp,
+        todayDown: snap.bytesDown,
+      },
+    }
   }
 
   // 应用健康检查结果（healthCheckResult 事件）
@@ -323,7 +359,7 @@ export const useRulesStore = defineStore('rules', () => {
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, handleRowSelect, setSort,
     copySelected, pasteNodes,
-    applyTrafficUpdate, applyHealthCheckResult,
+    applyTrafficUpdate, applyRelayStats, applyHealthCheckResult,
     checkSelectedHealth, checkAllHealth, resetTraffic,
   }
 })

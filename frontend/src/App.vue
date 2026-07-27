@@ -5,6 +5,7 @@
       @showSubDialog="showSubscriptionDialog = true"
       @showLBDialog="editingLB = null; showLBDialog = true"
       @showChainDialog="editingChain = null; showChainDialog = true"
+      @showRelayDialog="editingRelay = null; showRelayDialog = true"
     />
 
     <!-- 主内容区 -->
@@ -17,6 +18,7 @@
         @editRule="handleEditRule"
         @editLB="handleEditLB"
         @editChain="handleEditChain"
+        @editRelay="handleEditRelay"
       />
 
       <!-- 日志面板 -->
@@ -51,6 +53,13 @@
       :visible="showChainDialog"
       :editingChain="editingChain"
       @close="showChainDialog = false; editingChain = null"
+    />
+
+    <!-- 动态会话代理对话框 -->
+    <SessionRelayDialog
+      :visible="showRelayDialog"
+      :editingRelay="editingRelay"
+      @close="showRelayDialog = false; editingRelay = null"
     />
 
     <!-- 批量编辑对话框 -->
@@ -91,6 +100,7 @@ import ToastContainer from './components/ToastContainer.vue'
 import SubscriptionDialog from './components/SubscriptionDialog.vue'
 import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
 import ChainProxyDialog from './components/ChainProxyDialog.vue'
+import SessionRelayDialog from './components/SessionRelayDialog.vue'
 import BatchNodeEditor from './components/BatchNodeEditor.vue'
 import PortConflictDialog from './components/PortConflictDialog.vue'
 import * as api from './api.js'
@@ -105,8 +115,10 @@ const editingRule = ref(null)
 const showSubscriptionDialog = ref(false)
 const showLBDialog = ref(false)
 const showChainDialog = ref(false)
+const showRelayDialog = ref(false)
 const editingLB = ref(null)
 const editingChain = ref(null)
+const editingRelay = ref(null)
 const showBatchEditor = ref(false)
 const batchNodes = ref([])
 const batchSkipped = ref(0)
@@ -160,6 +172,11 @@ function handleEditChain(chain) {
   showChainDialog.value = true
 }
 
+function handleEditRelay(relay) {
+  editingRelay.value = relay
+  showRelayDialog.value = true
+}
+
 // 监听后端事件
 function listenToBackendEvents() {
   Events.On('log', (event) => {
@@ -186,6 +203,11 @@ function listenToBackendEvents() {
   // 实时流量更新
   Events.On('trafficUpdate', (event) => {
     rulesStore.applyTrafficUpdate(event.data)
+  })
+
+  // 会话代理统计（连接数/会话数/速度）
+  Events.On('relayStatsUpdate', (event) => {
+    rulesStore.applyRelayStats(event.data)
   })
 
   // 健康检查结果（单个节点）

@@ -539,6 +539,13 @@ export class ImportResult {
              */
             this["lbImported"] = 0;
         }
+        if (!("relayImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["relayImported"] = 0;
+        }
         if (!("errors" in $$source)) {
             /**
              * 错误信息列表
@@ -565,14 +572,14 @@ export class ImportResult {
      * @returns {ImportResult}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType0;
         const $$createField8_0 = $$createType0;
+        const $$createField9_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("errors" in $$parsedSource) {
-            $$parsedSource["errors"] = $$createField7_0($$parsedSource["errors"]);
+            $$parsedSource["errors"] = $$createField8_0($$parsedSource["errors"]);
         }
         if ("warnings" in $$parsedSource) {
-            $$parsedSource["warnings"] = $$createField8_0($$parsedSource["warnings"]);
+            $$parsedSource["warnings"] = $$createField9_0($$parsedSource["warnings"]);
         }
         return new ImportResult(/** @type {Partial<ImportResult>} */($$parsedSource));
     }
@@ -1491,6 +1498,183 @@ export class ProxySettings {
             $$parsedSource["h2"] = $$createField30_0($$parsedSource["h2"]);
         }
         return new ProxySettings(/** @type {Partial<ProxySettings>} */($$parsedSource));
+    }
+}
+
+/**
+ * SessionRelay 动态会话代理：单端口按客户端用户名动态切换住宅代理出口 IP。
+ * 
+ * 住宅代理服务商把会话标识编码在用户名里（如 login__cr.au;sessid.123），
+ * 传统做法要为每个会话开一个端口。此类型只占一个端口，客户端换用户名
+ * 即换出口 IP，无需重启进程。上游连接可经前置节点加速。
+ * 监听端口为混合端口，HTTP 与 SOCKS5 客户端都可接入。
+ */
+export class SessionRelay {
+    /**
+     * Creates a new SessionRelay instance.
+     * @param {Partial<SessionRelay>} [$$source = {}] - The source object to create the SessionRelay.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 唯一标识
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * 别名
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+        if (!("localPort" in $$source)) {
+            /**
+             * 本地监听端口（混合端口，同时支持 HTTP/SOCKS5 客户端）
+             * @member
+             * @type {number}
+             */
+            this["localPort"] = 0;
+        }
+        if (!("upstreamAddr" in $$source)) {
+            /**
+             * 上游住宅网关，如 gw.dataimpulse.com:823
+             * @member
+             * @type {string}
+             */
+            this["upstreamAddr"] = "";
+        }
+        if (!("usernameTemplate" in $$source)) {
+            /**
+             * 上游用户名模板，含 {session} 占位符；为空表示透传客户端用户名
+             * @member
+             * @type {string}
+             */
+            this["usernameTemplate"] = "";
+        }
+        if (!("upstreamPassword" in $$source)) {
+            /**
+             * 上游固定密码
+             * @member
+             * @type {string}
+             */
+            this["upstreamPassword"] = "";
+        }
+        if (!("localPassword" in $$source)) {
+            /**
+             * 客户端需提供的密码（为空则不校验）
+             * @member
+             * @type {string}
+             */
+            this["localPassword"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 前置加速节点 ID（普通节点/链式/故障转移）。
+             * 空表示直连上游；FollowGlobalPreProxy 表示跟随全局前置代理设置。
+             * @member
+             * @type {string | undefined}
+             */
+            this["preProxyNodeId"] = undefined;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 启动状态
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 所属分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 所属分组名称
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+        if (!("activeConns" in $$source)) {
+            /**
+             * 运行时统计（不持久化速度，仅回显）
+             * 当前活跃连接数
+             * @member
+             * @type {number}
+             */
+            this["activeConns"] = 0;
+        }
+        if (!("totalConns" in $$source)) {
+            /**
+             * 累计连接数
+             * @member
+             * @type {number}
+             */
+            this["totalConns"] = 0;
+        }
+        if (!("sessionCount" in $$source)) {
+            /**
+             * 出现过的不同会话数
+             * @member
+             * @type {number}
+             */
+            this["sessionCount"] = 0;
+        }
+        if (!("traffic" in $$source)) {
+            /**
+             * 流量统计
+             * @member
+             * @type {TrafficStats}
+             */
+            this["traffic"] = (new TrafficStats());
+        }
+        if (!("lastStartTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["lastStartTime"] = "";
+        }
+        if (!("lastStopTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["lastStopTime"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SessionRelay instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SessionRelay}
+     */
+    static createFrom($$source = {}) {
+        const $$createField15_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("traffic" in $$parsedSource) {
+            $$parsedSource["traffic"] = $$createField15_0($$parsedSource["traffic"]);
+        }
+        return new SessionRelay(/** @type {Partial<SessionRelay>} */($$parsedSource));
     }
 }
 

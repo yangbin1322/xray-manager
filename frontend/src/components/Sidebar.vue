@@ -57,6 +57,7 @@
     <div class="sidebar-footer">
       <button class="btn-small btn-block" @click="$emit('showLBDialog')">添加故障转移</button>
       <button class="btn-small btn-block" @click="$emit('showChainDialog')">添加链式代理</button>
+      <button class="btn-small btn-block" @click="$emit('showRelayDialog')">添加会话代理</button>
       <button class="btn-small btn-block" @click="$emit('showSubDialog')">订阅管理</button>
     </div>
 
@@ -93,7 +94,7 @@ import { useGroupsStore } from '../stores/groups.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
-defineEmits(['showLBDialog', 'showChainDialog', 'showSubDialog'])
+defineEmits(['showLBDialog', 'showChainDialog', 'showRelayDialog', 'showSubDialog'])
 
 const rulesStore = useRulesStore()
 const groupsStore = useGroupsStore()

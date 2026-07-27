@@ -175,12 +175,14 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		if a.config.ChainProxies == nil {
 			a.config.ChainProxies = []models.ChainProxy{}
 		}
+		if a.config.SessionRelays == nil {
+			a.config.SessionRelays = []models.SessionRelay{}
+		}
 		if !a.config.Update.Configured {
 			a.config.Update.Configured = true
 			a.config.Update.AutoCheck = true
 			a.config.Update.AutoDownload = false
 		}
-
 
 		a.groupManager.LoadGroups(a.config.Groups)
 
@@ -272,6 +274,26 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 			}
 		}
 
+		// 自动启动已启用的动态会话代理。
+		// 放在最后：其前置加速节点可能是上面刚启动的普通节点/链式/故障转移。
+		for i := range a.config.SessionRelays {
+			sr := &a.config.SessionRelays[i]
+			if sr.Enabled && a.hasPortConflictLocked(sr.ID) {
+				a.log(fmt.Sprintf("[端口冲突] 动态会话代理 %s 暂不自动启动，等待用户处理", sr.Alias))
+				sr.Enabled = false
+				continue
+			}
+			if sr.Enabled {
+				a.log(fmt.Sprintf("自动启动动态会话代理: %s", sr.Alias))
+				sr.Enabled = false // startSessionRelayInternal 成功后置回 true
+				if err := a.startSessionRelayInternal(sr); err != nil {
+					a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
+					sr.Enabled = false
+					sr.LastError = err.Error()
+				}
+			}
+		}
+
 		// 保存自动启动后的状态
 		_ = a.saveConfig()
 
@@ -288,11 +310,12 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 	// 定期保存流量统计（避免每次流量更新都写盘）
 	go a.trafficSaveLoop(ctx)
 
+	// 会话代理不经内核进程，统计需自行定期推送给前端
+	go a.relayStatsLoop(ctx)
+
 	a.log("Xray 管理器已启动")
 
-	if err := a.startHTTPAPI(); err != nil {
-		return err
-	}
+	a.startHTTPAPI()
 
 	// 后台检查更新（不阻塞启动）
 	go a.maybeAutoUpdate()
@@ -335,6 +358,7 @@ func (a *MyService) ServiceShutdown() error {
 	}
 
 	a.log("正在停止所有进程...")
+	stopAllSessionRelays()
 	a.processManager.StopAll()
 
 	// 关闭系统代理
@@ -402,6 +426,11 @@ func (a *MyService) usedLocalPorts() map[int]bool {
 			used[p] = true
 		}
 	}
+	for i := range a.config.SessionRelays {
+		if p := a.config.SessionRelays[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
 	return used
 }
 
@@ -444,6 +473,11 @@ func (a *MyService) reserveStoppedPorts() {
 		}
 	}
 	for _, item := range a.config.ChainProxies {
+		if !item.Enabled {
+			a.reservePortLocked(item.LocalPort)
+		}
+	}
+	for _, item := range a.config.SessionRelays {
 		if !item.Enabled {
 			a.reservePortLocked(item.LocalPort)
 		}
@@ -669,6 +703,7 @@ func (a *MyService) DeleteRule(id string) error {
 				a.config.PreProxyNodeID = ""
 				a.log("已清空全局前置代理（节点已删除）")
 			}
+			a.clearRelayPreProxyRefLocked(id)
 
 			if err := a.saveConfig(); err != nil {
 				return err
@@ -682,10 +717,10 @@ func (a *MyService) DeleteRule(id string) error {
 	return fmt.Errorf("规则 %s 不存在", id)
 }
 
-// nodeRef 批量操作时对一个节点的引用（普通节点/故障转移/链式代理）
+// nodeRef 批量操作时对一个节点的引用（普通节点/故障转移/链式代理/动态会话代理）
 type nodeRef struct {
 	id        string
-	nodeType  string // rule / lb / chain
+	nodeType  string // rule / lb / chain / relay
 	localPort int
 	alias     string
 }
@@ -710,6 +745,12 @@ func (a *MyService) collectNodeRefs(ids []string) []nodeRef {
 	for i := range a.config.ChainProxies {
 		if idSet[a.config.ChainProxies[i].ID] {
 			refs = append(refs, nodeRef{a.config.ChainProxies[i].ID, "chain", a.config.ChainProxies[i].LocalPort, a.config.ChainProxies[i].Alias})
+		}
+	}
+	// 会话代理排在最后：其前置加速节点可能是同批启动的其他节点
+	for i := range a.config.SessionRelays {
+		if idSet[a.config.SessionRelays[i].ID] {
+			refs = append(refs, nodeRef{a.config.SessionRelays[i].ID, "relay", a.config.SessionRelays[i].LocalPort, a.config.SessionRelays[i].Alias})
 		}
 	}
 	return refs
@@ -764,6 +805,17 @@ func (a *MyService) StartNodes(ids []string) error {
 					break
 				}
 			}
+		case "relay":
+			for i := range a.config.SessionRelays {
+				sr := &a.config.SessionRelays[i]
+				if sr.ID == ref.id && !sr.Enabled {
+					if err := a.runWithReleasedPortLocked(sr.LocalPort, func() error { return a.startSessionRelayInternal(sr) }); err != nil {
+						a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
+						sr.LastError = err.Error()
+					}
+					break
+				}
+			}
 		}
 	}
 	err := a.saveConfig()
@@ -793,6 +845,11 @@ func (a *MyService) StopNodes(ids []string) error {
 		go func(ref nodeRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// 会话代理运行在本进程内，没有对应的内核进程
+			if ref.nodeType == "relay" {
+				stopRelayInstance(ref.id)
+				return
+			}
 			_ = a.processManager.Stop(ref.localPort)
 		}(ref)
 	}
@@ -824,6 +881,13 @@ func (a *MyService) StopNodes(ids []string) error {
 			a.config.ChainProxies[i].Enabled = false
 			a.config.ChainProxies[i].ProcessID = 0
 			a.reservePortLocked(a.config.ChainProxies[i].LocalPort)
+		}
+	}
+	for i := range a.config.SessionRelays {
+		if refSet[a.config.SessionRelays[i].ID] {
+			a.config.SessionRelays[i].Enabled = false
+			a.config.SessionRelays[i].LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(a.config.SessionRelays[i].LocalPort)
 		}
 	}
 	err := a.saveConfig()
@@ -958,7 +1022,7 @@ func (a *MyService) portEntriesLocked() []portregistry.Entry {
 	if a.config == nil || a.portRegistry == nil {
 		return nil
 	}
-	entries := make([]portregistry.Entry, 0, len(a.config.Rules)+len(a.config.LoadBalancers)+len(a.config.ChainProxies))
+	entries := make([]portregistry.Entry, 0, len(a.config.Rules)+len(a.config.LoadBalancers)+len(a.config.ChainProxies)+len(a.config.SessionRelays))
 	for _, rule := range a.config.Rules {
 		entries = append(entries, a.portEntry("rule", rule.ID, rule.Alias, rule.LocalPort))
 	}
@@ -967,6 +1031,9 @@ func (a *MyService) portEntriesLocked() []portregistry.Entry {
 	}
 	for _, chain := range a.config.ChainProxies {
 		entries = append(entries, a.portEntry("chainProxy", chain.ID, chain.Alias, chain.LocalPort))
+	}
+	for _, sr := range a.config.SessionRelays {
+		entries = append(entries, a.portEntry("sessionRelay", sr.ID, sr.Alias, sr.LocalPort))
 	}
 	return entries
 }
@@ -1113,6 +1180,12 @@ func (a *MyService) setResourcePortLocked(resourceID string, port int) bool {
 			return true
 		}
 	}
+	for i := range a.config.SessionRelays {
+		if a.config.SessionRelays[i].ID == resourceID {
+			a.config.SessionRelays[i].LocalPort = port
+			return true
+		}
+	}
 	return false
 }
 
@@ -1215,6 +1288,20 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		exportChains = append(exportChains, chain)
 	}
 
+	// 动态会话代理：仅在全量导出，或其前置节点已被导出时导出
+	var exportRelays []models.SessionRelay
+	for _, sr := range a.config.SessionRelays {
+		if !exportAll {
+			if sr.PreProxyNodeID != "" && !exportedRuleIDs[sr.PreProxyNodeID] && !exportedLBIDs[sr.PreProxyNodeID] {
+				continue
+			}
+			if sr.PreProxyNodeID == "" && !selectedIDs[sr.ID] {
+				continue
+			}
+		}
+		exportRelays = append(exportRelays, sr)
+	}
+
 	// 收集被引用的分组
 	referencedGroupIDs := make(map[string]bool)
 	for _, r := range exportRules {
@@ -1230,6 +1317,11 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 	for _, chain := range exportChains {
 		if chain.GroupID != "" {
 			referencedGroupIDs[chain.GroupID] = true
+		}
+	}
+	for _, sr := range exportRelays {
+		if sr.GroupID != "" {
+			referencedGroupIDs[sr.GroupID] = true
 		}
 	}
 
@@ -1306,6 +1398,16 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		}
 	}
 
+	cleanRelays := make([]models.SessionRelay, len(exportRelays))
+	copy(cleanRelays, exportRelays)
+	for i := range cleanRelays {
+		cleanRelays[i].ResetRuntimeState()
+		if !exportedGroupIDs[cleanRelays[i].GroupID] {
+			cleanRelays[i].GroupID = ""
+			cleanRelays[i].GroupName = ""
+		}
+	}
+
 	exportData := models.ExportData{
 		Version:       "1.0",
 		ExportTime:    time.Now().Format("2006-01-02 15:04:05"),
@@ -1314,6 +1416,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		Subscriptions: exportSubs,
 		LoadBalancers: cleanLBs,
 		ChainProxies:  cleanChains,
+		SessionRelays: cleanRelays,
 	}
 
 	data, err := json.MarshalIndent(exportData, "", "  ")
@@ -1325,8 +1428,8 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		return "", fmt.Errorf("写入导出文件失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，故障转移 %d 个，链式代理 %d 个，订阅 %d 个）",
-		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(exportSubs)))
+	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个，订阅 %d 个）",
+		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(cleanRelays), len(exportSubs)))
 	return filePath, nil
 }
 
@@ -1356,6 +1459,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	var importedSubs []models.Subscription
 	var importedLBs []models.LoadBalanceNode
 	var importedChains []models.ChainProxy
+	var importedRelays []models.SessionRelay
 
 	if err := json.Unmarshal(data, &exportData); err == nil && exportData.Version != "" {
 		// 新版格式
@@ -1364,6 +1468,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		importedSubs = exportData.Subscriptions
 		importedLBs = exportData.LoadBalancers
 		importedChains = exportData.ChainProxies
+		importedRelays = exportData.SessionRelays
 	} else {
 		// 尝试解析为旧版 Config 格式（向后兼容）
 		var oldConfig models.Config
@@ -1375,6 +1480,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		importedSubs = oldConfig.Subscriptions
 		importedLBs = oldConfig.LoadBalancers
 		importedChains = oldConfig.ChainProxies
+		importedRelays = oldConfig.SessionRelays
 		result.Warnings = append(result.Warnings, "检测到旧版格式，已自动兼容")
 	}
 
@@ -1554,6 +1660,44 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		time.Sleep(time.Nanosecond)
 	}
 
+	// === 导入动态会话代理 ===
+	for _, sr := range importedRelays {
+		if err := sr.Validate(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("动态会话代理校验失败 [%s]: %v", sr.Alias, err))
+			continue
+		}
+
+		sr.ID = fmt.Sprintf("relay_%d", time.Now().UnixNano())
+		sr.ResetRuntimeState()
+		if newGID, ok := groupIDMap[sr.GroupID]; ok {
+			sr.GroupID = newGID
+			sr.GroupName = a.groupNameLocked(newGID)
+		} else if sr.GroupID != "" {
+			sr.GroupID = ""
+			sr.GroupName = ""
+		}
+
+		// 前置节点引用映射到导入后的新 ID，无法映射时降级为直连
+		if sr.PreProxyNodeID != "" {
+			if newID, ok := ruleIDMap[sr.PreProxyNodeID]; ok {
+				sr.PreProxyNodeID = newID
+			} else if newID, ok := lbIDMap[sr.PreProxyNodeID]; ok {
+				sr.PreProxyNodeID = newID
+			} else {
+				sr.PreProxyNodeID = ""
+				result.Warnings = append(result.Warnings, fmt.Sprintf("动态会话代理 %s 的前置加速节点未包含在导入数据中，已改为直连上游", sr.Alias))
+			}
+		}
+
+		if sr.LocalPort <= 0 || a.usedLocalPorts()[sr.LocalPort] || !utils.CheckPortAvailable(sr.LocalPort) {
+			sr.LocalPort = a.allocateLocalPort()
+		}
+
+		a.config.SessionRelays = append(a.config.SessionRelays, sr)
+		result.RelayImported++
+		time.Sleep(time.Nanosecond)
+	}
+
 	// 同步分组管理器缓存
 	a.groupManager.LoadGroups(a.config.Groups)
 
@@ -1569,16 +1713,23 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		return nil, fmt.Errorf("保存配置失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，故障转移 %d 个，链式代理 %d 个",
-		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported))
+	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个",
+		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported, result.RelayImported))
 
 	return result, nil
 }
 
 // logError 输出错误日志
 func (a *MyService) logError(message string, err error) {
-	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: fmt.Sprintf("[错误] %s: %v", message, err)})
-
+	text := fmt.Sprintf("[错误] %s: %v", message, err)
+	// 同时写入日志过滤器，保证错误在日志面板可搜索、可按级别筛选
+	if a.logFilter != nil {
+		a.logFilter.AddLog(text)
+	}
+	if a.app == nil {
+		return
+	}
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: text})
 }
 
 // 触发重新加载规则事件
@@ -2259,6 +2410,24 @@ func (a *MyService) DeleteGroup(groupID string) error {
 	}
 	a.config.ChainProxies = remainingChains
 
+	// 动态会话代理运行在本进程内，停止方式与外部内核进程不同
+	remainingRelays := make([]models.SessionRelay, 0, len(a.config.SessionRelays))
+	for i := range a.config.SessionRelays {
+		sr := &a.config.SessionRelays[i]
+		if sr.GroupID == groupID {
+			if sr.Enabled {
+				stopRelayInstance(sr.ID)
+				stopped++
+			}
+			a.releasePortReservationLocked(sr.LocalPort)
+			a.releaseRegisteredPortLocked(sr.ID)
+			removed++
+			continue
+		}
+		remainingRelays = append(remainingRelays, *sr)
+	}
+	a.config.SessionRelays = remainingRelays
+
 	// 再停止并删除该分组下的普通节点
 	remaining := make([]models.ProxyRule, 0, len(a.config.Rules))
 	for i := range a.config.Rules {
@@ -2338,6 +2507,18 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 			count++
 		}
 	}
+	// 动态会话代理放最后：其前置加速节点可能是上面刚启动的节点
+	for i := range a.config.SessionRelays {
+		sr := &a.config.SessionRelays[i]
+		if sr.GroupID == groupID && !sr.Enabled {
+			if err := a.runWithReleasedPortLocked(sr.LocalPort, func() error { return a.startSessionRelayInternal(sr) }); err != nil {
+				a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
+				sr.LastError = err.Error()
+				continue
+			}
+			count++
+		}
+	}
 
 	if err := a.saveConfig(); err != nil {
 		return err
@@ -2389,6 +2570,17 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 			chain.Enabled = false
 			chain.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 			a.reservePortLocked(chain.LocalPort)
+			count++
+		}
+	}
+	// 动态会话代理
+	for i := range a.config.SessionRelays {
+		sr := &a.config.SessionRelays[i]
+		if sr.GroupID == groupID && sr.Enabled {
+			stopRelayInstance(sr.ID)
+			sr.Enabled = false
+			sr.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(sr.LocalPort)
 			count++
 		}
 	}
@@ -2862,6 +3054,7 @@ func (a *MyService) DeleteLoadBalancer(id string) error {
 			}
 			a.releasePortReservationLocked(lb.LocalPort)
 			a.config.LoadBalancers = append(a.config.LoadBalancers[:i], a.config.LoadBalancers[i+1:]...)
+			a.clearRelayPreProxyRefLocked(id)
 			return a.saveConfig()
 		}
 	}
@@ -3097,6 +3290,7 @@ func (a *MyService) DeleteChainProxy(id string) error {
 			}
 			a.releasePortReservationLocked(chain.LocalPort)
 			a.config.ChainProxies = append(a.config.ChainProxies[:i], a.config.ChainProxies[i+1:]...)
+			a.clearRelayPreProxyRefLocked(id)
 			return a.saveConfig()
 		}
 	}
