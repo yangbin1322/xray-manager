@@ -1,6 +1,10 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"strings"
+)
 
 // ProxyRule 代理规则结构
 type ProxyRule struct {
@@ -203,15 +207,16 @@ type H2Settings struct {
 
 // Config 配置文件结构
 type Config struct {
-	AutoStart     bool              `json:"autoStart"`     // 开机自启
-	Rules         []ProxyRule       `json:"rules"`         // 代理规则列表
-	Groups        []Group           `json:"groups"`        // 分组列表
-	Subscriptions []Subscription    `json:"subscriptions"` // 订阅列表
-	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
-	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
-	HealthCheck   HealthCheckConfig `json:"healthCheck"`   // 健康检查配置
-	SpeedTest     SpeedTestConfig   `json:"speedTest"`     // 测速配置
-	HTTPAPI       HTTPAPIConfig     `json:"httpApi"`       // HTTP API 配置
+	AutoStart      bool              `json:"autoStart"`      // 开机自启
+	Rules          []ProxyRule       `json:"rules"`          // 代理规则列表
+	Groups         []Group           `json:"groups"`         // 分组列表
+	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
+	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 故障转移节点列表
+	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
+	SessionRelays  []SessionRelay    `json:"sessionRelays"`  // 动态会话代理列表
+	HealthCheck    HealthCheckConfig `json:"healthCheck"`    // 健康检查配置
+	SpeedTest      SpeedTestConfig   `json:"speedTest"`      // 测速配置
+	HTTPAPI        HTTPAPIConfig     `json:"httpApi"`        // HTTP API 配置
 	PreProxyNodeID string            `json:"preProxyNodeId"` // 全局前置代理节点 ID（空表示未启用）
 	Update         UpdateConfig      `json:"update"`         // 检测更新 / 自动更新
 }
@@ -282,6 +287,7 @@ type ExportData struct {
 	Subscriptions []Subscription    `json:"subscriptions"` // 订阅列表
 	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
+	SessionRelays []SessionRelay    `json:"sessionRelays"` // 动态会话代理列表
 }
 
 // ImportResult 导入结果
@@ -293,6 +299,7 @@ type ImportResult struct {
 	SubsImported   int      `json:"subsImported"`
 	ChainImported  int      `json:"chainImported"`
 	LBImported     int      `json:"lbImported"`
+	RelayImported  int      `json:"relayImported"`
 	Errors         []string `json:"errors"`   // 错误信息列表
 	Warnings       []string `json:"warnings"` // 警告信息列表
 }
@@ -389,6 +396,92 @@ func (lb *LoadBalanceNode) ResetRuntimeState() {
 	lb.Traffic = TrafficStats{}
 	lb.LastStartTime = ""
 	lb.LastStopTime = ""
+}
+
+// FollowGlobalPreProxy 是 SessionRelay.PreProxyNodeID 的哨兵值，表示
+// "跟随全局前置代理"。存哨兵而不是存具体节点 ID，这样用户改动全局设置后
+// 会话代理会自动跟着变，不会留下一个已经过期的引用。
+const FollowGlobalPreProxy = "__global__"
+
+// SessionRelay 动态会话代理：单端口按客户端用户名动态切换住宅代理出口 IP。
+//
+// 住宅代理服务商把会话标识编码在用户名里（如 login__cr.au;sessid.123），
+// 传统做法要为每个会话开一个端口。此类型只占一个端口，客户端换用户名
+// 即换出口 IP，无需重启进程。上游连接可经前置节点加速。
+// 监听端口为混合端口，HTTP 与 SOCKS5 客户端都可接入。
+type SessionRelay struct {
+	ID        string `json:"id"`        // 唯一标识
+	Alias     string `json:"alias"`     // 别名
+	LocalPort int    `json:"localPort"` // 本地监听端口（混合端口，同时支持 HTTP/SOCKS5 客户端）
+
+	UpstreamAddr     string `json:"upstreamAddr"`     // 上游住宅网关，如 gw.dataimpulse.com:823
+	UsernameTemplate string `json:"usernameTemplate"` // 上游用户名模板，含 {session} 占位符；为空表示透传客户端用户名
+	UpstreamPassword string `json:"upstreamPassword"` // 上游固定密码
+	LocalPassword    string `json:"localPassword"`    // 客户端需提供的密码（为空则不校验）
+
+	// 前置加速节点 ID（普通节点/链式/故障转移）。
+	// 空表示直连上游；FollowGlobalPreProxy 表示跟随全局前置代理设置。
+	PreProxyNodeID string `json:"preProxyNodeId,omitempty"`
+
+	Enabled   bool   `json:"enabled"`   // 启动状态
+	LastError string `json:"lastError"` // 最近一次启动失败原因（成功后清空）
+	GroupID   string `json:"groupId"`   // 所属分组ID
+	GroupName string `json:"groupName"` // 所属分组名称
+
+	// 运行时统计（不持久化速度，仅回显）
+	ActiveConns  int64 `json:"activeConns"`  // 当前活跃连接数
+	TotalConns   int64 `json:"totalConns"`   // 累计连接数
+	SessionCount int   `json:"sessionCount"` // 出现过的不同会话数
+
+	// 流量统计
+	Traffic       TrafficStats `json:"traffic"`
+	LastStartTime string       `json:"lastStartTime"`
+	LastStopTime  string       `json:"lastStopTime"`
+}
+
+// SessionRelayStats 会话代理运行时统计快照（通过事件推送给前端，不持久化）。
+type SessionRelayStats struct {
+	RelayID      string  `json:"relayId"`
+	ActiveConns  int64   `json:"activeConns"`  // 当前活跃连接数
+	TotalConns   int64   `json:"totalConns"`   // 累计连接数
+	FailedConns  int64   `json:"failedConns"`  // 建立上游失败的连接数
+	SessionCount int     `json:"sessionCount"` // 出现过的不同会话标识数
+	BytesUp      int64   `json:"bytesUp"`
+	BytesDown    int64   `json:"bytesDown"`
+	UpSpeed      float64 `json:"upSpeed"`   // 字节/秒
+	DownSpeed    float64 `json:"downSpeed"` // 字节/秒
+}
+
+// Validate 校验动态会话代理配置。
+func (s *SessionRelay) Validate() error {
+	if s.UpstreamAddr == "" {
+		return fmt.Errorf("上游网关地址不能为空")
+	}
+	if _, _, err := net.SplitHostPort(s.UpstreamAddr); err != nil {
+		return fmt.Errorf("上游网关地址需为 host:port 格式，例如 gw.dataimpulse.com:823")
+	}
+	if s.UsernameTemplate != "" && !strings.Contains(s.UsernameTemplate, "{session}") {
+		return fmt.Errorf("用户名模板必须包含 {session} 占位符")
+	}
+	if s.LocalPort < 0 || s.LocalPort > 65535 {
+		return fmt.Errorf("本地端口无效: %d", s.LocalPort)
+	}
+	if s.Alias == "" {
+		s.Alias = fmt.Sprintf("会话代理-%s", s.UpstreamAddr)
+	}
+	return nil
+}
+
+// ResetRuntimeState 清除运行时状态，用于导出和导入。
+func (s *SessionRelay) ResetRuntimeState() {
+	s.Enabled = false
+	s.LastError = ""
+	s.ActiveConns = 0
+	s.TotalConns = 0
+	s.SessionCount = 0
+	s.Traffic = TrafficStats{}
+	s.LastStartTime = ""
+	s.LastStopTime = ""
 }
 
 // ChainProxy 链式代理配置

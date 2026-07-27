@@ -12,13 +12,14 @@ import (
 )
 
 type fakeHTTPAPIService struct {
-	rules       []models.ProxyRule
-	groups      []models.Group
-	subs        []models.Subscription
-	lbs         []models.LoadBalanceNode
-	chains      []models.ChainProxy
-	startedID   string
-	preProxyID  string
+	rules      []models.ProxyRule
+	groups     []models.Group
+	subs       []models.Subscription
+	lbs        []models.LoadBalanceNode
+	chains     []models.ChainProxy
+	relays     []models.SessionRelay
+	startedID  string
+	preProxyID string
 }
 
 func (f *fakeHTTPAPIService) GetRules() []models.ProxyRule { return f.rules }
@@ -79,9 +80,26 @@ func (f *fakeHTTPAPIService) UpdateChainProxy(item models.ChainProxy) error {
 	}
 	return nil
 }
-func (f *fakeHTTPAPIService) DeleteChainProxy(string) error { return nil }
-func (f *fakeHTTPAPIService) StartChainProxy(string) error  { return nil }
-func (f *fakeHTTPAPIService) StopChainProxy(string) error   { return nil }
+func (f *fakeHTTPAPIService) DeleteChainProxy(string) error           { return nil }
+func (f *fakeHTTPAPIService) StartChainProxy(string) error            { return nil }
+func (f *fakeHTTPAPIService) StopChainProxy(string) error             { return nil }
+func (f *fakeHTTPAPIService) GetSessionRelays() []models.SessionRelay { return f.relays }
+func (f *fakeHTTPAPIService) AddSessionRelay(item models.SessionRelay) error {
+	item.ID = "relay_new"
+	f.relays = append(f.relays, item)
+	return nil
+}
+func (f *fakeHTTPAPIService) UpdateSessionRelay(item models.SessionRelay) error {
+	for i := range f.relays {
+		if f.relays[i].ID == item.ID {
+			f.relays[i] = item
+		}
+	}
+	return nil
+}
+func (f *fakeHTTPAPIService) DeleteSessionRelay(string) error { return nil }
+func (f *fakeHTTPAPIService) StartSessionRelay(string) error  { return nil }
+func (f *fakeHTTPAPIService) StopSessionRelay(string) error   { return nil }
 func (f *fakeHTTPAPIService) GetPreProxy() models.PreProxyConfig {
 	cfg := models.PreProxyConfig{NodeID: f.preProxyID}
 	for _, r := range f.rules {
@@ -160,6 +178,8 @@ func TestOpenAPISpecDocumentsAllBusinessRoutes(t *testing.T) {
 		"/chain-proxies", "/chain-proxies/{id}", "/chain-proxies/{id}/start",
 		"/chain-proxies/{id}/stop", "/chain-proxies/{id}/local-proxy",
 		"/chain-proxies/local-proxies", "/chain-proxies/local-proxies/enabled",
+		"/session-relays", "/session-relays/{id}", "/session-relays/{id}/start",
+		"/session-relays/{id}/stop",
 	}
 	for _, path := range wantPaths {
 		if _, exists := document.Paths[path]; !exists {
@@ -392,7 +412,6 @@ func TestHTTPAPIRouteContract(t *testing.T) {
 		})
 	}
 }
-
 
 func TestHTTPAPIPreProxy(t *testing.T) {
 	svc := &fakeHTTPAPIService{

@@ -184,10 +184,16 @@
             <div v-if="preProxyStale" class="settings-hint" style="color: var(--danger, #e74c3c);">
               当前配置的前置节点已不存在，请重新选择或清除。
             </div>
-            <div class="settings-hint">
-              客户端内启动的普通节点、故障转移、链式代理将先经该节点出站，再连接目标节点，可用于中转加速。
-              前置节点自身启动时不会再次套娃。修改后需重新启动已运行节点才生效。
-            </div>
+            <ul class="settings-hint hint-list">
+              <li>普通节点、故障转移、链式代理将先经该节点出站再连目标，可用于中转加速。</li>
+              <li>前置节点自身启动时不会再次套娃。</li>
+              <li>修改后需重新启动已运行的节点才生效。</li>
+            </ul>
+            <ul class="settings-hint hint-list">
+              <li><strong>动态会话代理需显式跟随</strong>：它不走内核配置，此处设置不会自动应用。</li>
+              <li>在会话代理的「前置加速」里选「跟随全局前置代理」即可随本设置联动。</li>
+              <li>选了别的节点则各走各的（该节点若也经全局前置出站，链路会多一跳）。</li>
+            </ul>
           </div>
 
           <!-- 检查更新 -->
@@ -759,6 +765,15 @@ function handleEnableSysProxy() {
   font-size: 12px;
   color: var(--text-secondary);
 }
+/* 要点列表：覆盖上面的 flex，让每条独占一行而不是横向排开 */
+.settings-hint.hint-list {
+  display: block;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  line-height: 1.7;
+}
+.settings-hint.hint-list li { margin-bottom: 2px; }
+.settings-hint.hint-list li:last-child { margin-bottom: 0; }
 .btn-link {
   border: none;
   background: none;

@@ -60,6 +60,7 @@
           <td class="col-alias" :title="rule.alias">
             <span v-if="rule._nodeType === 'lb'" class="type-badge badge-lb" title="故障转移">转</span>
             <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain" title="链式代理">链</span>
+            <span v-if="rule._nodeType === 'relay'" class="type-badge badge-relay" title="动态会话代理">会</span>
             {{ rule.alias || '-' }}
           </td>
           <td class="col-protocol">
@@ -69,6 +70,7 @@
           <td class="col-server" :title="rule.serverAddr">
             <template v-if="rule._nodeType === 'rule'">{{ rule.serverAddr || '-' }}</template>
             <template v-else-if="rule._nodeType === 'lb'">{{ (rule.nodeIds || []).length }} 个子节点</template>
+            <template v-else-if="rule._nodeType === 'relay'">{{ rule.upstreamAddr || '-' }}</template>
             <template v-else>{{ (rule.chainNodes || []).length }} 节点链</template>
           </td>
           <td class="col-sport">
@@ -102,8 +104,9 @@
           <td class="col-traffic-total" :title="trafficTitle(rule)">
             <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
           </td>
-          <td class="col-ip" :title="rule.lastError || rule.realIp">
+          <td class="col-ip" :title="rule.lastError || relayTitle(rule) || rule.realIp">
             <span v-if="rule.lastError" class="ip-error">{{ rule.lastError }}</span>
+            <span v-else-if="rule._nodeType === 'relay'">{{ relaySummary(rule) }}</span>
             <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
           <td class="col-status">
@@ -124,8 +127,12 @@
             <button v-if="rule._nodeType === 'rule'" class="btn-action-sm" @click="$emit('editRule', rule)">编辑</button>
             <button v-if="rule._nodeType === 'lb'" class="btn-action-sm" @click="$emit('editLB', rule)">编辑</button>
             <button v-if="rule._nodeType === 'chain'" class="btn-action-sm" @click="$emit('editChain', rule)">编辑</button>
-            <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
-            <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
+            <button v-if="rule._nodeType === 'relay'" class="btn-action-sm" @click="$emit('editRelay', rule)">编辑</button>
+            <!-- 会话代理的出口 IP 由客户端用户名决定，统一测速/检测没有意义 -->
+            <template v-if="rule._nodeType !== 'relay'">
+              <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
+              <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
+            </template>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -145,7 +152,7 @@ import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
-const emit = defineEmits(['editRule', 'editLB', 'editChain'])
+const emit = defineEmits(['editRule', 'editLB', 'editChain', 'editRelay'])
 
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
@@ -225,6 +232,7 @@ function onRowClick(id, event) {
 function rowClass(rule) {
   if (rule._nodeType === 'lb' && rule.enabled) return 'row-lb-running'
   if (rule._nodeType === 'chain' && rule.enabled) return 'row-chain-running'
+  if (rule._nodeType === 'relay' && rule.enabled) return 'row-relay-running'
   return {
     'row-running': rule.enabled && rule._nodeType === 'rule',
     'row-testing': rule.testStatus === 'testing',
@@ -238,7 +246,7 @@ function latencyClass(latency) {
 }
 
 // 协议显示名映射：组合节点显示中文，其余协议原样显示
-const protocolLabels = { loadbalance: '故障转移', chain: '链式代理' }
+const protocolLabels = { loadbalance: '故障转移', chain: '链式代理', relay: '会话代理' }
 function protocolLabel(protocol) {
   return protocolLabels[protocol] || protocol
 }
@@ -267,6 +275,23 @@ function healthTitle(rule) {
   if (rule.healthLatency > 0) parts.push(`延迟: ${rule.healthLatency}ms`)
   if (rule.lastHealthCheck) parts.push(`检测时间: ${rule.lastHealthCheck}`)
   return parts.join('\n') || '尚未检测'
+}
+
+// ===== 动态会话代理展示 =====
+// 出口 IP 由客户端用户名决定，没有单一"真实 IP"，改为展示会话/连接数
+function relaySummary(rule) {
+  if (!rule.enabled) return '-'
+  return `${rule.sessionCount || 0} 会话 / ${rule.activeConns || 0} 连接`
+}
+
+function relayTitle(rule) {
+  if (rule._nodeType !== 'relay') return ''
+  return [
+    `上游网关: ${rule.upstreamAddr || '-'}`,
+    `用户名模板: ${rule.usernameTemplate || '（原样透传）'}`,
+    rule.preProxyNodeId ? '经前置节点加速' : '直连上游',
+    `累计连接: ${rule.totalConns || 0}`,
+  ].join('\n')
 }
 
 // ===== 流量展示 =====
@@ -342,6 +367,8 @@ async function handleStart(rule) {
       await api.startLoadBalancer(rule.id)
     } else if (rule._nodeType === 'chain') {
       await api.startChainProxy(rule.id)
+    } else if (rule._nodeType === 'relay') {
+      await api.startSessionRelay(rule.id)
     } else {
       await rulesStore.startRule(rule.id)
     }
@@ -359,6 +386,8 @@ async function handleStop(rule) {
       await api.stopLoadBalancer(rule.id)
     } else if (rule._nodeType === 'chain') {
       await api.stopChainProxy(rule.id)
+    } else if (rule._nodeType === 'relay') {
+      await api.stopSessionRelay(rule.id)
     } else {
       await rulesStore.stopRule(rule.id)
     }
@@ -388,14 +417,18 @@ async function handleTest(rule) {
   }
 }
 
+const typeLabels = { lb: '故障转移', chain: '链式代理', relay: '动态会话代理' }
+
 async function handleDelete(rule) {
-  const typeLabel = rule._nodeType === 'lb' ? '故障转移' : (rule._nodeType === 'chain' ? '链式代理' : '规则')
+  const typeLabel = typeLabels[rule._nodeType] || '规则'
   if (!confirm(`确定要删除${typeLabel}「${rule.alias}」吗?`)) return
   try {
     if (rule._nodeType === 'lb') {
       await api.deleteLoadBalancer(rule.id)
     } else if (rule._nodeType === 'chain') {
       await api.deleteChainProxy(rule.id)
+    } else if (rule._nodeType === 'relay') {
+      await api.deleteSessionRelay(rule.id)
     } else {
       await api.deleteRule(rule.id)
     }
@@ -472,6 +505,7 @@ async function handleDelete(rule) {
 .row-running { background: rgba(39, 174, 96, 0.05) !important; }
 .row-lb-running { background: rgba(155, 89, 182, 0.08) !important; }
 .row-chain-running { background: rgba(52, 152, 219, 0.08) !important; }
+.row-relay-running { background: rgba(230, 126, 34, 0.08) !important; }
 .row-testing { background: rgba(243, 156, 18, 0.05) !important; }
 
 /* 选中行高亮（优先级高于运行状态底色） */
@@ -540,6 +574,7 @@ async function handleDelete(rule) {
 .protocol-socks { background: #f0f0f0; color: #555; }
 .protocol-loadbalance { background: #f3e8fd; color: #9b59b6; }
 .protocol-chain { background: #e8f4fd; color: #2980b9; }
+.protocol-relay { background: #fdf0e3; color: #e67e22; }
 .protocol-hysteria2 { background: #e8fdf0; color: #16a085; }
 .protocol-tuic { background: #fdf3e8; color: #d35400; }
 
@@ -554,6 +589,7 @@ async function handleDelete(rule) {
 }
 .badge-lb { background: #9b59b6; }
 .badge-chain { background: #2980b9; }
+.badge-relay { background: #e67e22; }
 
 .status-dot {
   display: inline-block;

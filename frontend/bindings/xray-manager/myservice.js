@@ -46,6 +46,15 @@ export function AddRule(rule) {
 }
 
 /**
+ * AddSessionRelay 添加动态会话代理。
+ * @param {models$0.SessionRelay} sr
+ * @returns {$CancellablePromise<void>}
+ */
+export function AddSessionRelay(sr) {
+    return $Call.ByID(4188407099, sr);
+}
+
+/**
  * AddSubscription 添加订阅
  * updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
  * @param {string} name
@@ -159,6 +168,15 @@ export function DeleteLoadBalancer(id) {
  */
 export function DeleteRule(id) {
     return $Call.ByID(968490574, id);
+}
+
+/**
+ * DeleteSessionRelay 删除动态会话代理。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteSessionRelay(id) {
+    return $Call.ByID(3912000109, id);
 }
 
 /**
@@ -363,6 +381,16 @@ export function GetRules() {
 }
 
 /**
+ * GetSessionRelays 获取所有动态会话代理（附带实时统计）。
+ * @returns {$CancellablePromise<models$0.SessionRelay[]>}
+ */
+export function GetSessionRelays() {
+    return $Call.ByID(442224189).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType18($result);
+    }));
+}
+
+/**
  * GetSpeedTestConfig 获取测速配置。为空的字段用默认值填充，便于前端展示当前生效值。
  * @returns {$CancellablePromise<models$0.SpeedTestConfig>}
  */
@@ -378,7 +406,7 @@ export function GetSpeedTestConfig() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType20($result);
     }));
 }
 
@@ -396,7 +424,7 @@ export function GetSystemProxyStatus() {
  */
 export function GetUpdateConfig() {
     return $Call.ByID(1766264858).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType21($result);
     }));
 }
 
@@ -406,7 +434,7 @@ export function GetUpdateConfig() {
  */
 export function ImportConfig() {
     return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType23($result);
     }));
 }
 
@@ -421,7 +449,7 @@ export function ImportConfig() {
  */
 export function ImportShareLinks(text, groupID, newGroupName) {
     return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType25($result);
     }));
 }
 
@@ -596,6 +624,15 @@ export function StartRule(id) {
 }
 
 /**
+ * StartSessionRelay 启动动态会话代理。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartSessionRelay(id) {
+    return $Call.ByID(444352072, id);
+}
+
+/**
  * StopAllRulesInGroup 停止分组中的所有节点（普通节点 + 故障转移 + 链式代理）
  * @param {string} groupID
  * @returns {$CancellablePromise<void>}
@@ -638,6 +675,15 @@ export function StopNodes(ids) {
  */
 export function StopRule(id) {
     return $Call.ByID(1057526277, id);
+}
+
+/**
+ * StopSessionRelay 停止动态会话代理。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopSessionRelay(id) {
+    return $Call.ByID(2800771426, id);
 }
 
 /**
@@ -734,6 +780,15 @@ export function UpdateRule(id, updatedRule) {
 }
 
 /**
+ * UpdateSessionRelay 更新动态会话代理。运行中的实例会被停止，需重新启动生效。
+ * @param {models$0.SessionRelay} sr
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateSessionRelay(sr) {
+    return $Call.ByID(704777999, sr);
+}
+
+/**
  * UpdateSubscriptionByID 更新指定订阅
  * @param {string} subID
  * @returns {$CancellablePromise<void>}
@@ -760,10 +815,12 @@ const $$createType13 = $Create.Array($$createType12);
 const $$createType14 = models$0.PreProxyConfig.createFrom;
 const $$createType15 = models$0.ProxyRule.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = models$0.Subscription.createFrom;
+const $$createType17 = models$0.SessionRelay.createFrom;
 const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = models$0.UpdateConfig.createFrom;
-const $$createType20 = models$0.ImportResult.createFrom;
-const $$createType21 = $Create.Nullable($$createType20);
-const $$createType22 = models$0.ImportShareResult.createFrom;
+const $$createType19 = models$0.Subscription.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = models$0.UpdateConfig.createFrom;
+const $$createType22 = models$0.ImportResult.createFrom;
 const $$createType23 = $Create.Nullable($$createType22);
+const $$createType24 = models$0.ImportShareResult.createFrom;
+const $$createType25 = $Create.Nullable($$createType24);

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -76,6 +75,12 @@ type httpAPIService interface {
 	DeleteChainProxy(string) error
 	StartChainProxy(string) error
 	StopChainProxy(string) error
+	GetSessionRelays() []models.SessionRelay
+	AddSessionRelay(models.SessionRelay) error
+	UpdateSessionRelay(models.SessionRelay) error
+	DeleteSessionRelay(string) error
+	StartSessionRelay(string) error
+	StopSessionRelay(string) error
 	GetPreProxy() models.PreProxyConfig
 	SetPreProxy(string) error
 }
@@ -112,11 +117,18 @@ type localProxy struct {
 	Source    string `json:"source"`
 }
 
-func (a *MyService) startHTTPAPI() error {
+// startHTTPAPI 在应用启动时拉起 HTTP API。
+//
+// HTTP API 是可选功能，端口被占用（常见于同时运行多个客户端实例）或配置
+// 有误都不该拖垮主程序——记录日志后继续启动，用户仍可在设置中改端口重试。
+func (a *MyService) startHTTPAPI() {
 	a.mu.RLock()
 	cfg := a.config.HTTPAPI
 	a.mu.RUnlock()
-	return a.startHTTPAPIWithConfig(cfg)
+
+	if err := a.startHTTPAPIWithConfig(cfg); err != nil {
+		a.logError("HTTP API 未能启动，其余功能不受影响（可在设置中更换端口后重试）", err)
+	}
 }
 
 func (a *MyService) startHTTPAPIWithConfig(cfg models.HTTPAPIConfig) error {
@@ -131,17 +143,20 @@ func (a *MyService) startHTTPAPIWithConfig(cfg models.HTTPAPIConfig) error {
 	if err != nil {
 		return fmt.Errorf("启动 HTTP API 失败 (%s): %w", addr, err)
 	}
-	a.httpServer = &http.Server{
+	server := &http.Server{
 		Handler:           newHTTPAPIHandler(a, httpAPIToken(cfg)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	a.httpServer = server
 	a.log(fmt.Sprintf("HTTP API 已监听 http://%s/api/v1", addr))
+	// 捕获 server 到局部变量：重启 API 时 a.httpServer 会被替换，
+	// goroutine 必须持有自己那个实例，否则会 Serve 到新 server 上
 	go func() {
-		if serveErr := a.httpServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			log.Printf("HTTP API 服务异常: %v", serveErr)
+		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			a.logError("HTTP API 服务异常退出", serveErr)
 		}
 	}()
 	return nil
@@ -269,6 +284,13 @@ func newHTTPAPIHandler(service httpAPIService, token string) http.Handler {
 	apiMux.HandleFunc("POST /api/v1/chain-proxies/{id}/start", api.startChainProxy)
 	apiMux.HandleFunc("POST /api/v1/chain-proxies/{id}/stop", api.stopChainProxy)
 	apiMux.HandleFunc("GET /api/v1/chain-proxies/{id}/local-proxy", api.getChainProxyLocalProxy)
+	apiMux.HandleFunc("GET /api/v1/session-relays", api.listSessionRelays)
+	apiMux.HandleFunc("POST /api/v1/session-relays", api.createSessionRelay)
+	apiMux.HandleFunc("GET /api/v1/session-relays/{id}", api.getSessionRelay)
+	apiMux.HandleFunc("PUT /api/v1/session-relays/{id}", api.updateSessionRelay)
+	apiMux.HandleFunc("DELETE /api/v1/session-relays/{id}", api.deleteSessionRelay)
+	apiMux.HandleFunc("POST /api/v1/session-relays/{id}/start", api.startSessionRelay)
+	apiMux.HandleFunc("POST /api/v1/session-relays/{id}/stop", api.stopSessionRelay)
 	apiMux.HandleFunc("GET /api/v1/groups", api.listGroups)
 	apiMux.HandleFunc("POST /api/v1/groups", api.createGroup)
 	apiMux.HandleFunc("GET /api/v1/groups/{id}", api.getGroup)
@@ -333,6 +355,9 @@ func (a *httpAPI) listLoadBalancers(w http.ResponseWriter, _ *http.Request) {
 }
 func (a *httpAPI) listChainProxies(w http.ResponseWriter, _ *http.Request) {
 	writeAPI(w, http.StatusOK, a.service.GetChainProxies(), "")
+}
+func (a *httpAPI) listSessionRelays(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, a.service.GetSessionRelays(), "")
 }
 
 func (a *httpAPI) listLocalProxies(w http.ResponseWriter, _ *http.Request) {
@@ -497,6 +522,16 @@ func (a *httpAPI) getChainProxy(w http.ResponseWriter, r *http.Request) {
 	writeAPI(w, http.StatusNotFound, nil, "链式代理不存在")
 }
 
+func (a *httpAPI) getSessionRelay(w http.ResponseWriter, r *http.Request) {
+	for _, item := range a.service.GetSessionRelays() {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "动态会话代理不存在")
+}
+
 func (a *httpAPI) getLoadBalancerLocalProxy(w http.ResponseWriter, r *http.Request) {
 	for _, item := range buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), "", false) {
 		if item.ID == r.PathValue("id") {
@@ -600,6 +635,40 @@ func (a *httpAPI) updateChainProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	a.getChainProxy(w, r)
 }
+func (a *httpAPI) createSessionRelay(w http.ResponseWriter, r *http.Request) {
+	before := sessionRelayIDs(a.service.GetSessionRelays())
+	var item models.SessionRelay
+	if !decodeAPI(w, r, &item) {
+		return
+	}
+	if err := item.Validate(); err != nil {
+		writeAPI(w, http.StatusBadRequest, nil, err.Error())
+		return
+	}
+	if err := a.service.AddSessionRelay(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeAPI(w, http.StatusCreated, findNewSessionRelay(a.service.GetSessionRelays(), before), "")
+}
+
+func (a *httpAPI) updateSessionRelay(w http.ResponseWriter, r *http.Request) {
+	var item models.SessionRelay
+	if !decodeAPI(w, r, &item) {
+		return
+	}
+	item.ID = r.PathValue("id")
+	if err := item.Validate(); err != nil {
+		writeAPI(w, http.StatusBadRequest, nil, err.Error())
+		return
+	}
+	if err := a.service.UpdateSessionRelay(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	a.getSessionRelay(w, r)
+}
+
 func (a *httpAPI) createGroup(w http.ResponseWriter, r *http.Request) {
 	before := groupIDs(a.service.GetGroups())
 	var request struct {
@@ -702,6 +771,16 @@ func (a *httpAPI) startChainProxy(w http.ResponseWriter, r *http.Request) {
 }
 func (a *httpAPI) stopChainProxy(w http.ResponseWriter, r *http.Request) {
 	a.run(w, func() error { return a.service.StopChainProxy(r.PathValue("id")) })
+}
+
+func (a *httpAPI) deleteSessionRelay(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.DeleteSessionRelay(r.PathValue("id")) })
+}
+func (a *httpAPI) startSessionRelay(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StartSessionRelay(r.PathValue("id")) })
+}
+func (a *httpAPI) stopSessionRelay(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StopSessionRelay(r.PathValue("id")) })
 }
 
 func (a *httpAPI) startNodes(w http.ResponseWriter, r *http.Request) {
@@ -852,6 +931,13 @@ func chainProxyIDs(items []models.ChainProxy) map[string]bool {
 	}
 	return result
 }
+func sessionRelayIDs(items []models.SessionRelay) map[string]bool {
+	result := make(map[string]bool, len(items))
+	for _, item := range items {
+		result[item.ID] = true
+	}
+	return result
+}
 func findNewNode(items []models.ProxyRule, before map[string]bool) any {
 	for _, item := range items {
 		if !before[item.ID] {
@@ -885,6 +971,14 @@ func findNewLoadBalancer(items []models.LoadBalanceNode, before map[string]bool)
 	return map[string]string{"status": "created"}
 }
 func findNewChainProxy(items []models.ChainProxy, before map[string]bool) any {
+	for _, item := range items {
+		if !before[item.ID] {
+			return item
+		}
+	}
+	return map[string]string{"status": "created"}
+}
+func findNewSessionRelay(items []models.SessionRelay, before map[string]bool) any {
 	for _, item := range items {
 		if !before[item.ID] {
 			return item

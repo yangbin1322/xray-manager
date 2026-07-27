@@ -240,6 +240,14 @@
           <input v-model="form.settings.httpPassword" type="text" placeholder="密码" />
         </div>
       </div>
+      <div v-if="looksLikeSessionCredential(form.settings.httpUsername)" class="session-hint">
+        <div>检测到用户名里带有会话标识。</div>
+        <div>
+          普通节点的用户名写死在内核配置里，<strong>客户端传什么用户名都会被忽略</strong>，
+          所有请求共用同一个出口 IP。
+        </div>
+        <div>若想按用户名动态切换出口 IP，请改用侧边栏的「添加会话代理」。</div>
+      </div>
     </div>
 
     <!-- SOCKS 代理配置 -->
@@ -261,6 +269,14 @@
           <label>密码（可选）：</label>
           <input v-model="form.settings.socksPassword" type="text" placeholder="密码" />
         </div>
+      </div>
+      <div v-if="looksLikeSessionCredential(form.settings.socksUsername)" class="session-hint">
+        <div>检测到用户名里带有会话标识。</div>
+        <div>
+          普通节点的用户名写死在内核配置里，<strong>客户端传什么用户名都会被忽略</strong>，
+          所有请求共用同一个出口 IP。
+        </div>
+        <div>若想按用户名动态切换出口 IP，请改用侧边栏的「添加会话代理」。</div>
       </div>
     </div>
 
@@ -339,6 +355,14 @@ const form = defineModel({ type: Object, required: true })
 
 const groupsStore = useGroupsStore()
 const appStore = useAppStore()
+
+// 住宅代理常把会话标识编码在用户名里（DataImpulse 的 sessid、其他家的
+// session/sess-）。普通节点的用户名写死在内核配置中，这类凭证放在这里
+// 只会得到单一出口 IP，需要引导用户改用会话代理。
+const sessionCredentialPattern = /(sessid|session|sess-)/i
+function looksLikeSessionCredential(username) {
+  return sessionCredentialPattern.test(username || '')
+}
 
 // 传输层计算属性
 const tlsServerName = computed({
@@ -498,6 +522,17 @@ export function normalizeTransport(f) {
 }
 .port-row { display: flex; gap: 6px; }
 .port-row input { flex: 1; }
+.session-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #e67e22;
+  border-radius: 3px;
+  background: rgba(230, 126, 34, 0.08);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+.session-hint div + div { margin-top: 2px; }
 .btn-small {
   padding: 7px 12px; border: 1px solid var(--border-color); border-radius: 4px;
   background: var(--bg-secondary); color: var(--text-primary);

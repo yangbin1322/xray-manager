@@ -14,6 +14,7 @@ tags:
   - name: Subscriptions
   - name: Load Balancers
   - name: Chain Proxies
+  - name: Session Relays
 paths:
   /health:
     get:
@@ -230,6 +231,46 @@ paths:
       tags: [Chain Proxies]
       summary: 获取已启动的链式本地代理
       responses: { '200': { $ref: '#/components/responses/LocalProxyList' } }
+  /session-relays:
+    get:
+      tags: [Session Relays]
+      summary: 获取全部动态会话代理
+      responses:
+        '200': { description: 动态会话代理列表, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayListResponse' } } } }
+    post:
+      tags: [Session Relays]
+      summary: 创建动态会话代理
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /session-relays/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Session Relays]
+      summary: 获取动态会话代理
+      responses: { '200': { description: 动态会话代理, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [Session Relays]
+      summary: 修改动态会话代理
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayInput' } } } }
+      responses: { '200': { description: 修改成功, content: { application/json: { schema: { $ref: '#/components/schemas/SessionRelayResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      tags: [Session Relays]
+      summary: 删除动态会话代理
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /session-relays/{id}/start:
+    post:
+      tags: [Session Relays]
+      summary: 启动动态会话代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /session-relays/{id}/stop:
+    post:
+      tags: [Session Relays]
+      summary: 停止动态会话代理
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
   /groups:
     get:
       tags: [Groups]
@@ -562,6 +603,42 @@ components:
         - $ref: '#/components/schemas/Response'
         - type: object
           properties: { data: { type: array, items: { $ref: '#/components/schemas/ChainProxy' } } }
+    SessionRelayInput:
+      type: object
+      required: [alias, upstreamAddr]
+      properties:
+        alias: { type: string }
+        localPort: { type: integer, minimum: 0, maximum: 65535, description: 混合端口，HTTP 与 SOCKS5 客户端均可接入；0 表示自动分配 }
+        upstreamAddr: { type: string, example: 'gw.dataimpulse.com:823', description: 上游住宅代理网关 host:port }
+        usernameTemplate: { type: string, example: 'login__cr.au;sessid.{session}', description: '上游用户名模板，{session} 会被替换为客户端传入的用户名；留空表示原样透传' }
+        upstreamPassword: { type: string, format: password }
+        localPassword: { type: string, format: password, description: 客户端需提供的代理密码，留空表示不校验 }
+        preProxyNodeId: { type: string, description: '前置加速节点/链式/故障转移 ID；留空表示直连上游，特殊值 __global__ 表示跟随全局前置代理设置' }
+        groupId: { type: string }
+    SessionRelay:
+      allOf:
+        - $ref: '#/components/schemas/SessionRelayInput'
+        - type: object
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+            lastError: { type: string }
+            groupName: { type: string }
+            activeConns: { type: integer }
+            totalConns: { type: integer }
+            sessionCount: { type: integer }
+            lastStartTime: { type: string }
+            lastStopTime: { type: string }
+    SessionRelayResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/SessionRelay' } }
+    SessionRelayListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/SessionRelay' } } }
     ProxySettings:
       type: object
       additionalProperties: false

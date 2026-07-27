@@ -16,6 +16,7 @@ export {
     PreProxyConfig,
     ProxyRule,
     ProxySettings,
+    SessionRelay,
     SpeedTestConfig,
     Subscription,
     TLSSettings,
