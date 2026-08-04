@@ -65,19 +65,20 @@ type OutboundConfig struct {
 
 // ProxySettingsConfig 代理链配置（指定下一跳）
 type ProxySettingsConfig struct {
-	Tag                string `json:"tag"`
-	TransportLayer     bool   `json:"transportLayer"`
+	Tag            string `json:"tag"`
+	TransportLayer bool   `json:"transportLayer"`
 }
 
 // StreamSettings 传输层配置
 type StreamSettings struct {
-	Network      string                 `json:"network,omitempty"`
-	Security     string                 `json:"security,omitempty"`
-	TLSSettings  *TLSConfig             `json:"tlsSettings,omitempty"`
-	WSSettings   *WebSocketConfig       `json:"wsSettings,omitempty"`
-	GRPCSettings *GRPCConfig            `json:"grpcSettings,omitempty"`
-	HTTPSettings *HTTPConfig            `json:"httpSettings,omitempty"`
-	TCPSettings  map[string]interface{} `json:"tcpSettings,omitempty"`
+	Network         string                 `json:"network,omitempty"`
+	Security        string                 `json:"security,omitempty"`
+	TLSSettings     *TLSConfig             `json:"tlsSettings,omitempty"`
+	RealitySettings *RealityConfig         `json:"realitySettings,omitempty"`
+	WSSettings      *WebSocketConfig       `json:"wsSettings,omitempty"`
+	GRPCSettings    *GRPCConfig            `json:"grpcSettings,omitempty"`
+	HTTPSettings    *HTTPConfig            `json:"httpSettings,omitempty"`
+	TCPSettings     map[string]interface{} `json:"tcpSettings,omitempty"`
 }
 
 // TLSConfig TLS配置
@@ -85,7 +86,19 @@ type TLSConfig struct {
 	ServerName        string   `json:"serverName,omitempty"`
 	AllowInsecure     bool     `json:"allowInsecure,omitempty"`
 	ALPN              []string `json:"alpn,omitempty"`
+	Fingerprint       string   `json:"fingerprint,omitempty"`
 	DisableSystemRoot bool     `json:"disableSystemRoot,omitempty"`
+}
+
+// RealityConfig REALITY 配置（客户端侧）。
+// 新版 Xray 用 password 作为 publicKey 的别名，两个字段都写以兼容新旧内核。
+type RealityConfig struct {
+	ServerName  string `json:"serverName,omitempty"`
+	PublicKey   string `json:"publicKey,omitempty"`
+	Password    string `json:"password,omitempty"`
+	ShortID     string `json:"shortId,omitempty"`
+	SpiderX     string `json:"spiderX,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // WebSocketConfig WebSocket配置
@@ -186,22 +199,7 @@ func buildOutbounds(rule *models.ProxyRule) []OutboundConfig {
 	}
 
 	// 根据协议类型构建配置
-	switch rule.Protocol {
-	case "shadowsocks":
-		mainOutbound.Settings = buildShadowsocksSettings(rule)
-	case "vmess":
-		mainOutbound.Settings = buildVMessSettings(rule)
-	case "vless":
-		mainOutbound.Settings = buildVLessSettings(rule)
-	case "trojan":
-		mainOutbound.Settings = buildTrojanSettings(rule)
-	case "http":
-		mainOutbound.Settings = buildHTTPSettings(rule)
-	case "socks":
-		mainOutbound.Settings = buildSOCKSSettings(rule)
-	default:
-		mainOutbound.Settings = map[string]interface{}{}
-	}
+	mainOutbound.Settings = buildProtocolSettings(rule)
 
 	// 构建传输层配置
 	mainOutbound.StreamSettings = buildStreamSettings(rule)
@@ -335,7 +333,35 @@ func buildStreamSettings(rule *models.ProxyRule) *StreamSettings {
 			ServerName:    rule.Settings.TLS.ServerName,
 			AllowInsecure: rule.Settings.TLS.AllowInsecure,
 			ALPN:          rule.Settings.TLS.ALPN,
+			Fingerprint:   rule.Settings.TLS.Fingerprint,
 		}
+	}
+
+	// REALITY 配置。Xray 要求 security=reality 时必须带 realitySettings，
+	// 缺失会导致整份配置加载失败（"REALITY: Empty realitySettings"），
+	// 进而让进程刚启动就退出。
+	if stream.Security == "reality" {
+		reality := &RealityConfig{}
+		if r := rule.Settings.Reality; r != nil {
+			reality.PublicKey = r.PublicKey
+			reality.Password = r.PublicKey // 新版 Xray 的别名字段
+			reality.ShortID = r.ShortID
+			reality.SpiderX = r.SpiderX
+			reality.Fingerprint = r.Fingerprint
+			reality.ServerName = r.ServerName
+		}
+		// SNI / 指纹可能记录在 TLS 段里，缺失时回退取用
+		if reality.ServerName == "" && rule.Settings.TLS != nil {
+			reality.ServerName = rule.Settings.TLS.ServerName
+		}
+		if reality.Fingerprint == "" && rule.Settings.TLS != nil {
+			reality.Fingerprint = rule.Settings.TLS.Fingerprint
+		}
+		// Xray 的 fingerprint 不能为空，否则握手行为不确定
+		if reality.Fingerprint == "" {
+			reality.Fingerprint = "chrome"
+		}
+		stream.RealitySettings = reality
 	}
 
 	// WebSocket 配置
@@ -601,6 +627,27 @@ func BuildChainConfig(localType string, localPort int, chainRules []*models.Prox
 	}
 
 	return config, nil
+}
+
+// buildProtocolSettings 按协议生成出站 settings。
+// 供单节点/故障转移/链式等各处复用，避免多份重复的 switch。
+func buildProtocolSettings(rule *models.ProxyRule) map[string]interface{} {
+	switch rule.Protocol {
+	case "shadowsocks":
+		return buildShadowsocksSettings(rule)
+	case "vmess":
+		return buildVMessSettings(rule)
+	case "vless":
+		return buildVLessSettings(rule)
+	case "trojan":
+		return buildTrojanSettings(rule)
+	case "http":
+		return buildHTTPSettings(rule)
+	case "socks":
+		return buildSOCKSSettings(rule)
+	default:
+		return map[string]interface{}{}
+	}
 }
 
 // ToJSON 将配置转换为 JSON 字符串

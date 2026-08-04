@@ -180,6 +180,10 @@
                   无匹配节点
                 </option>
               </select>
+              <div v-if="preProxyTruncated" class="settings-hint">
+                节点较多，仅显示前 {{ filteredPreProxyRules.length }} 个（共
+                {{ matchedPreProxyRules.length }} 个），请用上方搜索框缩小范围。
+              </div>
             </div>
             <div v-if="preProxyStale" class="settings-hint" style="color: var(--danger, #e74c3c);">
               当前配置的前置节点已不存在，请重新选择或清除。
@@ -300,7 +304,11 @@ const preProxyStale = computed(() => {
   if (!id) return false
   return !rulesStore.rules.some(r => r.id === id)
 })
-const filteredPreProxyRules = computed(() => {
+// 下拉最多渲染这么多项：订阅可能有上万节点，全量渲染 <option> 会让设置面板卡死。
+// 超出部分靠上面的搜索框缩小范围。
+const PRE_PROXY_OPTION_LIMIT = 200
+
+const matchedPreProxyRules = computed(() => {
   const keyword = preProxySearch.value.trim().toLowerCase()
   if (!keyword) return rulesStore.rules
   return rulesStore.rules.filter(rule => {
@@ -309,6 +317,23 @@ const filteredPreProxyRules = computed(() => {
       .some(value => String(value ?? '').toLowerCase().includes(keyword))
   })
 })
+
+const filteredPreProxyRules = computed(() => {
+  const matched = matchedPreProxyRules.value
+  if (matched.length <= PRE_PROXY_OPTION_LIMIT) return matched
+  // 保证已选中的节点始终在列表里，否则 select 会显示为空
+  const head = matched.slice(0, PRE_PROXY_OPTION_LIMIT)
+  const selected = preProxyNodeId.value
+  if (selected && !head.some(r => r.id === selected)) {
+    const current = matched.find(r => r.id === selected)
+    if (current) head.unshift(current)
+  }
+  return head
+})
+
+const preProxyTruncated = computed(
+  () => matchedPreProxyRules.value.length > filteredPreProxyRules.value.length
+)
 const requiresAuth = computed(() => !['127.0.0.1', '::1', 'localhost'].includes(httpApiCfg.value.host))
 const httpApiURL = computed(() => {
   const host = httpApiCfg.value.host.includes(':') ? `[${httpApiCfg.value.host}]` : httpApiCfg.value.host
@@ -463,7 +488,11 @@ async function handleInstallUpdate() {
       appStore.showToast(updateInfo.value?.message || '当前已是最新版本', 'info')
       return
     }
-    if (!confirm(`确定下载并安装 v${updateInfo.value.latestVersion}？\n可执行文件更新会自动退出并重启程序。`)) return
+    const ok = await appStore.confirmDialog(
+      `确定下载并安装 v${updateInfo.value.latestVersion}？\n可执行文件更新会自动退出并重启程序。`,
+      { title: '安装更新', confirmText: '更新', danger: false },
+    )
+    if (!ok) return
     updateInstalling.value = true
     const msg = await api.downloadAndInstallUpdate()
     appStore.showToast(msg || '更新已开始', 'success', 6000)
@@ -499,7 +528,10 @@ async function handleCheckHealth() {
 async function handleResetTraffic() {
   const ids = rulesStore.selectedRuleIds.filter(id => rulesStore.rules.some(r => r.id === id))
   const label = ids.length > 0 ? `选中的 ${ids.length} 个节点` : '全部节点'
-  if (!confirm(`确定要清零${label}的流量统计吗？`)) return
+  const ok = await appStore.confirmDialog(`确定要清零${label}的流量统计吗？`, {
+    title: '流量清零', confirmText: '清零',
+  })
+  if (!ok) return
   try {
     if (ids.length > 0) {
       for (const id of ids) {
@@ -525,14 +557,21 @@ const themeTitle = computed(() =>
   appStore.theme === 'dark' ? '切换亮色模式' : '切换深色模式'
 )
 
-function handleDeleteSelected() {
+async function handleDeleteSelected() {
   const count = rulesStore.selectedRuleIds.length
   if (count === 0) {
     appStore.showToast('请先选择要删除的规则', 'warning')
     return
   }
-  if (confirm(`确定要删除选中的 ${count} 条规则吗?`)) {
-    rulesStore.deleteSelectedRules()
+  const ok = await appStore.confirmDialog(`确定要删除选中的 ${count} 条规则吗？`, {
+    title: '删除规则', confirmText: '删除',
+  })
+  if (!ok) return
+  try {
+    await rulesStore.deleteSelectedRules()
+    appStore.showToast(`已删除 ${count} 条规则`, 'success')
+  } catch (e) {
+    appStore.showToast(`删除失败: ${e}`, 'error')
   }
 }
 

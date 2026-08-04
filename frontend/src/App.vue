@@ -78,6 +78,9 @@
       @resolve="resolveSelectedPortConflicts"
     />
 
+    <!-- 应用内确认框（macOS 的 WKWebView 不支持原生 confirm） -->
+    <ConfirmDialog />
+
     <!-- Toast 通知 -->
     <ToastContainer />
   </div>
@@ -97,6 +100,7 @@ import LogPanel from './components/LogPanel.vue'
 import BottomBar from './components/BottomBar.vue'
 import NodeEditor from './components/NodeEditor.vue'
 import ToastContainer from './components/ToastContainer.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import SubscriptionDialog from './components/SubscriptionDialog.vue'
 import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
 import ChainProxyDialog from './components/ChainProxyDialog.vue'
@@ -189,6 +193,8 @@ function listenToBackendEvents() {
 
   Events.On('loadRules', () => {
     rulesStore.loadRules()
+    // 节点变动常常伴随分组增删（如删订阅会连带删分组），一并刷新侧边栏
+    groupsStore.loadGroups()
   })
 
   Events.On('speedTestResult', () => {

@@ -102,16 +102,18 @@ export async function getSubscriptions() {
   return await MyService.GetSubscriptions()
 }
 
-export async function addSubscription(name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
-  return await MyService.AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
+// groupId 为空表示按订阅名新建分组；传已有分组 ID 可让多个订阅汇入同一分组
+export async function addSubscription(name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '', groupId = '') {
+  return await MyService.AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyId, groupId)
 }
 
 export async function setSubscriptionUpdateMode(subID, mode, proxyID) {
   return await MyService.SetSubscriptionUpdateMode(subID, mode, proxyID)
 }
 
-export async function editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
-  return await MyService.EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyId)
+// groupId 为空表示保持当前分组不变；改分组会把该订阅的节点整体迁移过去
+export async function editSubscription(subID, name, url, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '', groupId = '') {
+  return await MyService.EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyId, groupId)
 }
 
 export async function updateSubscriptionByID(subID) {

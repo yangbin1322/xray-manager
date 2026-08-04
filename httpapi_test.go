@@ -20,6 +20,8 @@ type fakeHTTPAPIService struct {
 	relays     []models.SessionRelay
 	startedID  string
 	preProxyID string
+
+	lastSubGroupID    string
 }
 
 func (f *fakeHTTPAPIService) GetRules() []models.ProxyRule { return f.rules }
@@ -41,10 +43,13 @@ func (f *fakeHTTPAPIService) DeleteGroup(string) error                  { return
 func (f *fakeHTTPAPIService) StartAllRulesInGroup(string) error         { return nil }
 func (f *fakeHTTPAPIService) StopAllRulesInGroup(string) error          { return nil }
 func (f *fakeHTTPAPIService) GetSubscriptions() []models.Subscription   { return f.subs }
-func (f *fakeHTTPAPIService) AddSubscription(string, string, bool, int, string, string) error {
+func (f *fakeHTTPAPIService) AddSubscription(_, _ string, _ bool, _ int, _, _ string, groupID string) error {
+	f.lastSubGroupID = groupID
+	f.subs = append(f.subs, models.Subscription{ID: "sub_new", GroupID: groupID})
 	return nil
 }
-func (f *fakeHTTPAPIService) EditSubscription(string, string, string, bool, int, string, string) error {
+func (f *fakeHTTPAPIService) EditSubscription(_, _, _ string, _ bool, _ int, _, _ string, groupID string) error {
+	f.lastSubGroupID = groupID
 	return nil
 }
 func (f *fakeHTTPAPIService) UpdateSubscriptionByID(string) error        { return nil }
@@ -124,6 +129,7 @@ func (f *fakeHTTPAPIService) SetPreProxy(id string) error {
 	return fmt.Errorf("前置代理节点不存在: %s", id)
 }
 
+
 func TestHTTPAPIRequiresConfiguredToken(t *testing.T) {
 	handler := newHTTPAPIHandler(&fakeHTTPAPIService{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
@@ -170,7 +176,8 @@ func TestOpenAPISpecDocumentsAllBusinessRoutes(t *testing.T) {
 		"/health", "/nodes", "/nodes/start", "/nodes/stop", "/nodes/{id}",
 		"/nodes/{id}/start", "/nodes/{id}/stop", "/local-proxies", "/local-proxies/enabled",
 		"/groups", "/groups/{id}", "/groups/{id}/start", "/groups/{id}/stop",
-		"/groups/{id}/local-proxies", "/subscriptions", "/subscriptions/{id}",
+		"/groups/{id}/local-proxies",
+		"/subscriptions", "/subscriptions/{id}",
 		"/subscriptions/{id}/update", "/subscriptions/{id}/local-proxies",
 		"/load-balancers", "/load-balancers/{id}", "/load-balancers/{id}/start",
 		"/load-balancers/{id}/stop", "/load-balancers/{id}/local-proxy",
@@ -471,3 +478,22 @@ func TestHTTPAPIPreProxy(t *testing.T) {
 		t.Fatalf("preProxyID should be cleared")
 	}
 }
+
+func TestHTTPAPIPassesSubscriptionGroupID(t *testing.T) {
+	service := &fakeHTTPAPIService{}
+	handler := newHTTPAPIHandler(service, "")
+	body := []byte(`{"name":"sub","url":"https://example.com/sub","groupId":"group_existing"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", response.Code, response.Body.String())
+	}
+	// 多个订阅汇入同一分组的前提：groupId 必须原样传到服务层
+	if service.lastSubGroupID != "group_existing" {
+		t.Fatalf("groupId 未传递到服务层，实际 %q", service.lastSubGroupID)
+	}
+}
+

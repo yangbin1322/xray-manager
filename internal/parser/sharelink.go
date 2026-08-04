@@ -253,6 +253,20 @@ func (p *ShareLinkParser) ParseVless(vlessURL string) (models.ProxyRule, error) 
 			if alpn := query.Get("alpn"); alpn != "" {
 				rule.Settings.TLS.ALPN = strings.Split(alpn, ",")
 			}
+			if fp := query.Get("fp"); fp != "" {
+				rule.Settings.TLS.Fingerprint = fp
+			}
+		}
+		// REALITY 的 pbk/sid/spx 必须保留：Xray 在 security=reality 时
+		// 强制要求 realitySettings，丢掉这些参数会导致配置直接加载失败。
+		if security == "reality" {
+			rule.Settings.Reality = &models.RealitySettings{
+				PublicKey:   query.Get("pbk"),
+				ShortID:     query.Get("sid"),
+				SpiderX:     query.Get("spx"),
+				Fingerprint: query.Get("fp"),
+				ServerName:  query.Get("sni"),
+			}
 		}
 	}
 

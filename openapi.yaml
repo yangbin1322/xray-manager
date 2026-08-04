@@ -701,6 +701,11 @@ components:
         updateInterval: { type: integer, minimum: 0, description: 小时 }
         updateMode: { type: string, enum: [direct, system, proxy], default: direct }
         updateProxyId: { type: string }
+        groupId:
+          type: string
+          description: |
+            目标分组。创建时为空表示按订阅名新建分组；编辑时为空表示保持当前分组。
+            多个订阅可指定同一分组，把各自的节点汇入同一分组统一管理。
     Subscription:
       allOf:
         - $ref: '#/components/schemas/SubscriptionInput'

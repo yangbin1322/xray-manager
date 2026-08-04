@@ -47,7 +47,30 @@ func (m *Manager) fetchSubscription(sub *models.Subscription) ([]models.ProxyRul
 		defer cleanup()
 	}
 
-	return m.parser.FetchAndParseWithProxy(sub.URL, proxyURL)
+	rules, subType, err := m.parser.FetchAndParseWithProxy(sub.URL, proxyURL)
+	if err != nil {
+		return nil, "", err
+	}
+	return dedupeRules(rules, m.log), subType, nil
+}
+
+// dedupeRules 去掉订阅内部完全相同的节点。
+// 有些机场的订阅本身就含重复条目，不去重的话每次更新都会把它们原样写进配置。
+func dedupeRules(rules []models.ProxyRule, logf func(string)) []models.ProxyRule {
+	seen := make(map[string]struct{}, len(rules))
+	out := rules[:0]
+	for i := range rules {
+		key := rules[i].SubscriptionIdentity()
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, rules[i])
+	}
+	if removed := len(rules) - len(out); removed > 0 && logf != nil {
+		logf(fmt.Sprintf("[订阅] 订阅内含 %d 个重复节点，已自动去重", removed))
+	}
+	return out
 }
 
 // updateTask 更新任务

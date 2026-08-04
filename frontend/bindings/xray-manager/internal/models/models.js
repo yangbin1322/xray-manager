@@ -242,7 +242,10 @@ export class GRPCSettings {
 }
 
 /**
- * Group 节点分组
+ * Group 节点分组。
+ * 
+ * 一个分组可以关联多个订阅（多个订阅的节点汇入同一分组），因此这里不再保存
+ * 单个 SubscriptionID —— 归属关系以 Subscription.GroupID 为准，反向查询遍历订阅列表即可。
  */
 export class Group {
     /**
@@ -281,14 +284,6 @@ export class Group {
              * @type {string}
              */
             this["source"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * 关联的订阅ID（如果来自订阅）
-             * @member
-             * @type {string | undefined}
-             */
-            this["subscriptionId"] = undefined;
         }
         if (!("createdAt" in $$source)) {
             /**
@@ -1167,6 +1162,14 @@ export class ProxyRule {
         }
         if (/** @type {any} */(false)) {
             /**
+             * 来源订阅ID（一个分组可含多个订阅的节点）
+             * @member
+             * @type {string | undefined}
+             */
+            this["subscriptionId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * 订阅链接（如果来自订阅）
              * @member
              * @type {string | undefined}
@@ -1432,7 +1435,7 @@ export class ProxySettings {
         }
         if (/** @type {any} */(false)) {
             /**
-             * 传输层安全: none, tls
+             * 传输层安全: none, tls, reality
              * @member
              * @type {string | undefined}
              */
@@ -1445,6 +1448,14 @@ export class ProxySettings {
              * @type {TLSSettings | null | undefined}
              */
             this["tls"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * REALITY 配置（security=reality 时必填）
+             * @member
+             * @type {RealitySettings | null | undefined}
+             */
+            this["reality"] = undefined;
         }
         if (/** @type {any} */(false)) {
             /**
@@ -1484,20 +1495,90 @@ export class ProxySettings {
         const $$createField28_0 = $$createType6;
         const $$createField29_0 = $$createType8;
         const $$createField30_0 = $$createType10;
+        const $$createField31_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tls" in $$parsedSource) {
             $$parsedSource["tls"] = $$createField27_0($$parsedSource["tls"]);
         }
+        if ("reality" in $$parsedSource) {
+            $$parsedSource["reality"] = $$createField28_0($$parsedSource["reality"]);
+        }
         if ("ws" in $$parsedSource) {
-            $$parsedSource["ws"] = $$createField28_0($$parsedSource["ws"]);
+            $$parsedSource["ws"] = $$createField29_0($$parsedSource["ws"]);
         }
         if ("grpc" in $$parsedSource) {
-            $$parsedSource["grpc"] = $$createField29_0($$parsedSource["grpc"]);
+            $$parsedSource["grpc"] = $$createField30_0($$parsedSource["grpc"]);
         }
         if ("h2" in $$parsedSource) {
-            $$parsedSource["h2"] = $$createField30_0($$parsedSource["h2"]);
+            $$parsedSource["h2"] = $$createField31_0($$parsedSource["h2"]);
         }
         return new ProxySettings(/** @type {Partial<ProxySettings>} */($$parsedSource));
+    }
+}
+
+/**
+ * RealitySettings REALITY 配置。
+ * 分享链接中对应 pbk/sid/spx/fp 参数；Xray 要求 security=reality 时必须提供
+ * realitySettings，缺失会直接拒绝加载整份配置。
+ */
+export class RealitySettings {
+    /**
+     * Creates a new RealitySettings instance.
+     * @param {Partial<RealitySettings>} [$$source = {}] - The source object to create the RealitySettings.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * 服务端公钥 (pbk)
+             * @member
+             * @type {string | undefined}
+             */
+            this["publicKey"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 短 ID (sid)
+             * @member
+             * @type {string | undefined}
+             */
+            this["shortId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 爬虫路径 (spx)
+             * @member
+             * @type {string | undefined}
+             */
+            this["spiderX"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * uTLS 指纹 (fp)
+             * @member
+             * @type {string | undefined}
+             */
+            this["fingerprint"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * SNI，通常取自 sni 参数
+             * @member
+             * @type {string | undefined}
+             */
+            this["serverName"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RealitySettings instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RealitySettings}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RealitySettings(/** @type {Partial<RealitySettings>} */($$parsedSource));
     }
 }
 
@@ -1713,7 +1794,7 @@ export class SpeedTestConfig {
      * @returns {SpeedTestConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType11;
+        const $$createField1_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField1_0($$parsedSource["headers"]);
@@ -1882,6 +1963,14 @@ export class TLSSettings {
              * @type {boolean | undefined}
              */
             this["allowInsecure"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * uTLS 指纹 (fp)，如 chrome/firefox
+             * @member
+             * @type {string | undefined}
+             */
+            this["fingerprint"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -2157,7 +2246,7 @@ export class WSSettings {
      * @returns {WSSettings}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType11;
+        const $$createField1_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField1_0($$parsedSource["headers"]);
@@ -2172,10 +2261,12 @@ const $$createType1 = TrafficStats.createFrom;
 const $$createType2 = ProxySettings.createFrom;
 const $$createType3 = TLSSettings.createFrom;
 const $$createType4 = $Create.Nullable($$createType3);
-const $$createType5 = WSSettings.createFrom;
+const $$createType5 = RealitySettings.createFrom;
 const $$createType6 = $Create.Nullable($$createType5);
-const $$createType7 = GRPCSettings.createFrom;
+const $$createType7 = WSSettings.createFrom;
 const $$createType8 = $Create.Nullable($$createType7);
-const $$createType9 = H2Settings.createFrom;
+const $$createType9 = GRPCSettings.createFrom;
 const $$createType10 = $Create.Nullable($$createType9);
-const $$createType11 = $Create.Map($Create.Any, $Create.Any);
+const $$createType11 = H2Settings.createFrom;
+const $$createType12 = $Create.Nullable($$createType11);
+const $$createType13 = $Create.Map($Create.Any, $Create.Any);

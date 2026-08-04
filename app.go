@@ -407,6 +407,31 @@ func generateUniqueRuleID(existingRules []models.ProxyRule) string {
 	return id
 }
 
+// generateUniqueRuleIDs 批量生成 n 个唯一规则 ID。
+// 相比循环调用 generateUniqueRuleID（每次全表扫描，导入上万节点时是 O(n²)），
+// 这里只建一次已用 ID 集合，整体是 O(现有节点数 + n)。
+func generateUniqueRuleIDs(existingRules []models.ProxyRule, n int) []string {
+	used := make(map[string]struct{}, len(existingRules)+n)
+	for i := range existingRules {
+		used[existingRules[i].ID] = struct{}{}
+	}
+
+	ids := make([]string, 0, n)
+	base := time.Now().UnixNano()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("rule_%d", base+int64(i))
+		for seq := 0; ; seq++ {
+			if _, exists := used[id]; !exists {
+				break
+			}
+			id = fmt.Sprintf("rule_%d_%d", base+int64(i), seq)
+		}
+		used[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // usedLocalPorts 收集配置中所有节点（普通/故障转移/链式代理）已占用的本地端口。
 // 需已持有 a.mu 锁。
 func (a *MyService) usedLocalPorts() map[int]bool {
@@ -516,6 +541,112 @@ func (a *MyService) allocateLocalPort() int {
 		a.releasePortReservationLocked(port)
 	}
 	return 0
+}
+
+// portShortageMessage 组织"端口没分够"的提示。
+//
+// 端口本身极少真的耗尽（从 11000 一直扫到 65535），绝大多数情况是被本机上
+// 其他 xray-manager 实例注册占用了。提示里点明这一点，用户才知道该去看哪里。
+// 需已持有 a.mu 锁。
+func (a *MyService) portShortageMessage(want, got int) string {
+	msg := fmt.Sprintf("[订阅] %d 个节点中有 %d 个未分配本地端口", want, want-got)
+	if foreign := len(a.foreignRegisteredPortsLocked()); foreign > 0 {
+		msg += fmt.Sprintf("：本机其他 xray-manager 实例已占用 %d 个端口", foreign)
+	}
+	return msg + "。可在节点设置中手动指定端口，或关闭其他实例后重新更新订阅。"
+}
+
+// foreignRegisteredPortsLocked 返回全局端口注册表中被"其他实例"占用的端口。
+//
+// 排除本实例自己的条目：那些端口本来就属于我们，分配时不该躲开。
+// 注册表不可用时返回 nil——退化为原来的行为，不影响单实例使用。
+func (a *MyService) foreignRegisteredPortsLocked() []int {
+	if a.portRegistry == nil {
+		return nil
+	}
+	entries, err := a.portRegistry.Entries()
+	if err != nil {
+		a.log(fmt.Sprintf("[端口] 读取全局端口注册表失败，本次分配不排除其他实例占用的端口: %v", err))
+		return nil
+	}
+
+	ports := make([]int, 0, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		if e.Port <= 0 {
+			continue
+		}
+		// 同一可执行文件 + 同一配置文件才算"自己"
+		if strings.EqualFold(filepath.Clean(e.ExecutablePath), filepath.Clean(a.executablePath)) &&
+			strings.EqualFold(filepath.Clean(e.ConfigPath), filepath.Clean(a.configPath)) {
+			continue
+		}
+		ports = append(ports, e.Port)
+	}
+	return ports
+}
+
+// allocateLocalPorts 批量分配 n 个本地端口。
+//
+// 逐个调用 allocateLocalPort 在导入大量节点时非常慢：每次都要重建已用端口表、
+// 从推荐起始端口重新扫描，并且每个端口都往全局端口注册表写一次文件（带文件锁）。
+// 这里改为：已用端口表只建一次、端口游标只前进不回退，注册表预留合并成一次批量写入。
+// 需已持有 a.mu 锁。返回的切片长度可能小于 n（可用端口耗尽）。
+func (a *MyService) allocateLocalPorts(n int) []int {
+	if n <= 0 {
+		return nil
+	}
+
+	used := a.usedLocalPorts()
+	// 把全局端口注册表里其他客户端实例占用的端口也算作已用。
+	//
+	// 否则这里只按本实例配置挑端口，挑中的多半早被别的实例占了，
+	// 最后提交注册表时被整批剔除——表现为"可用本地端口不足"，
+	// 而实际上高位端口还有几万个空着。
+	for _, p := range a.foreignRegisteredPortsLocked() {
+		used[p] = true
+	}
+
+	// 扫描 → 提交注册表，失败的端口标记为已用后再补扫。
+	// 读取注册表和提交之间可能有其他实例抢占（或本实例配置外的占用），
+	// 重试几轮能把这类零星缺口补上，而不是直接少分配一批。
+	ports := make([]int, 0, n)
+	port := utils.DefaultRecommendPortStart
+	for round := 0; len(ports) < n && round < 5; round++ {
+		batch := make([]int, 0, n-len(ports))
+		for len(batch) < n-len(ports) && port < 65535 {
+			p := port
+			port++
+			if used[p] {
+				continue
+			}
+			// 只做本地监听占位，注册表预留留到最后一次性提交
+			if !a.reservePortLocked(p) {
+				used[p] = true
+				continue
+			}
+			used[p] = true
+			batch = append(batch, p)
+		}
+		if len(batch) == 0 {
+			break // 端口段扫完了
+		}
+
+		// 批量向全局端口注册表提交预留，被抢占的端口回滚本地占位后剔除
+		kept := a.reserveTemporaryPortsLocked(batch)
+		keptSet := make(map[int]struct{}, len(kept))
+		for _, p := range kept {
+			keptSet[p] = struct{}{}
+		}
+		for _, p := range batch {
+			if _, ok := keptSet[p]; !ok {
+				a.releasePortReservationLocked(p)
+			}
+		}
+		ports = append(ports, kept...)
+	}
+
+	return ports
 }
 
 // AddRule 添加规则
@@ -1055,6 +1186,31 @@ func (a *MyService) reserveTemporaryPortLocked(port int) bool {
 	}
 	entry := a.portEntry("reservation", fmt.Sprintf("reservation_%d_%d", os.Getpid(), time.Now().UnixNano()), "待添加节点", port)
 	return a.portRegistry.ReserveTemporary(entry, 10*time.Minute) == nil
+}
+
+// reserveTemporaryPortsLocked 批量向全局端口注册表预留端口，返回预留成功的端口。
+// 注册表不可用时视为全部成功（与 reserveTemporaryPortLocked 行为一致）。
+func (a *MyService) reserveTemporaryPortsLocked(ports []int) []int {
+	if a.portRegistry == nil || len(ports) == 0 {
+		return ports
+	}
+
+	entries := make([]portregistry.Entry, 0, len(ports))
+	now := time.Now().UnixNano()
+	for i, port := range ports {
+		entries = append(entries, a.portEntry("reservation", fmt.Sprintf("reservation_%d_%d_%d", os.Getpid(), now, i), "待添加节点", port))
+	}
+
+	reserved, err := a.portRegistry.ReserveTemporaryBatch(entries, 10*time.Minute)
+	if err != nil {
+		return nil
+	}
+
+	kept := make([]int, 0, len(reserved))
+	for _, entry := range reserved {
+		kept = append(kept, entry.Port)
+	}
+	return kept
 }
 
 func (a *MyService) releaseRegisteredPortLocked(resourceID string) {
@@ -1988,7 +2144,9 @@ func (a *MyService) TestAllRulesSpeed() error {
 
 // AddSubscription 添加订阅
 // updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
-func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInterval int, updateMode string, updateProxyID string) error {
+// groupID: 目标分组；为空表示按订阅名新建分组（保持旧行为）。
+// 多个订阅可以指定同一个 groupID，从而把节点汇入同一分组统一管理。
+func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInterval int, updateMode string, updateProxyID string, groupID string) error {
 	// 创建订阅对象
 	sub := &models.Subscription{
 		ID:             fmt.Sprintf("sub_%d", time.Now().UnixNano()),
@@ -2001,10 +2159,22 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 		UpdateProxyID:  updateProxyID,
 	}
 
-	// 为订阅创建分组
-	group, err := a.groupManager.CreateGroupForSubscription(name, sub.ID)
-	if err != nil {
-		return fmt.Errorf("创建分组失败: %v", err)
+	// 解析目标分组：指定了就复用已有分组，否则按订阅名新建
+	var group *models.Group
+	createdGroup := false
+	if groupID != "" {
+		existing, err := a.groupManager.GetGroup(groupID)
+		if err != nil {
+			return fmt.Errorf("指定的分组不存在: %v", err)
+		}
+		group = existing
+	} else {
+		created, err := a.groupManager.CreateGroupForSubscription(name, sub.ID)
+		if err != nil {
+			return fmt.Errorf("创建分组失败: %v", err)
+		}
+		group = created
+		createdGroup = true
 	}
 	sub.GroupID = group.ID
 
@@ -2012,30 +2182,49 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 	// 注意：此处不能持有 a.mu 锁，订阅更新代理解析器需要读取配置（可能临时启动节点）。
 	rules, err := a.subscriptionManager.AddSubscription(sub)
 	if err != nil {
-		_ = a.groupManager.DeleteGroup(group.ID)
+		if createdGroup {
+			_ = a.groupManager.DeleteGroup(group.ID)
+		}
 		return err
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// 添加节点到配置
+	// 添加节点到配置。ID 和本地端口都批量分配：逐个分配在订阅有上万节点时是 O(n²)，
+	// 且每个端口都会写一次全局端口注册表文件，实测会卡住界面很久。
+	ids := generateUniqueRuleIDs(a.config.Rules, len(rules))
+	ports := a.allocateLocalPorts(len(rules))
+	if len(ports) < len(rules) {
+		a.log(a.portShortageMessage(len(rules), len(ports)))
+	}
+
+	if cap(a.config.Rules)-len(a.config.Rules) < len(rules) {
+		grown := make([]models.ProxyRule, len(a.config.Rules), len(a.config.Rules)+len(rules))
+		copy(grown, a.config.Rules)
+		a.config.Rules = grown
+	}
 	for i := range rules {
-		rules[i].ID = generateUniqueRuleID(a.config.Rules)
+		rules[i].ID = ids[i]
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].GroupID = group.ID
 		rules[i].GroupName = group.Name
+		rules[i].SubscriptionID = sub.ID
 		rules[i].SubscriptionURL = url
 		rules[i].Source = "subscription"
-		rules[i].LocalPort = a.allocateLocalPort()
+		if i < len(ports) {
+			rules[i].LocalPort = ports[i]
+		}
 
 		a.config.Rules = append(a.config.Rules, rules[i])
 	}
 
-	// 保存订阅和分组
+	// 保存订阅；分组只在新建时追加，复用已有分组不能重复写入
 	a.config.Subscriptions = append(a.config.Subscriptions, *sub)
-	a.config.Groups = append(a.config.Groups, *group)
+	if createdGroup {
+		a.config.Groups = append(a.config.Groups, *group)
+	}
 
 	if err := a.saveConfig(); err != nil {
 		return err
@@ -2084,10 +2273,12 @@ func (a *MyService) UpdateSubscriptionByID(subID string) error {
 	return a.saveConfig()
 }
 
-// EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式）。
-// 不触发订阅内容更新，只修改元数据；改名会同步分组名和该订阅下节点的分组名，
-// 改 URL 会同步节点的订阅链接，最后按新配置重设自动更新定时任务。
-func (a *MyService) EditSubscription(subID, name, url string, autoUpdate bool, updateInterval int, updateMode, updateProxyID string) error {
+// EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式/所属分组）。
+// 不触发订阅内容更新，只修改元数据；改 URL 会同步节点的订阅链接，
+// 改分组会把该订阅的节点整体迁移过去，最后按新配置重设自动更新定时任务。
+//
+// groupID 为空表示保持当前分组不变。
+func (a *MyService) EditSubscription(subID, name, url string, autoUpdate bool, updateInterval int, updateMode, updateProxyID, groupID string) error {
 	if name == "" {
 		return fmt.Errorf("订阅名称不能为空")
 	}
@@ -2116,7 +2307,16 @@ func (a *MyService) EditSubscription(subID, name, url string, autoUpdate bool, u
 	sub := &a.config.Subscriptions[idx]
 	oldName := sub.Name
 	oldURL := sub.URL
-	groupID := sub.GroupID
+	oldGroupID := sub.GroupID
+
+	// 目标分组：为空表示不变
+	newGroupID := oldGroupID
+	if groupID != "" && groupID != oldGroupID {
+		if a.findGroupLocked(groupID) == nil {
+			return fmt.Errorf("指定的分组不存在")
+		}
+		newGroupID = groupID
+	}
 
 	// 更新订阅字段
 	sub.Name = name
@@ -2125,35 +2325,49 @@ func (a *MyService) EditSubscription(subID, name, url string, autoUpdate bool, u
 	sub.UpdateInterval = updateInterval
 	sub.UpdateMode = updateMode
 	sub.UpdateProxyID = updateProxyID
+	sub.GroupID = newGroupID
 
-	// 改名：同步分组名称
-	if name != oldName && groupID != "" {
-		// 分组管理器缓存
-		for _, g := range a.config.Groups {
-			if g.ID == groupID {
-				_ = a.groupManager.UpdateGroup(groupID, name, g.Description)
-				break
+	// 改名：只有当分组是这个订阅独占时才跟着改名。
+	// 一个分组可以汇集多个订阅，此时分组名是用户自己起的，不该被某个订阅的改名覆盖。
+	if name != oldName && oldGroupID != "" && newGroupID == oldGroupID {
+		if a.groupExclusiveToSubscriptionLocked(oldGroupID, subID) {
+			for i := range a.config.Groups {
+				if a.config.Groups[i].ID == oldGroupID {
+					_ = a.groupManager.UpdateGroup(oldGroupID, name, a.config.Groups[i].Description)
+					a.config.Groups[i].Name = name
+					break
+				}
 			}
-		}
-		// 配置中的分组
-		for i := range a.config.Groups {
-			if a.config.Groups[i].ID == groupID {
-				a.config.Groups[i].Name = name
-				break
-			}
-		}
-		// 该订阅下所有节点的分组名
-		for i := range a.config.Rules {
-			if a.config.Rules[i].GroupID == groupID {
-				a.config.Rules[i].GroupName = name
+			for i := range a.config.Rules {
+				if a.config.Rules[i].GroupID == oldGroupID {
+					a.config.Rules[i].GroupName = name
+				}
 			}
 		}
 	}
 
-	// 改 URL：同步该订阅下节点的订阅链接
-	if url != oldURL && groupID != "" {
+	// 改分组：把该订阅的节点整体迁过去。
+	// 只迁移属于本订阅的节点（按 SubscriptionID 匹配），同组其他订阅的节点不受影响。
+	if newGroupID != oldGroupID {
+		newGroup := a.findGroupLocked(newGroupID)
+		moved := 0
 		for i := range a.config.Rules {
-			if a.config.Rules[i].GroupID == groupID && a.config.Rules[i].Source == "subscription" {
+			if a.config.Rules[i].SubscriptionID != subID {
+				continue
+			}
+			a.config.Rules[i].GroupID = newGroupID
+			if newGroup != nil {
+				a.config.Rules[i].GroupName = newGroup.Name
+			}
+			moved++
+		}
+		a.log(fmt.Sprintf("[订阅] 「%s」已迁移到分组「%s」，%d 个节点随之移动", name, newGroup.Name, moved))
+	}
+
+	// 改 URL：同步该订阅下节点的订阅链接
+	if url != oldURL {
+		for i := range a.config.Rules {
+			if a.config.Rules[i].SubscriptionID == subID {
 				a.config.Rules[i].SubscriptionURL = url
 			}
 		}
@@ -2198,18 +2412,31 @@ func (a *MyService) DeleteSubscription(subID string) error {
 		return fmt.Errorf("订阅不存在")
 	}
 
-	// 删除该订阅的所有节点
-	newRules := make([]models.ProxyRule, 0)
-	for _, rule := range a.config.Rules {
-		if rule.GroupID != groupID {
-			newRules = append(newRules, rule)
-		} else if rule.Enabled {
-			// 停止正在运行的节点
+	// 删除该订阅的所有节点。
+	// 按 SubscriptionID 而不是 GroupID 匹配：一个分组可能汇集了多个订阅，
+	// 按分组删会连带删掉同组其他订阅的节点。
+	// 历史数据没有 SubscriptionID，回退到"分组内的订阅节点且分组为该订阅独占"的判断。
+	exclusive := a.groupExclusiveToSubscriptionLocked(groupID, subID)
+	belongsToSub := func(rule *models.ProxyRule) bool {
+		if rule.SubscriptionID != "" {
+			return rule.SubscriptionID == subID
+		}
+		return exclusive && rule.GroupID == groupID && rule.Source == "subscription"
+	}
+
+	newRules := make([]models.ProxyRule, 0, len(a.config.Rules))
+	removed := 0
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if !belongsToSub(rule) {
+			newRules = append(newRules, *rule)
+			continue
+		}
+		if rule.Enabled {
 			_ = a.processManager.Stop(rule.LocalPort)
 		}
-		if rule.GroupID == groupID {
-			a.releasePortReservationLocked(rule.LocalPort)
-		}
+		a.releasePortReservationLocked(rule.LocalPort)
+		removed++
 	}
 	a.config.Rules = newRules
 
@@ -2219,19 +2446,52 @@ func (a *MyService) DeleteSubscription(subID string) error {
 		a.config.Subscriptions[subIndex+1:]...,
 	)
 
-	// 删除分组
-	_ = a.groupManager.DeleteGroup(groupID)
-	newGroups := make([]models.Group, 0)
-	for _, group := range a.config.Groups {
-		if group.ID != groupID {
-			newGroups = append(newGroups, group)
+	// 分组只在没有其他订阅使用、且不再有节点时才删除。
+	// 多个订阅共用一个分组时，删掉其中一个订阅不该连累分组本身。
+	if groupID != "" && a.groupRemovableLocked(groupID) {
+		_ = a.groupManager.DeleteGroup(groupID)
+		newGroups := make([]models.Group, 0, len(a.config.Groups))
+		for _, group := range a.config.Groups {
+			if group.ID != groupID {
+				newGroups = append(newGroups, group)
+			}
 		}
+		a.config.Groups = newGroups
 	}
-	a.config.Groups = newGroups
 
 	a.subscriptionManager.RemoveSubscription(subID)
+	a.log(fmt.Sprintf("[订阅] 已删除订阅，移除 %d 个节点", removed))
 
 	return a.saveConfig()
+}
+
+// groupExclusiveToSubscriptionLocked 判断分组是否只被该订阅使用。需已持有 a.mu。
+func (a *MyService) groupExclusiveToSubscriptionLocked(groupID, subID string) bool {
+	if groupID == "" {
+		return false
+	}
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].GroupID == groupID && a.config.Subscriptions[i].ID != subID {
+			return false
+		}
+	}
+	return true
+}
+
+// groupRemovableLocked 判断分组是否可以随订阅一起删除：
+// 没有其他订阅指向它，且组内已无残留节点（手动添加的节点也算）。需已持有 a.mu。
+func (a *MyService) groupRemovableLocked(groupID string) bool {
+	for i := range a.config.Subscriptions {
+		if a.config.Subscriptions[i].GroupID == groupID {
+			return false
+		}
+	}
+	for i := range a.config.Rules {
+		if a.config.Rules[i].GroupID == groupID {
+			return false
+		}
+	}
+	return true
 }
 
 // handleSubscriptionUpdate 处理订阅更新
@@ -2255,51 +2515,109 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 		return fmt.Errorf("订阅不存在")
 	}
 
-	// 获取该订阅的现有节点
-	oldRules := make(map[string]*models.ProxyRule)
+	// 获取该订阅的现有节点。存下标而不是指针：下面 append 新节点会让底层数组重新分配，
+	// 指向旧数组的指针写入就会丢失。
+	//
+	// 只认属于本订阅的节点：一个分组可以汇集多个订阅，若按 GroupID 匹配，
+	// 本次更新会把同组其他订阅的节点当成"自己的旧节点"接管甚至删掉。
+	// 历史数据没有 SubscriptionID，回退到分组匹配（此时分组必为该订阅独占）。
+	exclusive := a.groupExclusiveToSubscriptionLocked(targetSub.GroupID, subID)
+	// 同一个标识可能对应多条历史记录（此前重复添加攒下来的），用切片存全部下标：
+	// 匹配时消费一条，剩下的会落进 oldRules 被当作"已失效"清理掉，
+	// 这样一次更新就能把历史重复项收敛回一条。
+	oldRules := make(map[string][]int, len(a.config.Rules))
 	for i := range a.config.Rules {
-		if a.config.Rules[i].GroupID == targetSub.GroupID {
-			key := fmt.Sprintf("%s:%d", a.config.Rules[i].ServerAddr, a.config.Rules[i].ServerPort)
-			oldRules[key] = &a.config.Rules[i]
+		rule := &a.config.Rules[i]
+		own := rule.SubscriptionID == subID ||
+			(rule.SubscriptionID == "" && exclusive && rule.GroupID == targetSub.GroupID && rule.Source == "subscription")
+		if !own {
+			continue
 		}
+		key := rule.SubscriptionIdentity()
+		oldRules[key] = append(oldRules[key], i)
 	}
 
-	// 合并新节点
+	group := a.findGroupLocked(targetSub.GroupID)
+
+	// 先挑出真正的新增节点，再批量分配 ID 和端口，
+	// 避免逐个分配时的全表扫描和逐端口写注册表文件（订阅上万节点时会卡很久）。
+	added := make([]int, 0, len(newRules))
+	// 订阅内部也可能出现完全相同的两条，去重避免把重复项写进配置
+	seen := make(map[string]struct{}, len(newRules))
 	for i := range newRules {
-		key := fmt.Sprintf("%s:%d", newRules[i].ServerAddr, newRules[i].ServerPort)
+		key := newRules[i].SubscriptionIdentity()
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 
-		if existingRule, exists := oldRules[key]; exists {
-			// 节点已存在，更新配置但保留状态
-			existingRule.Alias = newRules[i].Alias
-			existingRule.Settings = newRules[i].Settings
-			delete(oldRules, key)
+		if idxs, exists := oldRules[key]; exists && len(idxs) > 0 {
+			// 节点已存在，更新配置但保留状态；只消费一条，多余的重复项留待清理
+			idx := idxs[0]
+			a.config.Rules[idx].Alias = newRules[i].Alias
+			a.config.Rules[idx].Settings = newRules[i].Settings
+			// 顺带补齐历史节点缺失的订阅归属，后续更新就能精确匹配
+			a.config.Rules[idx].SubscriptionID = subID
+			if len(idxs) == 1 {
+				delete(oldRules, key)
+			} else {
+				oldRules[key] = idxs[1:]
+			}
 		} else {
-			// 新节点，添加到配置
-			newRules[i].ID = generateUniqueRuleID(a.config.Rules)
-			newRules[i].Enabled = false
-			newRules[i].GroupID = targetSub.GroupID
-			newRules[i].SubscriptionURL = targetSub.URL
-			newRules[i].Source = "subscription"
-			newRules[i].LocalPort = a.allocateLocalPort()
-
-			a.config.Rules = append(a.config.Rules, newRules[i])
+			added = append(added, i)
 		}
 	}
 
-	// 删除不再存在的节点
-	for _, oldRule := range oldRules {
-		if oldRule.Enabled {
-			_ = a.processManager.Stop(oldRule.LocalPort)
-		}
-		a.releasePortReservationLocked(oldRule.LocalPort)
+	ids := generateUniqueRuleIDs(a.config.Rules, len(added))
+	ports := a.allocateLocalPorts(len(added))
+	if len(ports) < len(added) {
+		a.log(a.portShortageMessage(len(added), len(ports)))
+	}
 
-		// 从配置中删除
-		for i := range a.config.Rules {
-			if a.config.Rules[i].ID == oldRule.ID {
-				a.config.Rules = append(a.config.Rules[:i], a.config.Rules[i+1:]...)
-				break
+	groupName := ""
+	if group != nil {
+		groupName = group.Name
+	}
+	for n, i := range added {
+		newRules[i].ID = ids[n]
+		newRules[i].Enabled = false
+		newRules[i].GroupID = targetSub.GroupID
+		newRules[i].GroupName = groupName
+		newRules[i].SubscriptionID = subID
+		newRules[i].SubscriptionURL = targetSub.URL
+		newRules[i].Source = "subscription"
+		newRules[i].LocalPort = 0
+		if n < len(ports) {
+			newRules[i].LocalPort = ports[n]
+		}
+
+		a.config.Rules = append(a.config.Rules, newRules[i])
+	}
+
+	// 删除订阅里已不存在的节点，以及历史遗留的重复项。
+	// 一次过滤代替逐个查找+切片删除（原来是 O(n²)）。
+	if len(oldRules) > 0 {
+		staleIDs := make(map[string]struct{}, len(oldRules))
+		for _, idxs := range oldRules {
+			for _, idx := range idxs {
+				stale := &a.config.Rules[idx]
+				if stale.Enabled {
+					_ = a.processManager.Stop(stale.LocalPort)
+				}
+				a.releasePortReservationLocked(stale.LocalPort)
+				staleIDs[stale.ID] = struct{}{}
 			}
 		}
+
+		kept := a.config.Rules[:0]
+		for i := range a.config.Rules {
+			if _, drop := staleIDs[a.config.Rules[i].ID]; drop {
+				continue
+			}
+			kept = append(kept, a.config.Rules[i])
+		}
+		a.config.Rules = kept
+		a.log(fmt.Sprintf("[订阅] 清理 %d 个已失效或重复的节点", len(staleIDs)))
 	}
 
 	return a.saveConfig()
@@ -2322,8 +2640,26 @@ func (a *MyService) CreateGroup(name, description string) error {
 }
 
 // GetGroups 获取所有分组
+// findGroupLocked 按 ID 查找配置中的分组，找不到返回 nil。需已持有 a.mu。
+func (a *MyService) findGroupLocked(groupID string) *models.Group {
+	for i := range a.config.Groups {
+		if a.config.Groups[i].ID == groupID {
+			return &a.config.Groups[i]
+		}
+	}
+	return nil
+}
+
+// GetGroups 返回所有分组。
+//
+// 直接读 a.config.Groups 而不是 groupManager 的缓存：config 是唯一的真相来源，
+// 而 groupManager 只在启动/导入配置时同步一次，用它的缓存容易读到过期数据。
 func (a *MyService) GetGroups() []models.Group {
-	return a.groupManager.GetAllGroups()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	groups := make([]models.Group, len(a.config.Groups))
+	copy(groups, a.config.Groups)
+	return groups
 }
 
 // UpdateGroup 更新分组名称和描述，并同步组内节点显示的分组名。
@@ -3494,6 +3830,17 @@ func (a *MyService) prependPreProxyLocked(chainRules []*models.ProxyRule) []*mod
 // startRuleInternal 启动普通节点（内部方法，不加锁）。
 // 若配置了全局前置代理且目标不是前置节点本身，则按 前置→落地 两跳链启动。
 func (a *MyService) startRuleInternal(rule *models.ProxyRule) error {
+	// 进程管理器以 LocalPort 为键，端口为 0 会写坏 config_0.json 并污染 processes[0]，
+	// 提前拦下比事后排查容易得多
+	if rule.LocalPort <= 0 {
+		return fmt.Errorf("节点「%s」没有分配本地端口，请先在节点设置中指定端口", rule.Alias)
+	}
+	// 提前拦下配置不完整的节点，避免内核加载失败后进程刚起来就退出，
+	// 用户只看到"启动成功"却连不上
+	if err := rule.ValidateForXray(); err != nil {
+		return fmt.Errorf("节点「%s」%v", rule.Alias, err)
+	}
+
 	pre := a.getPreProxyRuleLocked()
 	if pre == nil || pre.ID == rule.ID {
 		return a.processManager.Start(rule)

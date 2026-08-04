@@ -155,6 +155,24 @@ func applyTLSQuery(query url.Values, settings models.ProxySettings) {
 	if settings.Security != "" {
 		query.Set("security", settings.Security)
 	}
+	// REALITY 参数要原样导出，否则导出的链接再导入回来就用不了
+	if r := settings.Reality; r != nil {
+		if r.PublicKey != "" {
+			query.Set("pbk", r.PublicKey)
+		}
+		if r.ShortID != "" {
+			query.Set("sid", r.ShortID)
+		}
+		if r.SpiderX != "" {
+			query.Set("spx", r.SpiderX)
+		}
+		if r.Fingerprint != "" {
+			query.Set("fp", r.Fingerprint)
+		}
+		if r.ServerName != "" {
+			query.Set("sni", r.ServerName)
+		}
+	}
 	if settings.TLS == nil {
 		return
 	}
@@ -163,6 +181,9 @@ func applyTLSQuery(query url.Values, settings models.ProxySettings) {
 	}
 	if len(settings.TLS.ALPN) > 0 {
 		query.Set("alpn", strings.Join(settings.TLS.ALPN, ","))
+	}
+	if settings.TLS.Fingerprint != "" {
+		query.Set("fp", settings.TLS.Fingerprint)
 	}
 	if settings.TLS.AllowInsecure {
 		query.Set("insecure", "1")

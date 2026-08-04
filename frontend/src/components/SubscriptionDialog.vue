@@ -12,6 +12,7 @@
           <thead>
             <tr>
               <th>名称</th>
+              <th>所属分组</th>
               <th>节点数</th>
               <th>类型</th>
               <th>上次更新</th>
@@ -23,10 +24,17 @@
           </thead>
           <tbody>
             <tr v-if="groupsStore.subscriptions.length === 0">
-              <td colspan="8" class="empty-row">暂无订阅</td>
+              <td colspan="9" class="empty-row">暂无订阅</td>
             </tr>
             <tr v-for="sub in groupsStore.subscriptions" :key="sub.id">
               <td>{{ sub.name }}</td>
+              <td class="td-small">
+                <span class="group-tag">{{ groupNameOf(sub) }}</span>
+                <!-- 同组还有别的订阅时标出来，提醒这是共享分组 -->
+                <span v-if="siblingCount(sub) > 0" class="share-tag" :title="siblingNames(sub)">
+                  +{{ siblingCount(sub) }}
+                </span>
+              </td>
               <td>{{ sub.nodeCount || 0 }}</td>
               <td>{{ sub.type || '-' }}</td>
               <td class="td-small">{{ sub.lastUpdate || '-' }}</td>
@@ -84,6 +92,22 @@
             <div class="form-group" style="flex: 2;">
               <label>订阅地址：</label>
               <input v-model="form.url" type="text" placeholder="https://..." />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label>所属分组：</label>
+              <select v-model="form.groupId">
+                <option value="">{{ isEditing ? '保持当前分组不变' : `新建分组（用订阅名）` }}</option>
+                <option v-for="g in groupsStore.groups" :key="g.id" :value="g.id">
+                  {{ g.name }}
+                </option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 3; display: flex; align-items: flex-end;">
+              <span class="update-hint">
+                选择已有分组可让多个订阅的节点汇入同一分组，便于统一筛选和批量操作。{{ isEditing ? '改分组会把该订阅的节点整体迁移过去。' : '' }}
+              </span>
             </div>
           </div>
           <div class="form-row">
@@ -170,17 +194,34 @@ const editingName = ref('')   // 编辑时的原始名称（用于标题显示�
 
 const isEditing = computed(() => editingId.value !== null)
 
-const defaultForm = () => ({ name: '', url: '', autoUpdate: true, updateInterval: 6, updateMode: 'direct', updateProxyId: '' })
+const defaultForm = () => ({ name: '', url: '', autoUpdate: true, updateInterval: 6, updateMode: 'direct', updateProxyId: '', groupId: '' })
 const form = ref(defaultForm())
 
 watch(() => props.visible, (v) => {
   if (v) {
     groupsStore.loadSubscriptions()
+    groupsStore.loadGroups()
     rulesStore.loadRules()
   } else {
     cancelEdit()
   }
 })
+
+function groupNameOf(sub) {
+  return groupsStore.groupById(sub.groupId)?.name || '-'
+}
+
+// 同一分组下除自己以外的订阅数：>0 说明这是多订阅共用的分组
+function siblingsOf(sub) {
+  const list = groupsStore.subscriptionsByGroup[sub.groupId] || []
+  return list.filter(s => s.id !== sub.id)
+}
+function siblingCount(sub) {
+  return siblingsOf(sub).length
+}
+function siblingNames(sub) {
+  return `同组还有：${siblingsOf(sub).map(s => s.name).join('、')}`
+}
 
 function startEdit(sub) {
   editingId.value = sub.id
@@ -192,6 +233,8 @@ function startEdit(sub) {
     updateInterval: sub.updateInterval || 6,
     updateMode: sub.updateMode || 'direct',
     updateProxyId: sub.updateProxyId || '',
+    // 留空表示不改分组，避免"没动这个下拉却触发迁移"
+    groupId: '',
   }
 }
 
@@ -216,7 +259,7 @@ async function handleSaveEdit() {
     await groupsStore.editSubscription(
       editingId.value, form.value.name.trim(), form.value.url.trim(),
       form.value.autoUpdate, form.value.updateInterval,
-      form.value.updateMode, form.value.updateProxyId
+      form.value.updateMode, form.value.updateProxyId, form.value.groupId
     )
     await rulesStore.loadRules()
     cancelEdit()
@@ -239,7 +282,7 @@ async function handleAdd() {
     await groupsStore.addSubscription(
       form.value.name.trim(), form.value.url.trim(),
       form.value.autoUpdate, form.value.updateInterval,
-      form.value.updateMode, form.value.updateProxyId
+      form.value.updateMode, form.value.updateProxyId, form.value.groupId
     )
     await rulesStore.loadRules()
     form.value = defaultForm()
@@ -276,7 +319,17 @@ async function handleUpdate(sub) {
 }
 
 async function handleDelete(sub) {
-  if (!confirm(`确定要删除订阅「${sub.name}」吗？这将同时删除该订阅的所有节点！`)) return
+  // 共享分组下只删本订阅的节点，同组其他订阅不受影响——提示要说清楚，
+  // 否则用户会以为整个分组都没了
+  const siblings = siblingsOf(sub)
+  const extra = siblings.length > 0
+    ? `\n\n该分组还有 ${siblings.length} 个其他订阅（${siblings.map(s => s.name).join('、')}），它们的节点和分组本身会保留。`
+    : ''
+  const ok = await appStore.confirmDialog(
+    `确定要删除订阅「${sub.name}」吗？这将同时删除该订阅的所有节点！${extra}`,
+    { title: '删除订阅', confirmText: '删除' },
+  )
+  if (!ok) return
   try {
     await groupsStore.deleteSubscription(sub.id)
     await rulesStore.loadRules()
@@ -346,6 +399,25 @@ function close() { emit('close') }
 }
 .td-small { font-size: 11px; }
 .empty-row { text-align: center; color: var(--text-secondary); padding: 20px !important; }
+
+.group-tag {
+  display: inline-block;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* 同组还有其他订阅时的角标，悬停可看到都有谁 */
+.share-tag {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--primary-light);
+  color: var(--primary-color);
+  font-size: 10px;
+  cursor: help;
+}
 
 .form-section { margin-bottom: 16px; }
 .form-section h4 {
@@ -433,6 +505,8 @@ function close() { emit('close') }
   margin-right: 3px;
 }
 .btn-action-sm:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-del { color: #95a5a6; }
-.btn-del:hover { color: #e74c3c; border-color: #e74c3c; }
+/* 删除按钮直接用警示色：原来是灰色、只在 hover 时变红，
+   看起来像被禁用了（触摸板/无 hover 环境下尤其明显） */
+.btn-del { color: #e74c3c; border-color: rgba(231, 76, 60, 0.5); }
+.btn-del:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
 </style>

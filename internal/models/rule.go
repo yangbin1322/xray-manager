@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -40,8 +41,77 @@ type ProxyRule struct {
 	// 分组相关字段
 	GroupID         string `json:"groupId"`                   // 所属分组ID
 	GroupName       string `json:"groupName"`                 // 所属分组名称
+	SubscriptionID  string `json:"subscriptionId,omitempty"`  // 来源订阅ID（一个分组可含多个订阅的节点）
 	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
 	Source          string `json:"source"`                    // 来源: manual（手动添加）, subscription（订阅导入）
+}
+
+// SubscriptionIdentity 返回用于订阅更新时匹配"同一个节点"的标识。
+//
+// 只用 serverAddr:serverPort 是不够的：机场常把多个节点挂在同一个 CDN IP 上
+// （如 108.162.198.30:443 下挂着美国/日本等多个节点），仅靠地址端口会让它们
+// 互相覆盖，每次更新都认不出旧节点，于是重复添加、越攒越多。
+//
+// 这里补上真正区分节点的字段：别名、协议，以及各协议的用户凭证和传输层参数
+// （ws path / SNI / gRPC serviceName 等）。
+func (r *ProxyRule) SubscriptionIdentity() string {
+	s := &r.Settings
+
+	// 各协议的用户标识（UUID/密码），同一 CDN 下不同节点通常凭证不同
+	var credential string
+	switch r.Protocol {
+	case "vless":
+		credential = s.VLessUserID
+	case "vmess":
+		credential = s.VMessUserID
+	case "trojan":
+		credential = s.TrojanPassword
+	case "shadowsocks":
+		credential = s.SSMethod + "|" + s.SSPassword
+	case "hysteria2":
+		credential = s.Hy2Password
+	case "tuic":
+		credential = s.TUICUserID + "|" + s.TUICPassword
+	case "http":
+		credential = s.HTTPUsername
+	case "socks":
+		credential = s.SOCKSUsername
+	}
+
+	// 传输层参数：同凭证同 IP 时，路径/SNI 往往才是唯一的区分点
+	var path, host, sni string
+	if s.WS != nil {
+		path = s.WS.Path
+		host = s.WS.Headers["Host"]
+	}
+	if s.GRPC != nil {
+		path = s.GRPC.ServiceName
+	}
+	if s.H2 != nil {
+		path = s.H2.Path
+	}
+	if s.TLS != nil {
+		sni = s.TLS.ServerName
+	}
+
+	return strings.Join([]string{
+		r.Alias, r.Protocol, r.ServerAddr, strconv.Itoa(r.ServerPort),
+		credential, s.Network, s.Security, path, host, sni,
+	}, "\x1f")
+}
+
+// ValidateForXray 校验该节点能否生成可被 Xray 接受的出站配置。
+// 目前重点是 REALITY：security=reality 时 Xray 强制要求 realitySettings.publicKey，
+// 缺失会直接拒绝加载整份配置，表现为进程刚启动就退出。
+// 早期版本的分享链接解析丢弃了 pbk/sid/fp，这类历史节点需要重新更新订阅才能补齐。
+func (r *ProxyRule) ValidateForXray() error {
+	if r.Settings.Security != "reality" {
+		return nil
+	}
+	if r.Settings.Reality == nil || r.Settings.Reality.PublicKey == "" {
+		return fmt.Errorf("REALITY 节点缺少公钥(pbk)，请重新更新订阅以补全参数")
+	}
+	return nil
 }
 
 // TrafficStats 节点流量统计（字节）
@@ -173,12 +243,13 @@ type ProxySettings struct {
 	TUICUDPRelayMode string `json:"tuicUdpRelayMode,omitempty"` // UDP 中继模式: native, quic
 
 	// 通用传输层配置
-	Network  string        `json:"network,omitempty"`  // 传输协议: tcp, ws, grpc, h2
-	Security string        `json:"security,omitempty"` // 传输层安全: none, tls
-	TLS      *TLSSettings  `json:"tls,omitempty"`      // TLS配置
-	WS       *WSSettings   `json:"ws,omitempty"`       // WebSocket配置
-	GRPC     *GRPCSettings `json:"grpc,omitempty"`     // gRPC配置
-	H2       *H2Settings   `json:"h2,omitempty"`       // HTTP/2配置
+	Network  string           `json:"network,omitempty"`  // 传输协议: tcp, ws, grpc, h2
+	Security string           `json:"security,omitempty"` // 传输层安全: none, tls, reality
+	TLS      *TLSSettings     `json:"tls,omitempty"`      // TLS配置
+	Reality  *RealitySettings `json:"reality,omitempty"`  // REALITY 配置（security=reality 时必填）
+	WS       *WSSettings      `json:"ws,omitempty"`       // WebSocket配置
+	GRPC     *GRPCSettings    `json:"grpc,omitempty"`     // gRPC配置
+	H2       *H2Settings      `json:"h2,omitempty"`       // HTTP/2配置
 }
 
 // TLSSettings TLS配置
@@ -186,6 +257,18 @@ type TLSSettings struct {
 	ServerName    string   `json:"serverName,omitempty"`    // 服务器名称 (SNI)
 	ALPN          []string `json:"alpn,omitempty"`          // ALPN协议列表
 	AllowInsecure bool     `json:"allowInsecure,omitempty"` // 允许不安全连接
+	Fingerprint   string   `json:"fingerprint,omitempty"`   // uTLS 指纹 (fp)，如 chrome/firefox
+}
+
+// RealitySettings REALITY 配置。
+// 分享链接中对应 pbk/sid/spx/fp 参数；Xray 要求 security=reality 时必须提供
+// realitySettings，缺失会直接拒绝加载整份配置。
+type RealitySettings struct {
+	PublicKey   string `json:"publicKey,omitempty"`   // 服务端公钥 (pbk)
+	ShortID     string `json:"shortId,omitempty"`     // 短 ID (sid)
+	SpiderX     string `json:"spiderX,omitempty"`     // 爬虫路径 (spx)
+	Fingerprint string `json:"fingerprint,omitempty"` // uTLS 指纹 (fp)
+	ServerName  string `json:"serverName,omitempty"`  // SNI，通常取自 sni 参数
 }
 
 // WSSettings WebSocket配置
@@ -311,14 +394,16 @@ type ImportShareResult struct {
 	Errors       []string `json:"errors"`       // 每条失败的详细信息
 }
 
-// Group 节点分组
+// Group 节点分组。
+//
+// 一个分组可以关联多个订阅（多个订阅的节点汇入同一分组），因此这里不再保存
+// 单个 SubscriptionID —— 归属关系以 Subscription.GroupID 为准，反向查询遍历订阅列表即可。
 type Group struct {
-	ID             string `json:"id"`                       // 分组ID
-	Name           string `json:"name"`                     // 分组名称
-	Description    string `json:"description"`              // 分组描述
-	Source         string `json:"source"`                   // 来源: manual, subscription
-	SubscriptionID string `json:"subscriptionId,omitempty"` // 关联的订阅ID（如果来自订阅）
-	CreatedAt      string `json:"createdAt"`                // 创建时间
+	ID          string `json:"id"`          // 分组ID
+	Name        string `json:"name"`        // 分组名称
+	Description string `json:"description"` // 分组描述
+	Source      string `json:"source"`      // 来源: manual, subscription
+	CreatedAt   string `json:"createdAt"`   // 创建时间
 }
 
 // Subscription 订阅配置

@@ -34,9 +34,20 @@ func parseClashBandwidth(v interface{}) int {
 	return 0
 }
 
+// maxParseErrorLogs 单次订阅解析最多输出多少条节点级失败日志。
+// 每条日志都会推一个事件给前端，上万节点的订阅若逐条输出会拖垮界面。
+const maxParseErrorLogs = 20
+
 // Parser 订阅解析器
 type Parser struct {
 	logFunc func(string)
+}
+
+// logSkipped 汇总输出被截断的解析失败条数
+func (p *Parser) logSkipped(failed int) {
+	if failed > maxParseErrorLogs {
+		p.log(fmt.Sprintf("[订阅] 另有 %d 个节点解析失败（已省略日志）", failed-maxParseErrorLogs))
+	}
 }
 
 // NewParser 创建解析器
@@ -155,15 +166,22 @@ func (p *Parser) ParseClash(content []byte) ([]models.ProxyRule, error) {
 		return nil, fmt.Errorf("解析 Clash YAML 失败: %v", err)
 	}
 
-	var rules []models.ProxyRule
+	rules := make([]models.ProxyRule, 0, len(clashConfig.Proxies))
+	failed := 0
 	for i, proxy := range clashConfig.Proxies {
 		rule, err := p.parseClashProxy(proxy, i)
 		if err != nil {
-			p.log(fmt.Sprintf("[订阅] 解析节点 %d 失败: %v", i, err))
+			// 每条失败都打日志会向前端推同样多的事件，大订阅下足以拖垮界面，
+			// 因此只打前若干条，其余汇总
+			if failed < maxParseErrorLogs {
+				p.log(fmt.Sprintf("[订阅] 解析节点 %d 失败: %v", i, err))
+			}
+			failed++
 			continue
 		}
 		rules = append(rules, rule)
 	}
+	p.logSkipped(failed)
 
 	return rules, nil
 }
@@ -389,8 +407,9 @@ func (p *Parser) ParseBase64(content []byte) ([]models.ProxyRule, error) {
 
 	// 按行分割
 	lines := strings.Split(string(decoded), "\n")
-	var rules []models.ProxyRule
+	rules := make([]models.ProxyRule, 0, len(lines))
 
+	failed := 0
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -399,11 +418,15 @@ func (p *Parser) ParseBase64(content []byte) ([]models.ProxyRule, error) {
 
 		rule, err := p.parseProxyURL(line, i)
 		if err != nil {
-			p.log(fmt.Sprintf("[订阅] 解析链接失败: %v", err))
+			if failed < maxParseErrorLogs {
+				p.log(fmt.Sprintf("[订阅] 解析链接失败: %v", err))
+			}
+			failed++
 			continue
 		}
 		rules = append(rules, rule)
 	}
+	p.logSkipped(failed)
 
 	return rules, nil
 }

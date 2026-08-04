@@ -21,6 +21,9 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 frontend/node_modules/
 
+# Wails 生成的 Windows 资源文件（图标/清单），由 wails3 generate syso 产出
+*.syso
+
 # Go workspace file
 go.work
 

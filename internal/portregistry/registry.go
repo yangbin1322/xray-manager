@@ -84,6 +84,55 @@ func (r *Registry) ReserveTemporary(entry Entry, lifetime time.Duration) error {
 	return r.Claim(entry)
 }
 
+// ReserveTemporaryBatch 在一次文件锁+写入内批量预留多个端口，返回实际预留成功的条目。
+// 逐个调用 ReserveTemporary 时每个端口都要抢文件锁、读全表、写回磁盘，导入上万节点时
+// 这部分开销是主要瓶颈；批量版本只做一次 IO，并用端口索引避免逐条线性查冲突。
+// 与 Claim 一致：被其他实例占用的端口会被跳过（不计入返回值），而不是让整批失败。
+func (r *Registry) ReserveTemporaryBatch(entries []Entry, lifetime time.Duration) ([]Entry, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	var reserved []Entry
+	err := r.withLock(func(data *fileData) error {
+		cleanup(data)
+
+		expiresAt := time.Now().Add(lifetime).UTC().Format(time.RFC3339Nano)
+		// 端口 -> data.Entries 下标，避免每个待预留端口都全表扫描
+		portIndex := make(map[int]int, len(data.Entries))
+		for i := range data.Entries {
+			portIndex[data.Entries[i].Port] = i
+		}
+
+		reserved = make([]Entry, 0, len(entries))
+		for _, entry := range entries {
+			entry.Temporary = true
+			entry.ExpiresAt = expiresAt
+			normalizeEntry(&entry)
+
+			if idx, exists := portIndex[entry.Port]; exists {
+				existing := data.Entries[idx]
+				// 端口已被本实例的临时预留占着：视为已预留，复用即可
+				if existing.Temporary && sameOwner(existing, entry) {
+					reserved = append(reserved, existing)
+					continue
+				}
+				// 被别的实例/资源占用，跳过该端口
+				continue
+			}
+
+			portIndex[entry.Port] = len(data.Entries)
+			data.Entries = append(data.Entries, entry)
+			reserved = append(reserved, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return reserved, nil
+}
+
 func (r *Registry) Release(executablePath, configPath, resourceID string) error {
 	return r.withLock(func(data *fileData) error {
 		cleanup(data)

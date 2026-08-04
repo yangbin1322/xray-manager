@@ -10,11 +10,13 @@ export const useAppStore = defineStore('app', () => {
   const sysProxyEnabled = ref(false)
   const toasts = ref([])
   let toastId = 0
+  // 自增序号，Date.now() 在同一毫秒内会重复，导致 v-for key 冲突和 DOM 复用错乱
+  let logId = 0
 
   // === 日志 ===
   function addLog(message) {
     const entry = {
-      id: Date.now(),
+      id: ++logId,
       time: new Date().toLocaleTimeString(),
       message,
     }
@@ -37,6 +39,37 @@ export const useAppStore = defineStore('app', () => {
     setTimeout(() => {
       toasts.value = toasts.value.filter(t => t.id !== id)
     }, duration)
+  }
+
+  // === 确认对话框 ===
+  // 不能用原生 window.confirm：macOS 的 WKWebView 默认不实现 JS 对话框，
+  // confirm() 直接返回 false，导致所有"先确认再执行"的操作静默失效
+  // （删除节点/分组/订阅全都点了没反应）。这里用应用内对话框替代。
+  const confirmState = ref(null)
+  let confirmResolve = null
+
+  function confirmDialog(message, options = {}) {
+    // 已有对话框时先拒掉旧的，避免 promise 悬着不回收
+    if (confirmResolve) {
+      confirmResolve(false)
+      confirmResolve = null
+    }
+    confirmState.value = {
+      message: String(message ?? ''),
+      title: options.title || '确认操作',
+      confirmText: options.confirmText || '确定',
+      cancelText: options.cancelText || '取消',
+      danger: options.danger !== false, // 确认框基本都用于删除类操作，默认红色
+    }
+    return new Promise(resolve => { confirmResolve = resolve })
+  }
+
+  function resolveConfirm(ok) {
+    confirmState.value = null
+    if (confirmResolve) {
+      confirmResolve(ok)
+      confirmResolve = null
+    }
   }
 
   // === 主题 ===
@@ -153,9 +186,10 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     // State
-    logs, theme, autoStart, sysProxyEnabled, toasts,
+    logs, theme, autoStart, sysProxyEnabled, toasts, confirmState,
     // Actions
     addLog, clearLogsList, showToast,
+    confirmDialog, resolveConfirm,
     toggleTheme, initTheme,
     loadAutoStart, setAutoStartEnabled,
     loadSysProxyStatus, enableSysProxy, disableSysProxy,

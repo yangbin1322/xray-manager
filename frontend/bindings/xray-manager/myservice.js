@@ -57,16 +57,19 @@ export function AddSessionRelay(sr) {
 /**
  * AddSubscription 添加订阅
  * updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
+ * groupID: 目标分组；为空表示按订阅名新建分组（保持旧行为）。
+ * 多个订阅可以指定同一个 groupID，从而把节点汇入同一分组统一管理。
  * @param {string} name
  * @param {string} url
  * @param {boolean} autoUpdate
  * @param {number} updateInterval
  * @param {string} updateMode
  * @param {string} updateProxyID
+ * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */
-export function AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyID) {
-    return $Call.ByID(3098545163, name, url, autoUpdate, updateInterval, updateMode, updateProxyID);
+export function AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyID, groupID) {
+    return $Call.ByID(3098545163, name, url, autoUpdate, updateInterval, updateMode, updateProxyID, groupID);
 }
 
 /**
@@ -205,9 +208,11 @@ export function DownloadAndInstallUpdate() {
 }
 
 /**
- * EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式）。
- * 不触发订阅内容更新，只修改元数据；改名会同步分组名和该订阅下节点的分组名，
- * 改 URL 会同步节点的订阅链接，最后按新配置重设自动更新定时任务。
+ * EditSubscription 编辑订阅（名称/URL/自动更新/更新间隔/更新方式/所属分组）。
+ * 不触发订阅内容更新，只修改元数据；改 URL 会同步节点的订阅链接，
+ * 改分组会把该订阅的节点整体迁移过去，最后按新配置重设自动更新定时任务。
+ * 
+ * groupID 为空表示保持当前分组不变。
  * @param {string} subID
  * @param {string} name
  * @param {string} url
@@ -215,10 +220,11 @@ export function DownloadAndInstallUpdate() {
  * @param {number} updateInterval
  * @param {string} updateMode
  * @param {string} updateProxyID
+ * @param {string} groupID
  * @returns {$CancellablePromise<void>}
  */
-export function EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID) {
-    return $Call.ByID(1363501906, subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID);
+export function EditSubscription(subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID, groupID) {
+    return $Call.ByID(1363501906, subID, name, url, autoUpdate, updateInterval, updateMode, updateProxyID, groupID);
 }
 
 /**
@@ -301,7 +307,10 @@ export function GetDefaultSpeedTestConfig() {
 }
 
 /**
- * GetGroups 获取所有分组
+ * GetGroups 返回所有分组。
+ * 
+ * 直接读 a.config.Groups 而不是 groupManager 的缓存：config 是唯一的真相来源，
+ * 而 groupManager 只在启动/导入配置时同步一次，用它的缓存容易读到过期数据。
  * @returns {$CancellablePromise<models$0.Group[]>}
  */
 export function GetGroups() {

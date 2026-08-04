@@ -123,7 +123,11 @@ export const useRulesStore = defineStore('rules', () => {
 
   async function deleteRule(id) {
     await api.deleteRule(id)
-    selectedIds.value.delete(id)
+    if (selectedIds.value.has(id)) {
+      const next = new Set(selectedIds.value)
+      next.delete(id)
+      selectedIds.value = next
+    }
     await loadRules()
   }
 
@@ -136,10 +140,19 @@ export const useRulesStore = defineStore('rules', () => {
     await api.stopRule(id)
   }
 
+  // 节点 ID -> 节点 的索引。批量操作原先对每个选中 ID 都做一次 allNodes.find（O(n²)），
+  // 上万节点时仅仅"删除/启动选中项"就要卡住主线程。
+  const nodeById = computed(() => {
+    const map = new Map()
+    for (const n of allNodes.value) map.set(n.id, n)
+    return map
+  })
+
   async function deleteSelectedRules() {
     const ids = selectedRuleIds.value
+    const index = nodeById.value
     for (const id of ids) {
-      const node = allNodes.value.find(n => n.id === id)
+      const node = index.get(id)
       if (!node) continue
       try {
         if (node._nodeType === 'lb') {
@@ -155,14 +168,15 @@ export const useRulesStore = defineStore('rules', () => {
         console.error('删除失败:', e)
       }
     }
-    selectedIds.value.clear()
+    selectedIds.value = new Set()
     await loadRules()
   }
 
   async function startSelectedRules() {
     // 只启动当前未运行的选中节点，交给后端并发处理、只保存一次配置
+    const index = nodeById.value
     const ids = selectedRuleIds.value.filter(id => {
-      const node = allNodes.value.find(n => n.id === id)
+      const node = index.get(id)
       return node && !node.enabled
     })
     if (ids.length === 0) return
@@ -173,8 +187,9 @@ export const useRulesStore = defineStore('rules', () => {
   }
 
   async function stopSelectedRules() {
+    const index = nodeById.value
     const ids = selectedRuleIds.value.filter(id => {
-      const node = allNodes.value.find(n => n.id === id)
+      const node = index.get(id)
       return node && node.enabled
     })
     if (ids.length === 0) return
@@ -251,7 +266,8 @@ export const useRulesStore = defineStore('rules', () => {
 
   async function checkSelectedHealth() {
     // 普通节点直连检测，已启动的故障转移/链式代理经代理端口检测
-    const ids = selectedRuleIds.value.filter(id => allNodes.value.some(n => n.id === id))
+    const index = nodeById.value
+    const ids = selectedRuleIds.value.filter(id => index.has(id))
     if (ids.length === 0) return false
     await api.checkSelectedNodesHealth(ids)
     return true
@@ -280,6 +296,14 @@ export const useRulesStore = defineStore('rules', () => {
     else next.add(id)
     selectedIds.value = next
     lastSelectedId.value = id
+  }
+
+  // 取消选中单个节点（Set 必须整体替换才有响应性）
+  function deselect(id) {
+    if (!selectedIds.value.has(id)) return
+    const next = new Set(selectedIds.value)
+    next.delete(id)
+    selectedIds.value = next
   }
 
   function selectAll(checked) {
@@ -348,16 +372,17 @@ export const useRulesStore = defineStore('rules', () => {
 
   return {
     // State
-    rules, loadBalancers, chainProxies,
+    rules, loadBalancers, chainProxies, sessionRelays,
     selectedIds, statusFilter, searchKeyword,
     groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
+    allNodes, nodeById,
     filteredRules, selectedRuleIds, runningCount, totalCount, ungroupedCount, groupCounts,
     // Actions
     loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
-    updateRuleInList, toggleSelect, selectAll, handleRowSelect, setSort,
+    updateRuleInList, toggleSelect, selectAll, deselect, handleRowSelect, setSort,
     copySelected, pasteNodes,
     applyTrafficUpdate, applyRelayStats, applyHealthCheckResult,
     checkSelectedHealth, checkAllHealth, resetTraffic,

@@ -1,7 +1,24 @@
 <template>
-  <div class="node-list">
+  <div class="node-list" ref="scroller" @scroll.passive="onScroll">
     <div v-if="rulesStore.loading" class="loading-overlay">
       <div class="spinner"></div>
+    </div>
+
+    <!-- 列显示设置：点表头的 ☰ 打开，点空白处关闭 -->
+    <div v-if="showColumnMenu" class="col-menu-mask" @click="showColumnMenu = false"></div>
+    <div v-if="showColumnMenu" class="col-menu" :style="columnMenuStyle" @click.stop>
+      <div class="col-menu-header">
+        <span>显示列</span>
+        <div class="col-menu-links">
+          <button class="btn-link" @click="cols.setAll(true)">全选</button>
+          <button class="btn-link" @click="cols.reset()">恢复默认</button>
+        </div>
+      </div>
+      <label v-for="c in NODE_COLUMNS" :key="c.key" class="col-menu-item">
+        <input type="checkbox" :checked="cols.isVisible(c.key)" @change="cols.toggle(c.key)" />
+        {{ c.label }}
+      </label>
+      <div class="col-menu-hint">勾选框和操作列固定显示</div>
     </div>
 
     <table class="rules-table" :class="{ 'shift-pressed': shiftPressed }">
@@ -10,42 +27,50 @@
           <th class="col-check">
             <input type="checkbox" :checked="allSelected" @change="rulesStore.selectAll($event.target.checked)" />
           </th>
-          <th class="col-alias">别名</th>
-          <th class="col-protocol">协议</th>
-          <th class="col-server">服务器地址</th>
-          <th class="col-sport">服务器端口</th>
-          <th class="col-lport">本地端口</th>
-          <th class="col-health sortable" @click="rulesStore.setSort('healthLatency')">
+          <th v-if="cols.isVisible('alias')" class="col-alias">别名</th>
+          <th v-if="cols.isVisible('group')" class="col-group">所属分组</th>
+          <th v-if="cols.isVisible('protocol')" class="col-protocol">协议</th>
+          <th v-if="cols.isVisible('server')" class="col-server">服务器地址</th>
+          <th v-if="cols.isVisible('sport')" class="col-sport">服务器端口</th>
+          <th v-if="cols.isVisible('lport')" class="col-lport">本地端口</th>
+          <th v-if="cols.isVisible('health')" class="col-health sortable" @click="rulesStore.setSort('healthLatency')">
             健康
             <span v-if="rulesStore.sortColumn === 'healthLatency'" class="sort-arrow">
               {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </th>
-          <th class="col-latency sortable" @click="rulesStore.setSort('latency')">
+          <th v-if="cols.isVisible('latency')" class="col-latency sortable" @click="rulesStore.setSort('latency')">
             延迟
             <span v-if="rulesStore.sortColumn === 'latency'" class="sort-arrow">
               {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </th>
-          <th class="col-speed sortable" @click="rulesStore.setSort('downloadSpeed')">
+          <th v-if="cols.isVisible('speed')" class="col-speed sortable" @click="rulesStore.setSort('downloadSpeed')">
             速度
             <span v-if="rulesStore.sortColumn === 'downloadSpeed'" class="sort-arrow">
               {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
             </span>
           </th>
-          <th class="col-traffic">实时流量</th>
-          <th class="col-traffic-total">今日/累计</th>
-          <th class="col-ip">真实IP</th>
-          <th class="col-status">状态</th>
-          <th class="col-actions">操作</th>
+          <th v-if="cols.isVisible('traffic')" class="col-traffic">实时流量</th>
+          <th v-if="cols.isVisible('trafficTotal')" class="col-traffic-total">今日/累计</th>
+          <th v-if="cols.isVisible('ip')" class="col-ip">真实IP</th>
+          <th v-if="cols.isVisible('status')" class="col-status">状态</th>
+          <th class="col-actions">
+            操作
+            <!-- 列设置入口放在表头最右侧，靠近它要控制的对象 -->
+            <button class="col-config-btn" title="显示/隐藏列" @click.stop="openColumnMenu">☰</button>
+          </th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="rulesStore.filteredRules.length === 0">
-          <td colspan="14" class="empty-row">暂无节点数据</td>
+          <td :colspan="cols.visibleCount" class="empty-row">暂无节点数据</td>
         </tr>
+        <!-- 虚拟滚动：只渲染可视区域内的行，用上下两个空行撑出滚动高度。
+             订阅动辄上万节点，全量渲染会让滚动、点击都卡死。 -->
+        <tr v-if="topPadding > 0" class="v-spacer" :style="{ height: topPadding + 'px' }"></tr>
         <tr
-          v-for="rule in rulesStore.filteredRules"
+          v-for="rule in visibleRules"
           :key="rule.id"
           :class="[rowClass(rule), { 'row-selected': rulesStore.selectedIds.has(rule.id) }]"
           @click="onRowClick(rule.id, $event)"
@@ -57,59 +82,63 @@
               @change="rulesStore.toggleSelect(rule.id)"
             />
           </td>
-          <td class="col-alias" :title="rule.alias">
+          <td v-if="cols.isVisible('alias')" class="col-alias" :title="rule.alias">
             <span v-if="rule._nodeType === 'lb'" class="type-badge badge-lb" title="故障转移">转</span>
             <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain" title="链式代理">链</span>
             <span v-if="rule._nodeType === 'relay'" class="type-badge badge-relay" title="动态会话代理">会</span>
             {{ rule.alias || '-' }}
           </td>
-          <td class="col-protocol">
+          <td v-if="cols.isVisible('group')" class="col-group" :title="groupTitle(rule)">
+            <span v-if="rule.groupName" class="group-cell">{{ rule.groupName }}</span>
+            <span v-else class="no-data">未分组</span>
+          </td>
+          <td v-if="cols.isVisible('protocol')" class="col-protocol">
             <span :class="['protocol-badge', `protocol-${rule.protocol}`]">{{ protocolLabel(rule.protocol) }}</span>
           </td>
           <!-- 普通节点显示服务器信息，LB/链显示节点数 -->
-          <td class="col-server" :title="rule.serverAddr">
+          <td v-if="cols.isVisible('server')" class="col-server" :title="rule.serverAddr">
             <template v-if="rule._nodeType === 'rule'">{{ rule.serverAddr || '-' }}</template>
             <template v-else-if="rule._nodeType === 'lb'">{{ (rule.nodeIds || []).length }} 个子节点</template>
             <template v-else-if="rule._nodeType === 'relay'">{{ rule.upstreamAddr || '-' }}</template>
             <template v-else>{{ (rule.chainNodes || []).length }} 节点链</template>
           </td>
-          <td class="col-sport">
+          <td v-if="cols.isVisible('sport')" class="col-sport">
             <template v-if="rule._nodeType === 'rule'">{{ rule.serverPort || '-' }}</template>
             <template v-else>-</template>
           </td>
-          <td class="col-lport">{{ rule.localPort || '-' }}</td>
-          <td class="col-health">
+          <td v-if="cols.isVisible('lport')" class="col-lport">{{ rule.localPort || '-' }}</td>
+          <td v-if="cols.isVisible('health')" class="col-health">
             <span
               :class="['health-badge', `health-${rule.healthStatus || 'unknown'}`]"
               :title="healthTitle(rule)"
             >{{ healthLabel(rule) }}</span>
           </td>
-          <td class="col-latency">
+          <td v-if="cols.isVisible('latency')" class="col-latency">
             <span v-if="rule.testStatus === 'testing'" class="testing">测速中...</span>
             <span v-else-if="rule.latency > 0" :class="latencyClass(rule.latency)">
               {{ rule.latency }}ms
             </span>
             <span v-else class="no-data">-</span>
           </td>
-          <td class="col-speed">
+          <td v-if="cols.isVisible('speed')" class="col-speed">
             <span v-if="rule.downloadSpeed > 0">{{ rule.downloadSpeed.toFixed(2) }} MB/s</span>
             <span v-else class="no-data">-</span>
           </td>
-          <td class="col-traffic">
+          <td v-if="cols.isVisible('traffic')" class="col-traffic">
             <template v-if="rule.enabled && trafficOf(rule)">
               <span class="traffic-speed">↑{{ formatSpeed(trafficOf(rule).upSpeed) }} ↓{{ formatSpeed(trafficOf(rule).downSpeed) }}</span>
             </template>
             <span v-else class="no-data">-</span>
           </td>
-          <td class="col-traffic-total" :title="trafficTitle(rule)">
+          <td v-if="cols.isVisible('trafficTotal')" class="col-traffic-total" :title="trafficTitle(rule)">
             <span class="traffic-total">{{ formatBytes(todayTotal(rule)) }} / {{ formatBytes(allTotal(rule)) }}</span>
           </td>
-          <td class="col-ip" :title="rule.lastError || relayTitle(rule) || rule.realIp">
+          <td v-if="cols.isVisible('ip')" class="col-ip" :title="rule.lastError || relayTitle(rule) || rule.realIp">
             <span v-if="rule.lastError" class="ip-error">{{ rule.lastError }}</span>
             <span v-else-if="rule._nodeType === 'relay'">{{ relaySummary(rule) }}</span>
             <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
-          <td class="col-status">
+          <td v-if="cols.isVisible('status')" class="col-status">
             <span :class="['status-dot', statusClass(rule)]" :title="rule.lastError || ''"></span>
           </td>
           <td class="col-actions" @click.stop>
@@ -136,28 +165,111 @@
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
+        <tr v-if="bottomPadding > 0" class="v-spacer" :style="{ height: bottomPadding + 'px' }"></tr>
       </tbody>
     </table>
 
     <!-- 统计信息 -->
     <div class="table-footer">
       <span>总计 {{ rulesStore.totalCount }} 个节点，运行中 {{ rulesStore.runningCount }} 个</span>
+      <span v-if="rulesStore.filteredRules.length !== rulesStore.totalCount">
+        ，当前筛选 {{ rulesStore.filteredRules.length }} 个
+      </span>
+      <!-- 有列被隐藏时明确提示，避免用户以为数据丢了 -->
+      <button v-if="cols.hiddenCount > 0" class="btn-link footer-link" @click.stop="openColumnMenu">
+        已隐藏 {{ cols.hiddenCount }} 列
+      </button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRulesStore } from '../stores/rules.js'
+import { useColumnsStore, NODE_COLUMNS } from '../stores/columns.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
 const emit = defineEmits(['editRule', 'editLB', 'editChain', 'editRelay'])
 
 const rulesStore = useRulesStore()
+const cols = useColumnsStore()
 const appStore = useAppStore()
+
+// ===== 列显示菜单 =====
+// 菜单用 fixed 定位，打开时按触发按钮的位置算一次坐标
+const showColumnMenu = ref(false)
+const columnMenuStyle = ref({})
+
+function openColumnMenu(event) {
+  if (showColumnMenu.value) {
+    showColumnMenu.value = false
+    return
+  }
+  const rect = event.currentTarget.getBoundingClientRect()
+  // 贴着按钮右对齐；靠近视口右边时收一点，避免菜单被裁掉
+  const right = Math.max(8, window.innerWidth - rect.right - 4)
+  // 下方放不下（例如从底栏打开）就向上弹，否则菜单会掉出视口
+  const estimatedHeight = Math.min(NODE_COLUMNS.length * 27 + 70, window.innerHeight * 0.7)
+  const style = { right: `${right}px` }
+  if (rect.bottom + estimatedHeight + 8 > window.innerHeight) {
+    style.bottom = `${window.innerHeight - rect.top + 4}px`
+  } else {
+    style.top = `${rect.bottom + 4}px`
+  }
+  columnMenuStyle.value = style
+  showColumnMenu.value = true
+}
+// Set 本身的 add/delete 不是响应式的，必须整体替换才能触发重渲染，
+// 否则"启动中..."的按钮状态不会更新
 const startingIds = ref(new Set())
 const shiftPressed = ref(false) // 按住 Shift 时临时禁用文本选择
+
+// ===== 虚拟滚动 =====
+// 行高与 CSS 中的 padding + 字号保持一致；变动时同步修改 ROW_HEIGHT
+const ROW_HEIGHT = 31
+const OVERSCAN = 8 // 视口上下各多渲染几行，减少快速滚动时的白屏
+const scroller = ref(null)
+const scrollTop = ref(0)
+const viewportHeight = ref(600)
+
+function onScroll() {
+  const el = scroller.value
+  if (el) scrollTop.value = el.scrollTop
+}
+
+function measureViewport() {
+  const el = scroller.value
+  if (el) viewportHeight.value = el.clientHeight || 600
+}
+
+let resizeObserver = null
+
+const startIndex = computed(() => {
+  const first = Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN
+  return Math.max(0, first)
+})
+
+const endIndex = computed(() => {
+  const count = Math.ceil(viewportHeight.value / ROW_HEIGHT) + OVERSCAN * 2
+  return Math.min(rulesStore.filteredRules.length, startIndex.value + count)
+})
+
+const visibleRules = computed(() => rulesStore.filteredRules.slice(startIndex.value, endIndex.value))
+
+const topPadding = computed(() => startIndex.value * ROW_HEIGHT)
+const bottomPadding = computed(() =>
+  Math.max(0, (rulesStore.filteredRules.length - endIndex.value) * ROW_HEIGHT)
+)
+
+// 过滤/搜索导致列表变短时，滚动位置可能超出新内容高度，回到顶部避免空白
+watch(() => rulesStore.filteredRules.length, (len) => {
+  const maxTop = Math.max(0, len * ROW_HEIGHT - viewportHeight.value)
+  if (scrollTop.value > maxTop) {
+    scrollTop.value = 0
+    nextTick(() => { if (scroller.value) scroller.value.scrollTop = 0 })
+  }
+})
 
 // 快捷键：Ctrl+C 复制 / Ctrl+V 粘贴
 function handleKeydown(e) {
@@ -188,10 +300,14 @@ function handleKeydown(e) {
     const count = rulesStore.selectedRuleIds.length
     if (count === 0) return
     e.preventDefault()
-    if (!confirm(`确定要删除选中的 ${count} 条规则吗?`)) return
-    rulesStore.deleteSelectedRules()
-      .then(() => appStore.showToast(`已删除 ${count} 条规则`, 'success'))
-      .catch(error => appStore.showToast(`删除失败: ${error}`, 'error'))
+    appStore.confirmDialog(`确定要删除选中的 ${count} 条规则吗？`, {
+      title: '删除规则', confirmText: '删除',
+    }).then(ok => {
+      if (!ok) return
+      return rulesStore.deleteSelectedRules()
+        .then(() => appStore.showToast(`已删除 ${count} 条规则`, 'success'))
+        .catch(error => appStore.showToast(`删除失败: ${error}`, 'error'))
+    })
   }
 }
 
@@ -205,11 +321,18 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('keyup', handleKeyup)
   window.addEventListener('blur', resetShift)
+
+  measureViewport()
+  if (scroller.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(measureViewport)
+    resizeObserver.observe(scroller.value)
+  }
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('keyup', handleKeyup)
   window.removeEventListener('blur', resetShift)
+  if (resizeObserver) resizeObserver.disconnect()
 })
 
 const allSelected = computed(() => {
@@ -227,6 +350,10 @@ function onRowClick(id, event) {
     if (sel) sel.removeAllRanges()
   }
   rulesStore.handleRowSelect(id, { shift, ctrl })
+}
+
+function groupTitle(rule) {
+  return rule.groupName || '未分组'
 }
 
 function rowClass(rule) {
@@ -360,8 +487,17 @@ function statusClass(rule) {
   return 'status-stopped'
 }
 
+// Set 需整体替换才会触发视图更新
+function markStarting(id, starting) {
+  const next = new Set(startingIds.value)
+  if (starting) next.add(id)
+  else next.delete(id)
+  startingIds.value = next
+}
+
 async function handleStart(rule) {
-  startingIds.value.add(rule.id)
+  if (startingIds.value.has(rule.id)) return
+  markStarting(rule.id, true)
   try {
     if (rule._nodeType === 'lb') {
       await api.startLoadBalancer(rule.id)
@@ -376,7 +512,7 @@ async function handleStart(rule) {
   } catch (e) {
     appStore.showToast(`启动失败: ${e}`, 'error')
   } finally {
-    startingIds.value.delete(rule.id)
+    markStarting(rule.id, false)
   }
 }
 
@@ -421,7 +557,10 @@ const typeLabels = { lb: '故障转移', chain: '链式代理', relay: '动态�
 
 async function handleDelete(rule) {
   const typeLabel = typeLabels[rule._nodeType] || '规则'
-  if (!confirm(`确定要删除${typeLabel}「${rule.alias}」吗?`)) return
+  const ok = await appStore.confirmDialog(`确定要删除${typeLabel}「${rule.alias}」吗？`, {
+    title: `删除${typeLabel}`, confirmText: '删除',
+  })
+  if (!ok) return
   try {
     if (rule._nodeType === 'lb') {
       await api.deleteLoadBalancer(rule.id)
@@ -432,7 +571,7 @@ async function handleDelete(rule) {
     } else {
       await api.deleteRule(rule.id)
     }
-    rulesStore.selectedIds.delete(rule.id)
+    rulesStore.deselect(rule.id)
     await rulesStore.loadRules()
   } catch (e) {
     appStore.showToast(`删除失败: ${e}`, 'error')
@@ -472,6 +611,8 @@ async function handleDelete(rule) {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  /* 固定布局：虚拟滚动下每次只渲染部分行，自动布局会让列宽随可视内容跳动 */
+  table-layout: fixed;
 }
 
 .rules-table th {
@@ -496,6 +637,12 @@ async function handleDelete(rule) {
   text-overflow: ellipsis;
 }
 
+/* 行高必须固定且与 JS 中的 ROW_HEIGHT 一致，否则虚拟滚动的位移会算错 */
+.rules-table tbody tr { height: 31px; }
+/* 撑开滚动高度的占位行，不参与样式 */
+.rules-table tbody tr.v-spacer { height: auto; }
+.rules-table tbody tr.v-spacer:hover { background: transparent; }
+
 .rules-table tr:hover { background: var(--bg-hover); }
 
 .rules-table tbody tr { cursor: default; }
@@ -512,10 +659,13 @@ async function handleDelete(rule) {
 .row-selected,
 .rules-table tbody tr.row-selected:hover { background: var(--primary-light) !important; }
 
+/* table-layout: fixed 只认 width，别名/地址/IP 列改用固定宽度 + 省略号 */
 .col-check { width: 36px; text-align: center; }
-.col-alias { max-width: 120px; }
+.col-alias { width: 120px; }
+.col-group { width: 100px; }
 .col-protocol { width: 90px; }
-.col-server { max-width: 140px; }
+.group-cell { color: var(--text-secondary); }
+.col-server { width: 140px; }
 .col-sport { width: 70px; }
 .col-lport { width: 70px; }
 .col-health { width: 80px; }
@@ -523,7 +673,7 @@ async function handleDelete(rule) {
 .col-speed { width: 90px; }
 .col-traffic { width: 130px; }
 .col-traffic-total { width: 110px; }
-.col-ip { max-width: 100px; }
+.col-ip { width: 100px; }
 .ip-error { color: #e74c3c; font-size: 11px; }
 .col-status { width: 40px; text-align: center; }
 .col-actions { width: 230px; }
@@ -608,7 +758,6 @@ async function handleDelete(rule) {
 
 .testing { color: #f39c12; font-style: italic; }
 .no-data { color: var(--text-secondary); }
-
 .btn-action-sm {
   padding: 3px 8px;
   border: 1px solid var(--border-color);
@@ -626,10 +775,85 @@ async function handleDelete(rule) {
 .btn-stop { color: #e74c3c; border-color: #e74c3c; }
 .btn-stop:hover { background: #e74c3c; color: #fff; }
 .btn-test { color: #3498db; border-color: #3498db; }
-.btn-del { color: #95a5a6; }
-.btn-del:hover { color: #e74c3c; border-color: #e74c3c; }
+/* 删除按钮直接用警示色：原来是灰色、只在 hover 时变红，看起来像被禁用了 */
+.btn-del { color: #e74c3c; border-color: rgba(231, 76, 60, 0.5); }
+.btn-del:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
+
+/* ===== 列显示设置 ===== */
+.col-config-btn {
+  float: right;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.col-config-btn:hover { color: var(--primary-color); }
+
+/* 遮罩负责"点外面关闭"，z-index 低于菜单本身 */
+.col-menu-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 50;
+}
+/* 用 fixed 而不是 absolute：容器本身是滚动区，absolute 会让菜单跟着内容滚走。
+   位置由打开时按钮的实际坐标算出（见 openColumnMenu）。 */
+.col-menu {
+  position: fixed;
+  z-index: 51;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  padding: 8px 0;
+  min-width: 170px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.col-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.col-menu-links { display: flex; gap: 8px; }
+.col-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.col-menu-item:hover { background: var(--bg-hover); }
+.col-menu-hint {
+  padding: 6px 12px 2px;
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.btn-link {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--primary-color);
+  font-size: 11px;
+}
+.btn-link:hover { text-decoration: underline; }
+.footer-link { margin-left: 10px; }
 
 .table-footer {
+  position: sticky;
+  bottom: 0;
   padding: 8px 16px;
   font-size: 12px;
   color: var(--text-secondary);

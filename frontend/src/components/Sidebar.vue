@@ -122,24 +122,27 @@ async function handleAddGroup() {
 
 async function handleDeleteGroup(group) {
   const count = rulesStore.groupCounts[group.id] || 0
-  const isSub = group.source === 'subscription'
-  const what = isSub ? '订阅分组' : '分组'
-  const msg = count > 0
-    ? `确定要删除${what}「${group.name}」吗？\n\n这将停止并删除该分组内的 ${count} 个节点，且无法恢复。`
-    : `确定要删除${what}「${group.name}」吗？`
-  if (!confirm(msg)) return
+  // 一个分组可能挂着多个订阅，删分组要把它们全部删掉
+  const subs = groupsStore.subscriptionsByGroup[group.id] || []
+  const what = subs.length > 0 ? '订阅分组' : '分组'
+
+  const lines = [`确定要删除${what}「${group.name}」吗？`]
+  if (subs.length > 1) {
+    lines.push(`\n该分组下有 ${subs.length} 个订阅（${subs.map(s => s.name).join('、')}），将一并删除。`)
+  }
+  if (count > 0) {
+    lines.push(`\n这将停止并删除该分组内的 ${count} 个节点，且无法恢复。`)
+  }
+  const ok = await appStore.confirmDialog(lines.join(''), { title: `删除${what}`, confirmText: '删除' })
+  if (!ok) return
 
   try {
-    if (isSub) {
-      // 订阅分组：找到对应订阅并删除（会连带删订阅、节点、分组）
-      const sub = groupsStore.subscriptions.find(s => s.groupId === group.id)
-      if (sub) {
-        await groupsStore.deleteSubscription(sub.id)
-      } else {
-        // 找不到订阅记录（异常情况），退回按普通分组删除
-        await groupsStore.deleteGroup(group.id)
-      }
-    } else {
+    // 逐个删订阅（每次只删自己的节点），最后再清掉可能残留的分组
+    for (const sub of subs) {
+      await groupsStore.deleteSubscription(sub.id)
+    }
+    // 无订阅的分组，或删完订阅后分组仍在（还有手动添加的节点）
+    if (groupsStore.groups.some(g => g.id === group.id)) {
       await groupsStore.deleteGroup(group.id)
     }
     // 若当前正筛选被删分组，切回全部
@@ -157,7 +160,7 @@ async function startGroup(groupId) {
     await rulesStore.loadRules()
     appStore.showToast('已启动分组中的所有规则', 'success')
   } catch (e) {
-    appStore.showToast(`启动失败: ${e}`, 'error')
+    appStore.showToast(`启动失败: ${e}`, 'error', 5000)
   }
 }
 
@@ -167,7 +170,7 @@ async function stopGroup(groupId) {
     await rulesStore.loadRules()
     appStore.showToast('已停止分组中的所有规则', 'success')
   } catch (e) {
-    appStore.showToast(`停止失败: ${e}`, 'error')
+    appStore.showToast(`停止失败: ${e}`, 'error', 5000)
   }
 }
 </script>
@@ -235,6 +238,7 @@ async function stopGroup(groupId) {
   border-radius: 3px;
   background: var(--primary-light);
   color: var(--primary-color);
+  white-space: nowrap;
 }
 
 .group-count {
@@ -242,13 +246,18 @@ async function stopGroup(groupId) {
   color: var(--text-secondary);
 }
 
+/* 操作按钮默认隐藏、hover 时显示。
+   但只靠 hover 在触摸板/触屏上很难触达（表现为"点了没反应"），
+   因此当前选中的分组也常驻显示。 */
 .group-actions {
   display: none;
   gap: 2px;
 }
 
-.group-item:hover .group-actions { display: flex; }
-.group-item:hover .group-count { display: none; }
+.group-item:hover .group-actions,
+.group-item.active .group-actions { display: flex; }
+.group-item:hover .group-count,
+.group-item.active .group-count { display: none; }
 
 .btn-icon-small {
   padding: 2px 6px;

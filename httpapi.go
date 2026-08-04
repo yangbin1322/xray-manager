@@ -59,8 +59,8 @@ type httpAPIService interface {
 	StartAllRulesInGroup(string) error
 	StopAllRulesInGroup(string) error
 	GetSubscriptions() []models.Subscription
-	AddSubscription(string, string, bool, int, string, string) error
-	EditSubscription(string, string, string, bool, int, string, string) error
+	AddSubscription(string, string, bool, int, string, string, string) error
+	EditSubscription(string, string, string, bool, int, string, string, string) error
 	UpdateSubscriptionByID(string) error
 	DeleteSubscription(string) error
 	GetLoadBalancers() []models.LoadBalanceNode
@@ -102,6 +102,9 @@ type subscriptionRequest struct {
 	UpdateInterval int    `json:"updateInterval"`
 	UpdateMode     string `json:"updateMode"`
 	UpdateProxyID  string `json:"updateProxyId"`
+	// GroupID 目标分组。新增时为空表示按订阅名新建分组；
+	// 编辑时为空表示保持当前分组。多个订阅可指定同一分组，把节点汇入同一处管理。
+	GroupID string `json:"groupId"`
 }
 
 type localProxy struct {
@@ -712,7 +715,7 @@ func (a *httpAPI) createSubscription(w http.ResponseWriter, r *http.Request) {
 	if !decodeAPI(w, r, &request) || !validateSubscription(w, &request) {
 		return
 	}
-	if err := a.service.AddSubscription(request.Name, request.URL, request.AutoUpdate, request.UpdateInterval, request.UpdateMode, request.UpdateProxyID); err != nil {
+	if err := a.service.AddSubscription(request.Name, request.URL, request.AutoUpdate, request.UpdateInterval, request.UpdateMode, request.UpdateProxyID, request.GroupID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -723,7 +726,7 @@ func (a *httpAPI) updateSubscription(w http.ResponseWriter, r *http.Request) {
 	if !decodeAPI(w, r, &request) || !validateSubscription(w, &request) {
 		return
 	}
-	if err := a.service.EditSubscription(r.PathValue("id"), request.Name, request.URL, request.AutoUpdate, request.UpdateInterval, request.UpdateMode, request.UpdateProxyID); err != nil {
+	if err := a.service.EditSubscription(r.PathValue("id"), request.Name, request.URL, request.AutoUpdate, request.UpdateInterval, request.UpdateMode, request.UpdateProxyID, request.GroupID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
