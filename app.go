@@ -439,6 +439,37 @@ func generateUniqueRuleIDs(existingRules []models.ProxyRule, n int) []string {
 	return ids
 }
 
+// ruleIDPool 预生成一批唯一规则 ID，循环里逐个取用。
+// 池子取空时退回逐个生成（导入数量超出预估的兜底路径）。
+type ruleIDPool struct{ ids []string }
+
+func newRuleIDPool(existing []models.ProxyRule, n int) *ruleIDPool {
+	return &ruleIDPool{ids: generateUniqueRuleIDs(existing, n)}
+}
+
+func (p *ruleIDPool) next(existing []models.ProxyRule) string {
+	if len(p.ids) == 0 {
+		return generateUniqueRuleID(existing)
+	}
+	id := p.ids[0]
+	p.ids = p.ids[1:]
+	return id
+}
+
+// portPool 预分配一批本地端口，循环里逐个取用。取空时返回 0（表示未分配端口）。
+type portPool struct{ ports []int }
+
+func newPortPool(ports []int) *portPool { return &portPool{ports: ports} }
+
+func (p *portPool) next() int {
+	if len(p.ports) == 0 {
+		return 0
+	}
+	port := p.ports[0]
+	p.ports = p.ports[1:]
+	return port
+}
+
 // usedLocalPorts 收集配置中所有节点（普通/故障转移/链式代理）已占用的本地端口。
 // 需已持有 a.mu 锁。
 func (a *MyService) usedLocalPorts() map[int]bool {
@@ -1821,6 +1852,14 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	}
 
 	// === 导入规则（含重复检测和校验） ===
+	//
+	// 逐个分配 ID 和端口在导入几十个节点时就会明显卡顿：generateUniqueRuleID
+	// 每次全表扫描，allocateLocalPort 每次重扫端口段并往全局注册表写一次文件。
+	// 这里按导入规模一次性预分配，循环里只取用。
+	importRuleIDs := newRuleIDPool(a.config.Rules, len(importedRules))
+	importPorts := newPortPool(a.allocateLocalPorts(len(importedRules)))
+	usedPorts := a.usedLocalPorts()
+
 	ruleIDMap := make(map[string]string) // 旧规则ID -> 新规则ID（用于修复链式代理/故障转移的成员引用）
 	for _, rule := range importedRules {
 		// 校验字段合法性
@@ -1862,15 +1901,19 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 
 		// 重置运行时状态
 		oldRuleID := rule.ID
-		rule.ID = generateUniqueRuleID(a.config.Rules)
+		rule.ID = importRuleIDs.next(a.config.Rules)
 		ruleIDMap[oldRuleID] = rule.ID
 		rule.Enabled = false
 		rule.ProcessID = 0
 		rule.RealIP = ""
 
-		// 分配可用端口：端口无效、已被其他节点占用、或系统不可用时重新分配
-		if rule.LocalPort <= 0 || a.usedLocalPorts()[rule.LocalPort] || !utils.CheckPortAvailable(rule.LocalPort) {
-			rule.LocalPort = a.allocateLocalPort()
+		// 分配可用端口：端口无效、已被其他节点占用、或系统不可用时重新分配。
+		// usedPorts 复用同一份快照并随分配更新，避免每个节点都重建整表（O(n²)）。
+		if rule.LocalPort <= 0 || usedPorts[rule.LocalPort] || !utils.CheckPortAvailable(rule.LocalPort) {
+			rule.LocalPort = importPorts.next()
+		}
+		if rule.LocalPort > 0 {
+			usedPorts[rule.LocalPort] = true
 		}
 
 		a.config.Rules = append(a.config.Rules, rule)
@@ -3220,21 +3263,39 @@ func (a *MyService) ImportShareLinks(text, groupID, newGroupName string) (*model
 		}
 	}
 
+	// 先过一遍校验，挑出真正要导入的节点
+	valid := make([]int, 0, len(rules))
 	for i := range rules {
-		// 校验
 		if err := rules[i].Validate(); err != nil {
 			result.FailCount++
 			result.Errors = append(result.Errors, fmt.Sprintf("校验失败 [%s]: %v", rules[i].Alias, err))
 			continue
 		}
+		valid = append(valid, i)
+	}
 
-		rules[i].ID = generateUniqueRuleID(a.config.Rules)
+	// ID 和端口都批量分配。
+	// 逐个分配时，generateUniqueRuleID 每次全表扫描（O(n²)），
+	// allocateLocalPort 每次都重建已用端口表、重新扫端口段，并且要抢文件锁
+	// 往全局端口注册表写一次——实测 50 个节点就要 773ms，注册表条目多时更久，
+	// 而这一切都在持有全局锁的状态下进行，界面表现为"卡住"。
+	ids := generateUniqueRuleIDs(a.config.Rules, len(valid))
+	ports := a.allocateLocalPorts(len(valid))
+	if len(ports) < len(valid) {
+		a.log(a.portShortageMessage(len(valid), len(ports)))
+	}
+
+	for n, i := range valid {
+		rules[i].ID = ids[n]
 		rules[i].Enabled = false
 		rules[i].ProcessID = 0
 		rules[i].Source = "manual"
 		rules[i].GroupID = groupID
 		rules[i].GroupName = groupName
-		rules[i].LocalPort = a.allocateLocalPort()
+		rules[i].LocalPort = 0
+		if n < len(ports) {
+			rules[i].LocalPort = ports[n]
+		}
 		a.config.Rules = append(a.config.Rules, rules[i])
 		result.SuccessCount++
 	}

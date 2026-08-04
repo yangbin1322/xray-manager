@@ -100,8 +100,13 @@ func (p *ShareLinkParser) ParseLink(link string) (models.ProxyRule, error) {
 		return p.ParseHTTP(link)
 	} else if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") {
 		return p.ParseSOCKS(link)
+	} else if strings.HasPrefix(link, "hysteria://") {
+		// Hysteria v1 与 v2 是两套协议（认证方式、握手都不同），
+		// 内置的 sing-box 出站只实现了 hysteria2，这里给出明确原因而不是笼统报错
+		return models.ProxyRule{}, fmt.Errorf("暂不支持 Hysteria v1（仅支持 hysteria2://）")
 	}
 
+	// 调用方（ParseMultipleLinks）已在错误信息里带上截断后的链接，此处不再重复
 	return models.ProxyRule{}, fmt.Errorf("不支持的链接格式")
 }
 
