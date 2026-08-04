@@ -90,6 +90,13 @@ func NewManager(logFunc func(string), onUpdate func(subID string, rules []models
 	}
 }
 
+// SetUserAgent 设置拉取订阅使用的 User-Agent，传空恢复默认。
+func (m *Manager) SetUserAgent(ua string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.parser.SetUserAgent(ua)
+}
+
 // AddSubscription 添加订阅
 func (m *Manager) AddSubscription(sub *models.Subscription) ([]models.ProxyRule, error) {
 	m.log(fmt.Sprintf("[订阅] 添加订阅: %s", sub.Name))

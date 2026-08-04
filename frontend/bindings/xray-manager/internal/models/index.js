@@ -20,6 +20,7 @@ export {
     SessionRelay,
     SpeedTestConfig,
     Subscription,
+    SubscriptionConfig,
     TLSSettings,
     TrafficStats,
     UpdateConfig,

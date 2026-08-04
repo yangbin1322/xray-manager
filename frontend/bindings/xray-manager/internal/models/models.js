@@ -1932,6 +1932,42 @@ export class Subscription {
 }
 
 /**
+ * SubscriptionConfig 订阅拉取的全局配置。
+ * 
+ * 机场普遍按 User-Agent 返回不同格式：给 Shadowrocket / Clash 等客户端返回
+ * 完整节点列表，给未知 UA 则可能返回网页、精简列表甚至直接拒绝。
+ * 默认伪装成 Shadowrocket，兼容性最好。
+ */
+export class SubscriptionConfig {
+    /**
+     * Creates a new SubscriptionConfig instance.
+     * @param {Partial<SubscriptionConfig>} [$$source = {}] - The source object to create the SubscriptionConfig.
+     */
+    constructor($$source = {}) {
+        if (!("userAgent" in $$source)) {
+            /**
+             * 拉取订阅时使用的 User-Agent（空则用默认）
+             * @member
+             * @type {string}
+             */
+            this["userAgent"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SubscriptionConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SubscriptionConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SubscriptionConfig(/** @type {Partial<SubscriptionConfig>} */($$parsedSource));
+    }
+}
+
+/**
  * TLSSettings TLS配置
  */
 export class TLSSettings {

@@ -307,6 +307,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 应用测速配置
 		a.speedTestManager.Configure(a.config.SpeedTest.URL, a.config.SpeedTest.Headers)
 
+		// 应用订阅拉取配置（空值时解析器内部回退到默认 UA）
+		a.subscriptionManager.SetUserAgent(a.config.Subscription.UserAgent)
+
 		// 为所有未启动节点保留本地端口，避免多个客户端实例分配到同一端口。
 		a.reserveStoppedPorts()
 	}
@@ -4341,6 +4344,42 @@ func (a *MyService) SetSpeedTestConfig(cfg models.SpeedTestConfig) error {
 	// 应用到测速器（空值时测速器内部回退到默认）
 	a.speedTestManager.Configure(cfg.URL, cfg.Headers)
 	a.log("[测速] 测速配置已更新")
+	return err
+}
+
+// GetSubscriptionConfig 获取订阅拉取配置。为空的字段填充默认值，便于前端展示当前生效值。
+func (a *MyService) GetSubscriptionConfig() models.SubscriptionConfig {
+	a.mu.RLock()
+	cfg := a.config.Subscription
+	a.mu.RUnlock()
+
+	if strings.TrimSpace(cfg.UserAgent) == "" {
+		cfg.UserAgent = subscription.DefaultUserAgent
+	}
+	return cfg
+}
+
+// GetDefaultSubscriptionConfig 获取默认订阅配置（供前端"恢复默认"使用）
+func (a *MyService) GetDefaultSubscriptionConfig() models.SubscriptionConfig {
+	return models.SubscriptionConfig{UserAgent: subscription.DefaultUserAgent}
+}
+
+// SetSubscriptionConfig 更新订阅拉取配置并立即生效
+func (a *MyService) SetSubscriptionConfig(cfg models.SubscriptionConfig) error {
+	cfg.UserAgent = strings.TrimSpace(cfg.UserAgent)
+
+	a.mu.Lock()
+	a.config.Subscription = cfg
+	err := a.saveConfig()
+	a.mu.Unlock()
+
+	// 空值时解析器内部回退到默认 UA
+	a.subscriptionManager.SetUserAgent(cfg.UserAgent)
+	if cfg.UserAgent == "" {
+		a.log("[订阅] User-Agent 已恢复默认")
+	} else {
+		a.log(fmt.Sprintf("[订阅] User-Agent 已更新: %s", cfg.UserAgent))
+	}
 	return err
 }
 

@@ -254,6 +254,21 @@ export async function setSpeedTestConfig(cfg) {
   return await MyService.SetSpeedTestConfig(cfg)
 }
 
+// ==================== 订阅拉取配置 ====================
+// 机场按 User-Agent 返回不同内容，默认伪装成 Shadowrocket
+
+export async function getSubscriptionConfig() {
+  return await MyService.GetSubscriptionConfig()
+}
+
+export async function getDefaultSubscriptionConfig() {
+  return await MyService.GetDefaultSubscriptionConfig()
+}
+
+export async function setSubscriptionConfig(cfg) {
+  return await MyService.SetSubscriptionConfig(cfg)
+}
+
 // ==================== HTTP API 配置 ====================
 
 export async function getHTTPAPIConfig() {

@@ -38,9 +38,32 @@ func parseClashBandwidth(v interface{}) int {
 // 每条日志都会推一个事件给前端，上万节点的订阅若逐条输出会拖垮界面。
 const maxParseErrorLogs = 20
 
+// DefaultUserAgent 拉取订阅时默认使用的 User-Agent。
+//
+// 伪装成 Shadowrocket：机场普遍按 UA 分发不同格式，给已知客户端返回完整的
+// 节点列表，给未知 UA（如 Go 默认的 "Go-http-client/1.1"）则可能返回网页、
+// 精简列表甚至直接拒绝。Shadowrocket 的兼容性最好，绝大多数机场都认。
+const DefaultUserAgent = "Shadowrocket/2850 CFNetwork/1490.0.4 Darwin/23.2.0 iPhone15,4"
+
 // Parser 订阅解析器
 type Parser struct {
 	logFunc func(string)
+
+	// customUA 自定义 User-Agent，为空时用 DefaultUserAgent
+	customUA string
+}
+
+// SetUserAgent 设置拉取订阅使用的 User-Agent，传空恢复默认。
+func (p *Parser) SetUserAgent(ua string) {
+	p.customUA = strings.TrimSpace(ua)
+}
+
+// userAgent 返回本次请求应使用的 User-Agent
+func (p *Parser) userAgent() string {
+	if p.customUA != "" {
+		return p.customUA
+	}
+	return DefaultUserAgent
 }
 
 // logSkipped 汇总输出被截断的解析失败条数
@@ -86,7 +109,15 @@ func (p *Parser) FetchAndParseWithProxy(subscriptionURL string, proxyURL string)
 		}
 	}
 
-	resp, err := client.Get(subscriptionURL)
+	req, err := http.NewRequest(http.MethodGet, subscriptionURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("构建订阅请求失败: %v", err)
+	}
+	// 机场按 User-Agent 返回不同内容，不带 UA 时 Go 默认发 "Go-http-client/1.1"，
+	// 很多机场会因此只返回网页或精简列表
+	req.Header.Set("User-Agent", p.userAgent())
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("下载订阅失败: %v", err)
 	}

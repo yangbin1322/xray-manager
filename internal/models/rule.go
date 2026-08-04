@@ -290,18 +290,28 @@ type H2Settings struct {
 
 // Config 配置文件结构
 type Config struct {
-	AutoStart      bool              `json:"autoStart"`      // 开机自启
-	Rules          []ProxyRule       `json:"rules"`          // 代理规则列表
-	Groups         []Group           `json:"groups"`         // 分组列表
-	Subscriptions  []Subscription    `json:"subscriptions"`  // 订阅列表
-	LoadBalancers  []LoadBalanceNode `json:"loadBalancers"`  // 故障转移节点列表
-	ChainProxies   []ChainProxy      `json:"chainProxies"`   // 链式代理列表
-	SessionRelays  []SessionRelay    `json:"sessionRelays"`  // 动态会话代理列表
-	HealthCheck    HealthCheckConfig `json:"healthCheck"`    // 健康检查配置
-	SpeedTest      SpeedTestConfig   `json:"speedTest"`      // 测速配置
-	HTTPAPI        HTTPAPIConfig     `json:"httpApi"`        // HTTP API 配置
-	PreProxyNodeID string            `json:"preProxyNodeId"` // 全局前置代理节点 ID（空表示未启用）
-	Update         UpdateConfig      `json:"update"`         // 检测更新 / 自动更新
+	AutoStart      bool               `json:"autoStart"`      // 开机自启
+	Rules          []ProxyRule        `json:"rules"`          // 代理规则列表
+	Groups         []Group            `json:"groups"`         // 分组列表
+	Subscriptions  []Subscription     `json:"subscriptions"`  // 订阅列表
+	LoadBalancers  []LoadBalanceNode  `json:"loadBalancers"`  // 故障转移节点列表
+	ChainProxies   []ChainProxy       `json:"chainProxies"`   // 链式代理列表
+	SessionRelays  []SessionRelay     `json:"sessionRelays"`  // 动态会话代理列表
+	HealthCheck    HealthCheckConfig  `json:"healthCheck"`    // 健康检查配置
+	SpeedTest      SpeedTestConfig    `json:"speedTest"`      // 测速配置
+	Subscription   SubscriptionConfig `json:"subscription"`   // 订阅拉取配置
+	HTTPAPI        HTTPAPIConfig      `json:"httpApi"`        // HTTP API 配置
+	PreProxyNodeID string             `json:"preProxyNodeId"` // 全局前置代理节点 ID（空表示未启用）
+	Update         UpdateConfig       `json:"update"`         // 检测更新 / 自动更新
+}
+
+// SubscriptionConfig 订阅拉取的全局配置。
+//
+// 机场普遍按 User-Agent 返回不同格式：给 Shadowrocket / Clash 等客户端返回
+// 完整节点列表，给未知 UA 则可能返回网页、精简列表甚至直接拒绝。
+// 默认伪装成 Shadowrocket，兼容性最好。
+type SubscriptionConfig struct {
+	UserAgent string `json:"userAgent"` // 拉取订阅时使用的 User-Agent（空则用默认）
 }
 
 // PreProxyConfig 全局前置代理配置（用于 API 回显）

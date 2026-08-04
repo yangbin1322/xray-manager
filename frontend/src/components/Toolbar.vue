@@ -142,6 +142,23 @@
             </div>
           </div>
 
+          <!-- 订阅 -->
+          <div v-show="activeTab === 'subscription'">
+            <div class="form-group-block">
+              <label>拉取订阅的 User-Agent：</label>
+              <input type="text" v-model="subCfg.userAgent" class="full-input"
+                :placeholder="defaultSubUA || '留空使用默认'" />
+            </div>
+            <div class="settings-hint">
+              <button class="btn-link" @click="restoreSubDefaults">恢复默认</button>
+            </div>
+            <ul class="settings-hint hint-list">
+              <li>机场普遍按 User-Agent 返回不同内容：识别为 Shadowrocket、Clash 等客户端时返回完整节点列表，未知 UA 可能只返回网页、精简列表甚至拒绝访问。</li>
+              <li>默认伪装成 Shadowrocket，兼容性最好。若某个机场拉取结果不全或失败，可改成该机场推荐的客户端 UA 再试。</li>
+              <li>留空即使用默认值。修改后对之后的「添加订阅」和「更新订阅」立即生效。</li>
+            </ul>
+          </div>
+
           <!-- HTTP API -->
           <div v-show="activeTab === 'httpApi'">
             <div class="form-group-line">
@@ -309,12 +326,15 @@ const activeTab = ref('health')
 const settingsTabs = [
   { key: 'health', label: '健康检查' },
   { key: 'speed', label: '测速' },
+  { key: 'subscription', label: '订阅' },
   { key: 'preProxy', label: '前置代理' },
   { key: 'update', label: '检查更新' },
   { key: 'httpApi', label: 'HTTP API' },
 ]
 const healthCfg = ref({ enabled: false, intervalSec: 60, timeoutSec: 5, latencyThreshold: 500 })
 const speedCfg = ref({ url: '', headers: {} })
+const subCfg = ref({ userAgent: '' })
+const defaultSubUA = ref('')
 const speedHeadersText = ref('')
 const httpApiCfg = ref({ configured: true, enabled: true, host: '127.0.0.1', port: 9090, authEnabled: false, token: '' })
 const preProxyNodeId = ref('')
@@ -408,6 +428,19 @@ async function openHealthSettings() {
     console.error('获取测速配置失败:', e)
   }
   try {
+    const [sub, defSub] = await Promise.all([
+      api.getSubscriptionConfig(),
+      api.getDefaultSubscriptionConfig(),
+    ])
+    defaultSubUA.value = (defSub && defSub.userAgent) || ''
+    // 后端会把空值填成默认值回显；与默认相同时输入框留空，
+    // 这样用户不改动就保存也不会把默认值固化进配置
+    const ua = (sub && sub.userAgent) || ''
+    subCfg.value = { userAgent: ua === defaultSubUA.value ? '' : ua }
+  } catch (e) {
+    console.error('获取订阅配置失败:', e)
+  }
+  try {
     const apiCfg = await api.getHTTPAPIConfig()
     if (apiCfg) httpApiCfg.value = apiCfg
   } catch (e) {
@@ -455,6 +488,13 @@ async function restoreSpeedDefaults() {
   }
 }
 
+// 清空即回到默认（后端对空值会回退到内置 UA），
+// 不把默认值写死进配置，将来默认值调整时用户能自动跟随
+function restoreSubDefaults() {
+  subCfg.value.userAgent = ''
+  appStore.showToast('已恢复默认 User-Agent，保存后生效', 'info')
+}
+
 async function saveSettings() {
   try {
     if (requiresAuth.value) httpApiCfg.value.authEnabled = true
@@ -463,6 +503,7 @@ async function saveSettings() {
       url: speedCfg.value.url.trim(),
       headers: textToHeaders(speedHeadersText.value),
     })
+    await api.setSubscriptionConfig({ userAgent: subCfg.value.userAgent.trim() })
     await api.setHTTPAPIConfig(httpApiCfg.value)
     await api.setPreProxy(preProxyNodeId.value || '')
     preProxySavedId.value = preProxyNodeId.value || ''

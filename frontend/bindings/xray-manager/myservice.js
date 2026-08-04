@@ -320,6 +320,16 @@ export function GetDefaultSpeedTestConfig() {
 }
 
 /**
+ * GetDefaultSubscriptionConfig 获取默认订阅配置（供前端"恢复默认"使用）
+ * @returns {$CancellablePromise<models$0.SubscriptionConfig>}
+ */
+export function GetDefaultSubscriptionConfig() {
+    return $Call.ByID(1184506777).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
+}
+
+/**
  * GetGroups 返回所有分组。
  * 
  * 直接读 a.config.Groups 而不是 groupManager 的缓存：config 是唯一的真相来源，
@@ -328,7 +338,7 @@ export function GetDefaultSpeedTestConfig() {
  */
 export function GetGroups() {
     return $Call.ByID(3885822517).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType8($result);
     }));
 }
 
@@ -338,7 +348,7 @@ export function GetGroups() {
  */
 export function GetHTTPAPIConfig() {
     return $Call.ByID(3207998301).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType9($result);
     }));
 }
 
@@ -348,7 +358,7 @@ export function GetHTTPAPIConfig() {
  */
 export function GetHealthCheckConfig() {
     return $Call.ByID(1768486251).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType10($result);
     }));
 }
 
@@ -358,7 +368,7 @@ export function GetHealthCheckConfig() {
  */
 export function GetLoadBalancers() {
     return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType12($result);
     }));
 }
 
@@ -378,7 +388,7 @@ export function GetLogs() {
  */
 export function GetPendingPortConflicts() {
     return $Call.ByID(3766029546).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -388,7 +398,7 @@ export function GetPendingPortConflicts() {
  */
 export function GetPreProxy() {
     return $Call.ByID(2036931690).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType15($result);
     }));
 }
 
@@ -398,7 +408,7 @@ export function GetPreProxy() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -408,7 +418,7 @@ export function GetRules() {
  */
 export function GetSessionRelays() {
     return $Call.ByID(442224189).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType19($result);
     }));
 }
 
@@ -423,12 +433,22 @@ export function GetSpeedTestConfig() {
 }
 
 /**
+ * GetSubscriptionConfig 获取订阅拉取配置。为空的字段填充默认值，便于前端展示当前生效值。
+ * @returns {$CancellablePromise<models$0.SubscriptionConfig>}
+ */
+export function GetSubscriptionConfig() {
+    return $Call.ByID(2508873786).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
+}
+
+/**
  * GetSubscriptions 获取所有订阅
  * @returns {$CancellablePromise<models$0.Subscription[]>}
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -446,7 +466,7 @@ export function GetSystemProxyStatus() {
  */
 export function GetUpdateConfig() {
     return $Call.ByID(1766264858).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType22($result);
     }));
 }
 
@@ -456,7 +476,7 @@ export function GetUpdateConfig() {
  */
 export function ImportConfig() {
     return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType24($result);
     }));
 }
 
@@ -471,7 +491,7 @@ export function ImportConfig() {
  */
 export function ImportShareLinks(text, groupID, newGroupName) {
     return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType26($result);
     }));
 }
 
@@ -507,7 +527,7 @@ export function ResetRuleTraffic(ruleID) {
  */
 export function ResolvePortConflicts(resourceIDs) {
     return $Call.ByID(27652581, resourceIDs).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -576,6 +596,15 @@ export function SetPreProxy(nodeID) {
  */
 export function SetSpeedTestConfig(cfg) {
     return $Call.ByID(480942534, cfg);
+}
+
+/**
+ * SetSubscriptionConfig 更新订阅拉取配置并立即生效
+ * @param {models$0.SubscriptionConfig} cfg
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetSubscriptionConfig(cfg) {
+    return $Call.ByID(3249808622, cfg);
 }
 
 /**
@@ -825,23 +854,24 @@ const $$createType2 = $Create.Array($$createType1);
 const $$createType3 = models$0.ChainProxy.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = models$0.SpeedTestConfig.createFrom;
-const $$createType6 = models$0.Group.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = models$0.HTTPAPIConfig.createFrom;
-const $$createType9 = models$0.HealthCheckConfig.createFrom;
-const $$createType10 = models$0.LoadBalanceNode.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = models$0.PortConflict.createFrom;
-const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = models$0.PreProxyConfig.createFrom;
-const $$createType15 = models$0.ProxyRule.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = models$0.SessionRelay.createFrom;
-const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = models$0.Subscription.createFrom;
-const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = models$0.UpdateConfig.createFrom;
-const $$createType22 = models$0.ImportResult.createFrom;
-const $$createType23 = $Create.Nullable($$createType22);
-const $$createType24 = models$0.ImportShareResult.createFrom;
-const $$createType25 = $Create.Nullable($$createType24);
+const $$createType6 = models$0.SubscriptionConfig.createFrom;
+const $$createType7 = models$0.Group.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = models$0.HTTPAPIConfig.createFrom;
+const $$createType10 = models$0.HealthCheckConfig.createFrom;
+const $$createType11 = models$0.LoadBalanceNode.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = models$0.PortConflict.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = models$0.PreProxyConfig.createFrom;
+const $$createType16 = models$0.ProxyRule.createFrom;
+const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = models$0.SessionRelay.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = models$0.Subscription.createFrom;
+const $$createType21 = $Create.Array($$createType20);
+const $$createType22 = models$0.UpdateConfig.createFrom;
+const $$createType23 = models$0.ImportResult.createFrom;
+const $$createType24 = $Create.Nullable($$createType23);
+const $$createType25 = models$0.ImportShareResult.createFrom;
+const $$createType26 = $Create.Nullable($$createType25);
