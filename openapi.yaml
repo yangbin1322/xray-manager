@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Xray Manager HTTP API
-  version: 1.1.0
-  description: 管理 Xray Manager 节点、分组、订阅、故障转移和链式代理的 REST API。
+  version: 1.2.0
+  description: 管理 Xray Manager 节点、分组、订阅、故障转移、链式代理和动态会话代理的 REST API。
 servers:
   - url: /api/v1
 security:
@@ -62,6 +62,18 @@ paths:
     post:
       tags: [Nodes]
       summary: 批量停止节点
+      requestBody: { $ref: '#/components/requestBodies/NodeIDs' }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /nodes/delete:
+    post:
+      tags: [Nodes]
+      summary: 批量删除节点
+      description: |
+        支持普通节点、故障转移、链式代理和动态会话代理。会先并发停止进程，
+        再一次性移除并保存配置，比逐个调用 DELETE /nodes/{id} 快得多。
+        用 POST 而非 DELETE：带请求体的 DELETE 在部分客户端/代理上支持不佳。
       requestBody: { $ref: '#/components/requestBodies/NodeIDs' }
       responses:
         '200': { $ref: '#/components/responses/Success' }

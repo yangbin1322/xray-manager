@@ -52,6 +52,7 @@ type httpAPIService interface {
 	StopRule(string) error
 	StartNodes([]string) error
 	StopNodes([]string) error
+	DeleteNodes([]string) error
 	GetGroups() []models.Group
 	CreateGroup(string, string) error
 	UpdateGroup(string, string, string) error
@@ -260,6 +261,7 @@ func newHTTPAPIHandler(service httpAPIService, token string) http.Handler {
 	apiMux.HandleFunc("POST /api/v1/nodes", api.createNode)
 	apiMux.HandleFunc("POST /api/v1/nodes/start", api.startNodes)
 	apiMux.HandleFunc("POST /api/v1/nodes/stop", api.stopNodes)
+	apiMux.HandleFunc("POST /api/v1/nodes/delete", api.deleteNodes)
 	apiMux.HandleFunc("GET /api/v1/nodes/{id}", api.getNode)
 	apiMux.HandleFunc("PUT /api/v1/nodes/{id}", api.updateNode)
 	apiMux.HandleFunc("DELETE /api/v1/nodes/{id}", api.deleteNode)
@@ -792,6 +794,12 @@ func (a *httpAPI) startNodes(w http.ResponseWriter, r *http.Request) {
 func (a *httpAPI) stopNodes(w http.ResponseWriter, r *http.Request) {
 	a.nodesAction(w, r, a.service.StopNodes)
 }
+
+// deleteNodes 批量删除。用 POST /nodes/delete 而非 DELETE /nodes：
+// DELETE 带请求体在部分客户端/代理上支持不佳，与批量启停保持同样的形式更一致。
+func (a *httpAPI) deleteNodes(w http.ResponseWriter, r *http.Request) {
+	a.nodesAction(w, r, a.service.DeleteNodes)
+}
 func (a *httpAPI) nodesAction(w http.ResponseWriter, r *http.Request, action func([]string) error) {
 	var request struct {
 		IDs []string `json:"ids"`
@@ -859,7 +867,6 @@ func validateLoadBalancer(w http.ResponseWriter, item *models.LoadBalanceNode) b
 	}
 	return true
 }
-
 
 func (a *httpAPI) getPreProxy(w http.ResponseWriter, _ *http.Request) {
 	writeAPI(w, http.StatusOK, a.service.GetPreProxy(), "")

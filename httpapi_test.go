@@ -12,16 +12,17 @@ import (
 )
 
 type fakeHTTPAPIService struct {
-	rules      []models.ProxyRule
-	groups     []models.Group
-	subs       []models.Subscription
-	lbs        []models.LoadBalanceNode
-	chains     []models.ChainProxy
-	relays     []models.SessionRelay
-	startedID  string
-	preProxyID string
+	rules          []models.ProxyRule
+	groups         []models.Group
+	subs           []models.Subscription
+	lbs            []models.LoadBalanceNode
+	chains         []models.ChainProxy
+	relays         []models.SessionRelay
+	startedID      string
+	preProxyID     string
+	deletedNodeIDs []string
 
-	lastSubGroupID    string
+	lastSubGroupID string
 }
 
 func (f *fakeHTTPAPIService) GetRules() []models.ProxyRule { return f.rules }
@@ -36,13 +37,17 @@ func (f *fakeHTTPAPIService) StartRule(id string) error                 { f.star
 func (f *fakeHTTPAPIService) StopRule(string) error                     { return nil }
 func (f *fakeHTTPAPIService) StartNodes([]string) error                 { return nil }
 func (f *fakeHTTPAPIService) StopNodes([]string) error                  { return nil }
-func (f *fakeHTTPAPIService) GetGroups() []models.Group                 { return f.groups }
-func (f *fakeHTTPAPIService) CreateGroup(string, string) error          { return nil }
-func (f *fakeHTTPAPIService) UpdateGroup(string, string, string) error  { return nil }
-func (f *fakeHTTPAPIService) DeleteGroup(string) error                  { return nil }
-func (f *fakeHTTPAPIService) StartAllRulesInGroup(string) error         { return nil }
-func (f *fakeHTTPAPIService) StopAllRulesInGroup(string) error          { return nil }
-func (f *fakeHTTPAPIService) GetSubscriptions() []models.Subscription   { return f.subs }
+func (f *fakeHTTPAPIService) DeleteNodes(ids []string) error {
+	f.deletedNodeIDs = append(f.deletedNodeIDs, ids...)
+	return nil
+}
+func (f *fakeHTTPAPIService) GetGroups() []models.Group                { return f.groups }
+func (f *fakeHTTPAPIService) CreateGroup(string, string) error         { return nil }
+func (f *fakeHTTPAPIService) UpdateGroup(string, string, string) error { return nil }
+func (f *fakeHTTPAPIService) DeleteGroup(string) error                 { return nil }
+func (f *fakeHTTPAPIService) StartAllRulesInGroup(string) error        { return nil }
+func (f *fakeHTTPAPIService) StopAllRulesInGroup(string) error         { return nil }
+func (f *fakeHTTPAPIService) GetSubscriptions() []models.Subscription  { return f.subs }
 func (f *fakeHTTPAPIService) AddSubscription(_, _ string, _ bool, _ int, _, _ string, groupID string) error {
 	f.lastSubGroupID = groupID
 	f.subs = append(f.subs, models.Subscription{ID: "sub_new", GroupID: groupID})
@@ -129,7 +134,6 @@ func (f *fakeHTTPAPIService) SetPreProxy(id string) error {
 	return fmt.Errorf("前置代理节点不存在: %s", id)
 }
 
-
 func TestHTTPAPIRequiresConfiguredToken(t *testing.T) {
 	handler := newHTTPAPIHandler(&fakeHTTPAPIService{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
@@ -173,7 +177,7 @@ func TestOpenAPISpecDocumentsAllBusinessRoutes(t *testing.T) {
 		t.Fatalf("invalid OpenAPI YAML: %v", err)
 	}
 	wantPaths := []string{
-		"/health", "/nodes", "/nodes/start", "/nodes/stop", "/nodes/{id}",
+		"/health", "/nodes", "/nodes/start", "/nodes/stop", "/nodes/delete", "/nodes/{id}",
 		"/nodes/{id}/start", "/nodes/{id}/stop", "/local-proxies", "/local-proxies/enabled",
 		"/groups", "/groups/{id}", "/groups/{id}/start", "/groups/{id}/stop",
 		"/groups/{id}/local-proxies",
@@ -497,3 +501,43 @@ func TestHTTPAPIPassesSubscriptionGroupID(t *testing.T) {
 	}
 }
 
+// 批量删除接口应把 ids 原样传给服务层
+func TestHTTPAPIDeleteNodesBatch(t *testing.T) {
+	service := &fakeHTTPAPIService{}
+	handler := newHTTPAPIHandler(service, "")
+
+	body := []byte(`{"ids":["rule_1","lb_2","chain_3"]}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/delete", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	want := []string{"rule_1", "lb_2", "chain_3"}
+	if len(service.deletedNodeIDs) != len(want) {
+		t.Fatalf("应删除 %d 个节点，实际 %v", len(want), service.deletedNodeIDs)
+	}
+	for i := range want {
+		if service.deletedNodeIDs[i] != want[i] {
+			t.Fatalf("第 %d 个 ID 应为 %s，实际 %s", i, want[i], service.deletedNodeIDs[i])
+		}
+	}
+}
+
+// 空 ids 应被拒绝，避免误触发全量操作
+func TestHTTPAPIDeleteNodesRejectsEmpty(t *testing.T) {
+	service := &fakeHTTPAPIService{}
+	handler := newHTTPAPIHandler(service, "")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/delete", bytes.NewReader([]byte(`{"ids":[]}`)))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code == http.StatusOK {
+		t.Fatal("空 ids 不应被接受")
+	}
+	if len(service.deletedNodeIDs) != 0 {
+		t.Fatalf("不应触发删除，实际 %v", service.deletedNodeIDs)
+	}
+}
