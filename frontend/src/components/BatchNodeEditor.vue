@@ -206,7 +206,8 @@ function close() {
   max-height: 90vh;
 }
 
-.dialog-batch { width: 760px; }
+/* 窗口比对话框窄时收缩，避免溢出产生横向滚动条 */
+.dialog-batch { width: 760px; max-width: calc(100vw - 40px); }
 
 .dialog-header {
   display: flex;

@@ -178,10 +178,13 @@ async function stopGroup(groupId) {
 <style scoped>
 .sidebar {
   width: 220px;
+  /* 固定宽度：不随内容撑大，也不被主区域挤扁 */
+  flex: 0 0 220px;
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -308,6 +311,7 @@ async function stopGroup(groupId) {
   background: var(--bg-primary);
   border-radius: 8px;
   width: 400px;
+  max-width: calc(100vw - 40px);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
 }
 

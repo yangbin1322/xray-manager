@@ -170,7 +170,8 @@ function close() { emit('close') }
   max-height: 90vh;
   overflow-y: auto;
 }
-.dialog-large { width: 700px; }
+/* 窗口比对话框窄时收缩，避免溢出产生横向滚动条 */
+.dialog-large { width: 700px; max-width: calc(100vw - 40px); }
 .dialog-header {
   display: flex;
   justify-content: space-between;

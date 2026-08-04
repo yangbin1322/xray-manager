@@ -308,6 +308,7 @@ body {
 .app-container {
   display: flex;
   height: 100vh;
+  width: 100vw;
   overflow: hidden;
 }
 
@@ -316,6 +317,9 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* flex 子项默认 min-width:auto，内容比容器宽时会把父容器撑开，
+     导致整页出现横向滚动条。置 0 后超宽内容改由内部区域自己滚动。 */
+  min-width: 0;
 }
 
 /* 滚动条样式 */

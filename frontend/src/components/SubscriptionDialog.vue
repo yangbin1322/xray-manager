@@ -8,6 +8,7 @@
 
       <div class="dialog-body">
         <!-- 订阅列表 -->
+        <div class="sub-table-wrap">
         <table class="sub-table">
           <thead>
             <tr>
@@ -80,6 +81,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
 
         <!-- 添加/编辑订阅表单 -->
         <div class="form-section" :class="{ 'editing-section': isEditing }" style="margin-top: 16px;">
@@ -359,7 +361,8 @@ function close() { emit('close') }
   max-height: 90vh;
   overflow-y: auto;
 }
-.dialog-large { width: 750px; }
+/* 窗口比对话框窄时收缩，避免溢出产生横向滚动条 */
+.dialog-large { width: 750px; max-width: calc(100vw - 40px); }
 .dialog-header {
   display: flex;
   justify-content: space-between;
@@ -383,7 +386,10 @@ function close() { emit('close') }
   background: var(--bg-primary);
 }
 
-.sub-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* 9 列在窄窗口下放不下，让表格自己横向滚动，
+   而不是把整个对话框撑宽 */
+.sub-table-wrap { overflow-x: auto; }
+.sub-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 680px; }
 .sub-table th {
   background: var(--bg-secondary);
   padding: 8px 10px;

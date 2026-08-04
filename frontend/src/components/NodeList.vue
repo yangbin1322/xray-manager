@@ -614,6 +614,10 @@ async function handleDelete(rule) {
   font-size: 13px;
   /* 固定布局：虚拟滚动下每次只渲染部分行，自动布局会让列宽随可视内容跳动 */
   table-layout: fixed;
+  /* 定宽列合计约 854px，再给文本列留出可读空间。
+     窗口更宽时文本列自动摊开；比这更窄则退化为表格内横向滚动，
+     而不是把操作按钮挤到不可用 */
+  min-width: 1100px;
 }
 
 .rules-table th {
@@ -660,24 +664,31 @@ async function handleDelete(rule) {
 .row-selected,
 .rules-table tbody tr.row-selected:hover { background: var(--primary-light) !important; }
 
-/* table-layout: fixed 只认 width，别名/地址/IP 列改用固定宽度 + 省略号 */
-.col-check { width: 36px; text-align: center; }
-.col-alias { width: 120px; }
-.col-group { width: 100px; }
-.col-protocol { width: 90px; }
+/* 列宽策略：
+   数值/徽标类列内容长度固定，给精确的 px；文本类列（别名、地址、分组、IP）
+   不指定 width，由 table-layout: fixed 把剩余空间平均分给它们——
+   窗口变宽时它们一起变宽，隐藏部分列后剩下的也会自动摊开，不留空白。
+   不用百分比：百分比与固定列相加容易超过 100%，反而会撑出横向滚动条。
+   超出的文本统一省略号（td 已设 ellipsis）。 */
+.col-check { width: 34px; text-align: center; }
+.col-protocol { width: 72px; }
 .group-cell { color: var(--text-secondary); }
-.col-server { width: 140px; }
-.col-sport { width: 70px; }
-.col-lport { width: 70px; }
-.col-health { width: 80px; }
-.col-latency { width: 80px; }
-.col-speed { width: 90px; }
-.col-traffic { width: 130px; }
-.col-traffic-total { width: 110px; }
-.col-ip { width: 100px; }
+.col-sport { width: 58px; }
+.col-lport { width: 58px; }
+.col-health { width: 70px; }
+.col-latency { width: 62px; }
+.col-speed { width: 74px; }
+.col-traffic { width: 98px; }
+.col-traffic-total { width: 86px; }
 .ip-error { color: #e74c3c; font-size: 11px; }
-.col-status { width: 40px; text-align: center; }
-.col-actions { width: 230px; }
+.col-status { width: 36px; text-align: center; }
+/* 操作列按钮较多（启动/编辑/测速/检测/删除），压不下去 */
+.col-actions { width: 206px; }
+/* 以下列不设 width，自动瓜分剩余宽度 */
+.col-alias,
+.col-group,
+.col-server,
+.col-ip { width: auto; }
 
 .health-badge {
   display: inline-block;

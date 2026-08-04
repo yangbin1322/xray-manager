@@ -33,9 +33,13 @@ func main() {
 
 	// 创建主窗口
 	mainWindow := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "Xray 管理器",
-		Width:            1600,
-		Height:           800,
+		Title:  "Xray 管理器",
+		Width:  1280,
+		Height: 800,
+		// 低于这个尺寸表格会被压得没法用；界面本身是自适应的，
+		// 更小的窗口由内部区域自己滚动而不是撑破布局
+		MinWidth:         1000,
+		MinHeight:        600,
 		BackgroundColour: application.NewRGB(255, 255, 255),
 		Mac:              application.MacWindow{},
 	})

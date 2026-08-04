@@ -826,6 +826,7 @@ function handleEnableSysProxy() {
   background: var(--bg-primary);
   border-radius: 8px;
   width: 420px;
+  max-width: calc(100vw - 40px);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
 }
 
@@ -837,7 +838,7 @@ function handleEnableSysProxy() {
   border-bottom: 1px solid var(--border-color);
 }
 
-.dialog-settings { width: 560px; }
+.dialog-settings { width: 560px; max-width: calc(100vw - 40px); }
 .dialog-header h3 { margin: 0; font-size: 16px; }
 .dialog-close { border: none; background: none; font-size: 20px; cursor: pointer; color: var(--text-secondary); }
 .dialog-body { padding: 20px; max-height: 70vh; overflow-y: auto; }

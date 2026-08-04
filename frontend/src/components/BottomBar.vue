@@ -229,6 +229,7 @@ async function handleImportDone(result) {
   background: var(--bg-primary);
   border-radius: 8px;
   width: 550px;
+  max-width: calc(100vw - 40px);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
 }
 
