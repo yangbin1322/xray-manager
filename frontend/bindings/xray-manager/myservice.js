@@ -166,6 +166,19 @@ export function DeleteLoadBalancer(id) {
 
 /**
  * DeleteRule 删除规则
+ * DeleteNodes 批量删除节点（普通节点/故障转移/链式代理/动态会话代理）。
+ * 
+ * 逐个调用 DeleteRule 会很慢：每个节点都要单独走一次 IPC、在锁内串行停止进程、
+ * 并各保存一次配置。这里先并发把进程停掉（复用 StopNodes 的并发逻辑），
+ * 再一次性从配置里摘除并只保存一次。
+ * @param {string[]} ids
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteNodes(ids) {
+    return $Call.ByID(3027616925, ids);
+}
+
+/**
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */
@@ -669,7 +682,6 @@ export function StopLoadBalancer(id) {
 }
 
 /**
- * StopNodes 批量停止节点，并发执行、只保存一次配置。
  * @param {string[]} ids
  * @returns {$CancellablePromise<void>}
  */

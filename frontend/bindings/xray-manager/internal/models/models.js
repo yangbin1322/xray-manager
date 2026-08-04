@@ -1096,7 +1096,7 @@ export class ProxyRule {
         if (!("healthStatus" in $$source)) {
             /**
              * 健康检查相关字段
-             * 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+             * 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed, ipv6_only
              * @member
              * @type {string}
              */

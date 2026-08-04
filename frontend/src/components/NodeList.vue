@@ -387,6 +387,7 @@ const healthLabels = {
   dns_failed: 'DNS失败',
   tls_failed: 'TLS失败',
   reality_failed: 'Reality失败',
+  ipv6_only: '仅IPv6',
 }
 
 function healthLabel(rule) {
@@ -693,6 +694,8 @@ async function handleDelete(rule) {
 .health-dns_failed { background: #fde8e8; color: #c0392b; }
 .health-tls_failed { background: #fde8e8; color: #c0392b; }
 .health-reality_failed { background: #fde8e8; color: #8e44ad; }
+/* 仅 IPv6：不是故障，是本机没有 IPv6 出口检测不了，用中性色区别于失败 */
+.health-ipv6_only { background: #eef2f7; color: #5b6b7d; }
 
 .traffic-speed { font-size: 11px; color: var(--text-primary); }
 .traffic-total { font-size: 11px; color: var(--text-secondary); }

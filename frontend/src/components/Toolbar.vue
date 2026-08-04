@@ -10,6 +10,20 @@
       >{{ f.label }}</button>
     </div>
 
+    <!-- 健康过滤。单击筛选，双击直接选中该类节点 -->
+    <div class="filter-group">
+      <label>健康：</label>
+      <button
+        v-for="f in healthFilters" :key="f.value"
+        :class="['filter-btn', { active: rulesStore.healthFilter === f.value }]"
+        :title="f.hint"
+        @click="rulesStore.healthFilter = f.value"
+        @dblclick="f.value !== 'all' && selectHealth(f.value, $event)"
+      >
+        {{ f.label }}<span v-if="f.value !== 'all'" class="filter-count">{{ healthCountOf(f.value) }}</span>
+      </button>
+    </div>
+
     <!-- 搜索 -->
     <div class="search-box">
       <input
@@ -25,15 +39,28 @@
       已选 <strong>{{ selectedCount }}</strong>
     </div>
 
-    <!-- 操作按钮 -->
+    <!-- 常用操作 -->
     <div class="toolbar-actions">
-      <button class="btn-action" @click="rulesStore.startSelectedRules()" title="启动选中">启动选中</button>
-      <button class="btn-action" @click="rulesStore.stopSelectedRules()" title="停止选中">停止选中</button>
-      <button class="btn-action" @click="rulesStore.testSelectedSpeed()" title="测速选中">选中测速</button>
-      <button class="btn-action" @click="handleBatchEdit" title="批量编辑选中的普通节点">批量编辑</button>
+      <button class="btn-action" @click="rulesStore.startSelectedRules()" title="启动选中">启动</button>
+      <button class="btn-action" @click="rulesStore.stopSelectedRules()" title="停止选中">停止</button>
       <button class="btn-action" @click="handleCheckHealth" title="健康检测选中节点，未选中时检测全部">健康检测</button>
-      <button class="btn-action" @click="handleResetTraffic" title="清零选中节点流量，未选中时清零全部">流量清零</button>
-      <button class="btn-action btn-danger" @click="handleDeleteSelected" title="删除选中">删除选中</button>
+      <button class="btn-action btn-danger" @click="handleDeleteSelected" title="删除选中">删除</button>
+
+      <!-- 其余操作收进菜单，避免工具栏挤满按钮 -->
+      <div class="more-wrap">
+        <button class="btn-action" title="更多操作" @click.stop="showMoreMenu = !showMoreMenu">更多 ▾</button>
+        <template v-if="showMoreMenu">
+          <div class="more-mask" @click="showMoreMenu = false"></div>
+          <div class="more-menu" @click.stop>
+            <button class="more-item" @click="runMore(() => rulesStore.testSelectedSpeed())">选中测速</button>
+            <button class="more-item" @click="runMore(handleBatchEdit)">批量编辑</button>
+            <button class="more-item" @click="runMore(handleResetTraffic)">流量清零</button>
+            <div class="more-sep"></div>
+            <button class="more-item" @click="runMore(() => selectHealth('healthy'))">选中健康节点</button>
+            <button class="more-item" @click="runMore(() => selectHealth('failed'))">选中失败节点</button>
+          </div>
+        </template>
+      </div>
     </div>
 
     <div class="toolbar-right">
@@ -553,6 +580,40 @@ const filters = [
   { label: '未启动', value: 'stopped' },
 ]
 
+const healthFilters = [
+  { label: '全部', value: 'all', hint: '不按健康状态过滤' },
+  { label: '健康', value: 'healthy', hint: '在线，或延迟偏高但链路可通\n双击可直接选中这些节点' },
+  { label: '失败', value: 'failed', hint: '超时 / DNS 失败 / TLS 失败 / Reality 失败\n双击可直接选中这些节点' },
+  { label: '未检测', value: 'unchecked', hint: '尚未检测、检测中，或仅有 IPv6 无法检测\n双击可直接选中这些节点' },
+]
+
+// 「更多」下拉
+const showMoreMenu = ref(false)
+
+// 菜单项点完就收起，避免挡住界面
+function runMore(fn) {
+  showMoreMenu.value = false
+  return fn()
+}
+
+function healthCountOf(kind) {
+  return rulesStore.healthCounts[kind] ?? 0
+}
+
+// 按健康状态选中当前可见节点。按住 Ctrl/Cmd 可叠加到已有选择上。
+const healthKindLabels = { healthy: '健康', failed: '失败', unchecked: '未检测' }
+
+function selectHealth(kind, event) {
+  const additive = !!(event && (event.ctrlKey || event.metaKey))
+  const matched = rulesStore.selectByHealth(kind, additive)
+  const label = healthKindLabels[kind] || kind
+  if (matched === 0) {
+    appStore.showToast(`当前没有${label}的节点`, 'warning')
+  } else {
+    appStore.showToast(`已选中 ${matched} 个${label}节点`, 'success')
+  }
+}
+
 const themeTitle = computed(() =>
   appStore.theme === 'dark' ? '切换亮色模式' : '切换深色模式'
 )
@@ -620,6 +681,62 @@ function handleEnableSysProxy() {
   background: var(--primary-color);
   color: #fff;
   border-color: var(--primary-color);
+}
+
+/* 过滤按钮上的数量角标 */
+.filter-count {
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.filter-btn.active .filter-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* 「更多」下拉菜单：把低频操作收起来，避免工具栏一排十几个按钮 */
+.more-wrap { position: relative; display: inline-block; }
+
+.more-mask {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 900;
+}
+
+.more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 901;
+  min-width: 140px;
+  padding: 4px 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.more-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.more-item:hover { background: var(--bg-hover); }
+
+.more-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
 }
 
 .search-box {

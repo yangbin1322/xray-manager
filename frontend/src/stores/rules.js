@@ -5,6 +5,34 @@ import * as api from '../api.js'
 // groupFilter 的特殊值：仅显示未分组节点
 export const UNGROUPED_FILTER = '__ungrouped__'
 
+// 健康检查失败的状态值（后端 internal/healthcheck 的常量）
+const FAILED_HEALTH_STATUSES = new Set([
+  'timeout', 'dns_failed', 'tls_failed', 'reality_failed',
+])
+
+// 视为"可用"的状态。high_latency 也算通过——只是慢，链路是通的，
+// 批量清理时不该被当成坏节点删掉。
+const HEALTHY_STATUSES = new Set(['online', 'high_latency'])
+
+// matchesHealth 判断节点是否属于某一类健康状态。
+//
+// 'unchecked' 包含从未检测、正在检测，以及 ipv6_only（本机没有 IPv6 出口，
+// 检测不了但节点本身可能可用）——这些结果都不可信，不能归入健康或失败，
+// 否则"选中失败 → 删除"会误删可用节点。
+function matchesHealth(rule, kind) {
+  const status = rule.healthStatus || ''
+  switch (kind) {
+    case 'healthy':
+      return HEALTHY_STATUSES.has(status)
+    case 'failed':
+      return FAILED_HEALTH_STATUSES.has(status)
+    case 'unchecked':
+      return !HEALTHY_STATUSES.has(status) && !FAILED_HEALTH_STATUSES.has(status)
+    default:
+      return true
+  }
+}
+
 export const useRulesStore = defineStore('rules', () => {
   // === 状态 ===
   const rules = ref([])
@@ -14,6 +42,7 @@ export const useRulesStore = defineStore('rules', () => {
   const selectedIds = ref(new Set())
   const lastSelectedId = ref(null) // Shift 范围选的锚点（上次点击的行）
   const statusFilter = ref('all') // all | running | stopped
+  const healthFilter = ref('all') // all | healthy | failed | unchecked
   const searchKeyword = ref('')
   const groupFilter = ref(null) // null=所有节点, UNGROUPED_FILTER=未分组, 其他=分组ID
   const sortColumn = ref(null)
@@ -35,7 +64,11 @@ export const useRulesStore = defineStore('rules', () => {
   })
 
   // === 计算属性 ===
-  const filteredRules = computed(() => {
+
+  // 应用除"健康状态"之外的所有过滤条件。
+  // 健康分类的计数要基于这个列表——若基于最终结果，选中「健康」后
+  // 「失败」「未检测」的计数会全变成 0，用户就看不到还有多少别的节点了。
+  const rulesBeforeHealthFilter = computed(() => {
     let result = allNodes.value
 
     // 分组过滤：null=所有节点，UNGROUPED_FILTER=仅未分组，其余=指定分组
@@ -62,6 +95,17 @@ export const useRulesStore = defineStore('rules', () => {
         (r.groupName && r.groupName.toLowerCase().includes(kw)) ||
         (r.localPort && String(r.localPort).includes(kw))
       )
+    }
+
+    return result
+  })
+
+  const filteredRules = computed(() => {
+    let result = rulesBeforeHealthFilter.value
+
+    // 健康状态过滤
+    if (healthFilter.value !== 'all') {
+      result = result.filter(r => matchesHealth(r, healthFilter.value))
     }
 
     // 排序
@@ -150,26 +194,18 @@ export const useRulesStore = defineStore('rules', () => {
 
   async function deleteSelectedRules() {
     const ids = selectedRuleIds.value
-    const index = nodeById.value
-    for (const id of ids) {
-      const node = index.get(id)
-      if (!node) continue
-      try {
-        if (node._nodeType === 'lb') {
-          await api.deleteLoadBalancer(id)
-        } else if (node._nodeType === 'chain') {
-          await api.deleteChainProxy(id)
-        } else if (node._nodeType === 'relay') {
-          await api.deleteSessionRelay(id)
-        } else {
-          await api.deleteRule(id)
-        }
-      } catch (e) {
-        console.error('删除失败:', e)
-      }
+    if (ids.length === 0) return
+    // 交给后端一次处理：并发停进程、一次性摘除、只保存一次配置。
+    // 逐个 await 删除会让每个节点都走一次 IPC 并各存一次盘，几十个就很慢。
+    try {
+      await api.deleteNodes(ids)
+    } catch (e) {
+      console.error('批量删除失败:', e)
+      throw e
+    } finally {
+      selectedIds.value = new Set()
+      await loadRules()
     }
-    selectedIds.value = new Set()
-    await loadRules()
   }
 
   async function startSelectedRules() {
@@ -248,19 +284,36 @@ export const useRulesStore = defineStore('rules', () => {
 
   // 应用健康检查结果（healthCheckResult 事件）
   function applyHealthCheckResult(result) {
-    if (!result || !result.ruleId) return
-    const patch = {
-      healthStatus: result.status,
-      healthLatency: result.latency,
-      lastHealthCheck: result.timestamp,
+    applyHealthCheckResults([result])
+  }
+
+  // 批量应用健康检查结果。
+  // 后端为上万节点做了结果合批，这里也必须按批处理：
+  // 逐条 findIndex 是 O(n²)，一万节点会把界面卡死。
+  function applyHealthCheckResults(results) {
+    if (!Array.isArray(results) || results.length === 0) return
+
+    const byID = new Map()
+    for (const r of results) {
+      if (r && r.ruleId) byID.set(r.ruleId, r)
     }
-    // 结果 ID 可能属于普通节点/故障转移/链式代理，逐个数组查找
+    if (byID.size === 0) return
+
     for (const list of [rules, loadBalancers, chainProxies]) {
-      const idx = list.value.findIndex(r => r.id === result.ruleId)
-      if (idx >= 0) {
-        list.value[idx] = { ...list.value[idx], ...patch }
-        return
-      }
+      let touched = false
+      const next = list.value.map(item => {
+        const r = byID.get(item.id)
+        if (!r) return item
+        touched = true
+        return {
+          ...item,
+          healthStatus: r.status,
+          healthLatency: r.latency,
+          lastHealthCheck: r.timestamp,
+        }
+      })
+      // 整体替换才触发一次重渲染；没命中的数组不动，避免无谓更新
+      if (touched) list.value = next
     }
   }
 
@@ -311,6 +364,36 @@ export const useRulesStore = defineStore('rules', () => {
     if (checked) filteredRules.value.forEach(r => next.add(r.id))
     selectedIds.value = next
   }
+
+  // selectByHealth 按健康状态选中节点。
+  //
+  // 基于"未应用健康过滤"的列表：分组/状态/搜索这些用户主动设的范围要遵守，
+  // 但不该受健康过滤影响——否则在「健康」视图下点「选中失败」会一个都选不到。
+  // additive 为 true 时叠加到现有选择上，否则替换。
+  function selectByHealth(kind, additive = false) {
+    const next = additive ? new Set(selectedIds.value) : new Set()
+    let matched = 0
+    for (const rule of rulesBeforeHealthFilter.value) {
+      if (matchesHealth(rule, kind)) {
+        next.add(rule.id)
+        matched++
+      }
+    }
+    selectedIds.value = next
+    return matched
+  }
+
+  // 各健康分类在当前可见节点中的数量，用于按钮上显示计数
+  // 基于"未应用健康过滤"的列表统计，这样切换分类时其余计数依然可见
+  const healthCounts = computed(() => {
+    const counts = { healthy: 0, failed: 0, unchecked: 0 }
+    for (const rule of rulesBeforeHealthFilter.value) {
+      if (matchesHealth(rule, 'healthy')) counts.healthy++
+      else if (matchesHealth(rule, 'failed')) counts.failed++
+      else counts.unchecked++
+    }
+    return counts
+  })
 
   // 处理行点击的多选：
   // - 无修饰键：仅选中该行（清除其余）
@@ -373,18 +456,18 @@ export const useRulesStore = defineStore('rules', () => {
   return {
     // State
     rules, loadBalancers, chainProxies, sessionRelays,
-    selectedIds, statusFilter, searchKeyword,
+    selectedIds, statusFilter, healthFilter, searchKeyword,
     groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
     allNodes, nodeById,
-    filteredRules, selectedRuleIds, runningCount, totalCount, ungroupedCount, groupCounts,
+    filteredRules, selectedRuleIds, runningCount, totalCount, ungroupedCount, groupCounts, healthCounts,
     // Actions
     loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
-    updateRuleInList, toggleSelect, selectAll, deselect, handleRowSelect, setSort,
+    updateRuleInList, toggleSelect, selectAll, selectByHealth, deselect, handleRowSelect, setSort,
     copySelected, pasteNodes,
-    applyTrafficUpdate, applyRelayStats, applyHealthCheckResult,
+    applyTrafficUpdate, applyRelayStats, applyHealthCheckResult, applyHealthCheckResults,
     checkSelectedHealth, checkAllHealth, resetTraffic,
   }
 })

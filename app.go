@@ -51,6 +51,10 @@ type MyService struct {
 	executablePath   string
 	configPath       string
 	portConflicts    []models.PortConflict
+
+	// 健康检查结果缓冲：上万节点时逐条落库+推事件会压垮主线程和前端
+	healthResultMu  sync.Mutex
+	healthResultBuf []models.HealthCheckResult
 }
 
 func NewMyService() *MyService {
@@ -812,6 +816,99 @@ func (a *MyService) UpdateNodes(updatedRules []models.ProxyRule) (int, error) {
 }
 
 // DeleteRule 删除规则
+// DeleteNodes 批量删除节点（普通节点/故障转移/链式代理/动态会话代理）。
+//
+// 逐个调用 DeleteRule 会很慢：每个节点都要单独走一次 IPC、在锁内串行停止进程、
+// 并各保存一次配置。这里先并发把进程停掉（复用 StopNodes 的并发逻辑），
+// 再一次性从配置里摘除并只保存一次。
+func (a *MyService) DeleteNodes(ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// 先并发停止（StopNodes 内部已做锁外并发，且会更新状态、回收端口）
+	if err := a.StopNodes(ids); err != nil {
+		a.log(fmt.Sprintf("[批量删除] 停止节点时出错，继续删除: %v", err))
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	removed := 0
+	groupIDs := make(map[string]bool)
+
+	keptRules := a.config.Rules[:0]
+	for i := range a.config.Rules {
+		r := &a.config.Rules[i]
+		if !idSet[r.ID] {
+			keptRules = append(keptRules, *r)
+			continue
+		}
+		a.releasePortReservationLocked(r.LocalPort)
+		if a.config.PreProxyNodeID == r.ID {
+			a.config.PreProxyNodeID = ""
+			a.log("已清空全局前置代理（节点已删除）")
+		}
+		a.clearRelayPreProxyRefLocked(r.ID)
+		if r.GroupID != "" {
+			groupIDs[r.GroupID] = true
+		}
+		removed++
+	}
+	a.config.Rules = keptRules
+
+	keptLBs := a.config.LoadBalancers[:0]
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if !idSet[lb.ID] {
+			keptLBs = append(keptLBs, *lb)
+			continue
+		}
+		a.releasePortReservationLocked(lb.LocalPort)
+		removed++
+	}
+	a.config.LoadBalancers = keptLBs
+
+	keptChains := a.config.ChainProxies[:0]
+	for i := range a.config.ChainProxies {
+		c := &a.config.ChainProxies[i]
+		if !idSet[c.ID] {
+			keptChains = append(keptChains, *c)
+			continue
+		}
+		a.releasePortReservationLocked(c.LocalPort)
+		removed++
+	}
+	a.config.ChainProxies = keptChains
+
+	keptRelays := a.config.SessionRelays[:0]
+	for i := range a.config.SessionRelays {
+		sr := &a.config.SessionRelays[i]
+		if !idSet[sr.ID] {
+			keptRelays = append(keptRelays, *sr)
+			continue
+		}
+		a.releasePortReservationLocked(sr.LocalPort)
+		removed++
+	}
+	a.config.SessionRelays = keptRelays
+
+	if removed == 0 {
+		return nil
+	}
+
+	if err := a.saveConfig(); err != nil {
+		return err
+	}
+	a.log(fmt.Sprintf("批量删除完成，共移除 %d 个节点", removed))
+	return nil
+}
+
 func (a *MyService) DeleteRule(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -958,6 +1055,22 @@ func (a *MyService) StartNodes(ids []string) error {
 }
 
 // StopNodes 批量停止节点，并发执行、只保存一次配置。
+// stopConcurrency 按批量大小决定停止进程的并发度。
+//
+// 终止一个进程要 fork taskkill（Windows）或等待进程退出（Unix，最长 5 秒），
+// 属于慢 IO，并发放大能显著缩短总耗时。上限 64 是为了避免一次 fork 出
+// 几百个 taskkill 子进程把系统压垮。
+func stopConcurrency(n int) int {
+	switch {
+	case n <= 16:
+		return 8
+	case n <= 100:
+		return 32
+	default:
+		return 64
+	}
+}
+
 func (a *MyService) StopNodes(ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -967,9 +1080,10 @@ func (a *MyService) StopNodes(ids []string) error {
 	refs := a.collectNodeRefs(ids)
 	a.mu.Unlock()
 
-	// 停止进程是慢操作，锁外并发执行（processManager 自带锁保证进程 map 安全）
+	// 停止进程是慢操作（Windows 要 fork taskkill，Unix 要等进程退出），
+	// 锁外并发执行。并发度随批量大小提升，否则几百个节点会等很久。
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
+	sem := make(chan struct{}, stopConcurrency(len(refs)))
 	for _, ref := range refs {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -981,7 +1095,11 @@ func (a *MyService) StopNodes(ids []string) error {
 				stopRelayInstance(ref.id)
 				return
 			}
-			_ = a.processManager.Stop(ref.localPort)
+			// 进程管理器初始化失败时（如内核目录不可写）为 nil，
+			// 此时没有进程需要停，直接跳过而不是崩溃
+			if a.processManager != nil {
+				_ = a.processManager.Stop(ref.localPort)
+			}
 		}(ref)
 	}
 	wg.Wait()
@@ -1024,9 +1142,18 @@ func (a *MyService) StopNodes(ids []string) error {
 	err := a.saveConfig()
 	a.mu.Unlock()
 
-	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.emitEvent("loadRules", nil)
 	a.log(fmt.Sprintf("批量停止完成，共 %d 个节点", len(refs)))
 	return err
+}
+
+// emitEvent 向前端发事件。a.app 在单元测试或初始化失败时为 nil，
+// 这里统一兜底，避免调用方各自判空或直接崩溃。
+func (a *MyService) emitEvent(name string, data any) {
+	if a.app == nil {
+		return
+	}
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: name, Data: data})
 }
 
 // StartRule 启动规则
@@ -4070,13 +4197,72 @@ func (a *MyService) getRulesSnapshot() []models.ProxyRule {
 	return rules
 }
 
-// handleHealthCheckResult 处理健康检查结果（普通节点/故障转移/链式代理）
+// handleHealthCheckResult 处理健康检查结果（普通节点/故障转移/链式代理）。
+//
+// 上万节点时逐条加锁 + 逐条推事件会把主线程和前端一起压垮，
+// 因此结果先进缓冲区，由 healthResultFlusher 定期合并落库并只推一个批量事件。
 func (a *MyService) handleHealthCheckResult(result models.HealthCheckResult) {
+	a.healthResultMu.Lock()
+	a.healthResultBuf = append(a.healthResultBuf, result)
+	n := len(a.healthResultBuf)
+	a.healthResultMu.Unlock()
+
+	// 攒够一批就立刻刷，避免检测很快时缓冲区无限涨
+	if n >= healthResultBatchSize {
+		a.flushHealthResults()
+	}
+}
+
+// healthResultBatchSize 达到此条数立即刷新一批结果
+const healthResultBatchSize = 200
+
+// flushHealthResults 将缓冲区里的健康检查结果一次性写回配置并推送给前端。
+func (a *MyService) flushHealthResults() {
+	a.healthResultMu.Lock()
+	batch := a.healthResultBuf
+	a.healthResultBuf = nil
+	a.healthResultMu.Unlock()
+
+	if len(batch) == 0 {
+		return
+	}
+
 	a.mu.Lock()
-	a.applyHealthResultLocked(result)
+	a.applyHealthResultsLocked(batch)
 	a.mu.Unlock()
 
-	a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+	a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResults", Data: batch})
+}
+
+// applyHealthResultsLocked 批量写回健康检查结果（需已持有锁）。
+// 先按 ID 建索引再一次遍历，避免逐条全表扫描（上万节点时是 O(n²)）。
+func (a *MyService) applyHealthResultsLocked(results []models.HealthCheckResult) {
+	byID := make(map[string]*models.HealthCheckResult, len(results))
+	for i := range results {
+		byID[results[i].RuleID] = &results[i]
+	}
+
+	for i := range a.config.Rules {
+		if r, ok := byID[a.config.Rules[i].ID]; ok {
+			a.config.Rules[i].HealthStatus = r.Status
+			a.config.Rules[i].HealthLatency = r.Latency
+			a.config.Rules[i].LastHealthCheck = r.Timestamp
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if r, ok := byID[a.config.LoadBalancers[i].ID]; ok {
+			a.config.LoadBalancers[i].HealthStatus = r.Status
+			a.config.LoadBalancers[i].HealthLatency = r.Latency
+			a.config.LoadBalancers[i].LastHealthCheck = r.Timestamp
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if r, ok := byID[a.config.ChainProxies[i].ID]; ok {
+			a.config.ChainProxies[i].HealthStatus = r.Status
+			a.config.ChainProxies[i].HealthLatency = r.Latency
+			a.config.ChainProxies[i].LastHealthCheck = r.Timestamp
+		}
+	}
 }
 
 // applyHealthResultLocked 将健康检查结果写回对应节点（需已持有锁）
@@ -4233,11 +4419,8 @@ func (a *MyService) checkProxyTargets(targets []proxyHealthTarget) {
 		go func(tg proxyHealthTarget) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			result := healthcheck.CheckProxyPort(tg.id, tg.localPort, cfg)
-			a.mu.Lock()
-			a.applyHealthResultLocked(result)
-			a.mu.Unlock()
-			a.app.Event.EmitEvent(&application.CustomEvent{Name: "healthCheckResult", Data: result})
+			// 与普通节点走同一条缓冲通道，统一批量落库和推送
+			a.handleHealthCheckResult(healthcheck.CheckProxyPort(tg.id, tg.localPort, cfg))
 		}(tg)
 	}
 	wg.Wait()
@@ -4266,6 +4449,8 @@ func (a *MyService) CheckSelectedNodesHealth(ruleIDs []string) error {
 			go func() { defer wg.Done(); a.checkProxyTargets(proxyTargets) }()
 		}
 		wg.Wait()
+		// 收尾：把最后不足一批的结果刷出去，再保存
+		a.flushHealthResults()
 		a.mu.Lock()
 		_ = a.saveConfig()
 		a.mu.Unlock()

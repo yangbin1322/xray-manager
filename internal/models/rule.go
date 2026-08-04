@@ -29,7 +29,7 @@ type ProxyRule struct {
 	TestStatus    string  `json:"testStatus"`    // 测速状态: idle, testing, success, failed
 
 	// 健康检查相关字段
-	HealthStatus    string `json:"healthStatus"`    // 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+	HealthStatus    string `json:"healthStatus"`    // 健康状态: 空, checking, online, high_latency, timeout, dns_failed, tls_failed, reality_failed, ipv6_only
 	HealthLatency   int    `json:"healthLatency"`   // 健康检查延迟（毫秒）
 	LastHealthCheck string `json:"lastHealthCheck"` // 最后健康检查时间
 
@@ -145,7 +145,7 @@ type HealthCheckConfig struct {
 // HealthCheckResult 健康检查结果
 type HealthCheckResult struct {
 	RuleID    string `json:"ruleId"`
-	Status    string `json:"status"`  // online, high_latency, timeout, dns_failed, tls_failed, reality_failed
+	Status    string `json:"status"`  // online, high_latency, timeout, dns_failed, tls_failed, reality_failed, ipv6_only
 	Latency   int    `json:"latency"` // 毫秒
 	Error     string `json:"error"`
 	Timestamp string `json:"timestamp"`

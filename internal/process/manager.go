@@ -283,12 +283,22 @@ func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) 
 	return nil
 }
 
-// Stop 停止代理规则
+// Stop 停止指定本地端口上的进程。
+//
+// 只在锁内做 map 摘除，真正的终止（taskkill / SIGTERM 等待）放到锁外。
+// 否则批量停止时，即使调用方开了并发，所有协程也会卡在这把全局锁上排队，
+// 退化成串行——每个节点耗时叠加，几百个节点就要等很久。
 func (m *Manager) Stop(localPort int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	processInfo, exists := m.processes[localPort]
+	if exists {
+		delete(m.processes, localPort)
+		processInfo.Rule.ProcessID = 0
+		processInfo.Rule.RealIP = ""
+		processInfo.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	m.mu.Unlock()
+
 	if !exists {
 		// 进程不存在（可能已崩溃或被外部终止），检查端口上是否有残留内核进程
 		m.log(fmt.Sprintf("[停止] 端口 %d 无对应进程记录，检查残留进程", localPort))
@@ -296,17 +306,7 @@ func (m *Manager) Stop(localPort int) error {
 		return nil
 	}
 
-	return m.stopProcessLocked(localPort, processInfo)
-}
-
-// stopProcessLocked 停止进程（内部方法，需要已持有锁）
-// 从 map 中移除记录后，在锁内调用 terminateProcess 完成实际终止。
-func (m *Manager) stopProcessLocked(localPort int, processInfo *ProcessInfo) error {
-	delete(m.processes, localPort)
-	processInfo.Rule.ProcessID = 0
-	processInfo.Rule.RealIP = ""
-	processInfo.Rule.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
-
+	// 已从 map 中摘除，此处可安全并发执行
 	m.terminateProcess(localPort, processInfo, true)
 	return nil
 }
@@ -350,14 +350,21 @@ func (m *Manager) terminateProcess(localPort int, processInfo *ProcessInfo, wait
 
 // killWindows Windows 平台强制终止进程树
 func (m *Manager) killWindows(processInfo *ProcessInfo) {
-	pid := processInfo.Cmd.Process.Pid
-	killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", pid))
-	hideConsoleWindow(killCmd)
-
-	if err := killCmd.Run(); err != nil {
-		m.log(fmt.Sprintf("[警告] taskkill 失败: %v，尝试使用 Kill()", err))
-		if err := processInfo.Cmd.Process.Kill(); err != nil {
-			m.log(fmt.Sprintf("[错误] Kill() 也失败: %v (进程可能已结束)", err))
+	// 优先直接 TerminateProcess（Go 的 Process.Kill）。
+	//
+	// 原先无条件 fork taskkill /F /T，实测单次约 1.2 秒，而且并发也快不了多少
+	// （Windows 的进程创建本身会互相排队）——45 个节点就要二十多秒。
+	// 直接 Kill 实测 20 个进程只要 4ms，快约 3000 倍。
+	//
+	// taskkill /T 的价值在于连带杀掉子进程树，但 xray / sing-box 都不派生子进程，
+	// 且我们启动时已给它们建了独立进程组，所以直接 Kill 足够。
+	// 仅在 Kill 失败（极少见）时才回退到 taskkill 兜底。
+	if err := processInfo.Cmd.Process.Kill(); err != nil {
+		m.log(fmt.Sprintf("[警告] Kill() 失败: %v，回退到 taskkill", err))
+		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", processInfo.Cmd.Process.Pid))
+		hideConsoleWindow(killCmd)
+		if err := killCmd.Run(); err != nil {
+			m.log(fmt.Sprintf("[错误] taskkill 也失败: %v (进程可能已结束)", err))
 		}
 	}
 

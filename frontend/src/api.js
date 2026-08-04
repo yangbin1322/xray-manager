@@ -48,6 +48,12 @@ export async function stopNodes(ids) {
   return await MyService.StopNodes(ids)
 }
 
+// 批量删除：后端会并发停进程、一次性摘除并只保存一次配置。
+// 比逐个调用 deleteRule 快得多（那样每个节点都要走一次 IPC + 存一次盘）
+export async function deleteNodes(ids) {
+  return await MyService.DeleteNodes(ids)
+}
+
 // ==================== 导入导出 ====================
 
 export async function exportConfig(ruleIds = [], includeSubscriptions = false) {

@@ -216,14 +216,21 @@ function listenToBackendEvents() {
     rulesStore.applyRelayStats(event.data)
   })
 
-  // 健康检查结果（单个节点）
+  // 健康检查结果（单个节点，保留兼容）
   Events.On('healthCheckResult', (event) => {
     rulesStore.applyHealthCheckResult(event.data)
   })
 
+  // 健康检查结果（批量）：上万节点时后端会合批推送，避免事件风暴
+  Events.On('healthCheckResults', (event) => {
+    rulesStore.applyHealthCheckResults(event.data)
+  })
+
   // 健康检查完成（一轮批量）
+  // 一轮检测结束。结果已随批量事件更新到界面，不必再整表重载
+  // （上万节点时重载一次代价很大）。
   Events.On('healthCheckComplete', () => {
-    rulesStore.loadRules()
+    appStore.showToast('健康检测完成', 'success')
   })
 
   // 节点启动后不通，已被自动停用

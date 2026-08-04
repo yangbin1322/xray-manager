@@ -438,336 +438,53 @@ func (p *Parser) parseProxyURL(proxyURL string, index int) (models.ProxyRule, er
 		Source:    "subscription",
 	}
 
-	if strings.HasPrefix(proxyURL, "vmess://") {
-		return p.parseVMessURL(proxyURL, index)
-	} else if strings.HasPrefix(proxyURL, "vless://") {
-		return p.parseVLessURL(proxyURL, index)
-	} else if strings.HasPrefix(proxyURL, "ss://") {
-		return p.parseSSURL(proxyURL, index)
-	} else if strings.HasPrefix(proxyURL, "trojan://") {
-		return p.parseTrojanURL(proxyURL, index)
-	} else if strings.HasPrefix(proxyURL, "hysteria2://") || strings.HasPrefix(proxyURL, "hy2://") ||
-		strings.HasPrefix(proxyURL, "tuic://") {
-		// 复用分享链接解析器（Hysteria2/TUIC）
-		rule, err := sharelink.NewShareLinkParser().ParseLink(proxyURL)
-		if err != nil {
-			return rule, err
-		}
-		rule.Source = "subscription"
-		return rule, nil
-	}
-
-	return rule, fmt.Errorf("不支持的协议: %s", proxyURL[:10])
-}
-
-// parseVMessURL 解析 VMess URL
-func (p *Parser) parseVMessURL(vmessURL string, index int) (models.ProxyRule, error) {
-	rule := models.ProxyRule{
-		Protocol:  "vmess",
-		LocalType: "socks",
-		Source:    "subscription",
-	}
-
-	// 移除 vmess:// 前缀
-	encoded := strings.TrimPrefix(vmessURL, "vmess://")
-
-	// Base64 解码
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	// 统一交给分享链接解析器。
+	//
+	// 这里原本为 vmess/vless/ss/trojan 各写了一份解析实现，与 internal/parser
+	// 里的那套重复。两份代码不可避免地会分叉——例如 allowInsecure、REALITY 的
+	// pbk/sid/fp、uTLS 指纹这些参数只在一边被支持，导致"同一个链接直接粘贴能用、
+	// 从订阅导入却不能用"。现在只保留一份实现。
+	rule, err := sharelink.NewShareLinkParser().ParseLink(proxyURL)
 	if err != nil {
-		decoded, err = base64.URLEncoding.DecodeString(encoded)
-		if err != nil {
-			return rule, fmt.Errorf("VMess Base64 解码失败: %v", err)
-		}
+		return rule, err
 	}
+	rule.Source = "subscription"
 
-	// 解析 JSON
-	var vmessConfig map[string]interface{}
-	if err := json.Unmarshal(decoded, &vmessConfig); err != nil {
-		return rule, fmt.Errorf("VMess JSON 解析失败: %v", err)
+	// 链接没带 #别名 时，用带序号的占位名，便于在列表里区分
+	if rule.Alias == "" || isDefaultAlias(rule.Alias) {
+		rule.Alias = fmt.Sprintf("%s_%d", defaultAliasPrefix(rule.Protocol), index+1)
 	}
-
-	// 提取配置
-	if ps, ok := vmessConfig["ps"].(string); ok {
-		rule.Alias = ps
-	} else {
-		rule.Alias = fmt.Sprintf("VMess_%d", index+1)
-	}
-
-	if add, ok := vmessConfig["add"].(string); ok {
-		rule.ServerAddr = add
-	}
-
-	if port, ok := vmessConfig["port"].(string); ok {
-		if portInt, err := strconv.Atoi(port); err == nil {
-			rule.ServerPort = portInt
-		}
-	} else if portFloat, ok := vmessConfig["port"].(float64); ok {
-		rule.ServerPort = int(portFloat)
-	}
-
-	if id, ok := vmessConfig["id"].(string); ok {
-		rule.Settings.VMessUserID = id
-	}
-
-	if aid, ok := vmessConfig["aid"].(string); ok {
-		if aidInt, err := strconv.Atoi(aid); err == nil {
-			rule.Settings.VMessAlterID = aidInt
-		}
-	} else if aidFloat, ok := vmessConfig["aid"].(float64); ok {
-		rule.Settings.VMessAlterID = int(aidFloat)
-	}
-
-	if net, ok := vmessConfig["net"].(string); ok {
-		rule.Settings.Network = net
-	}
-
-	if tls, ok := vmessConfig["tls"].(string); ok && tls == "tls" {
-		rule.Settings.Security = "tls"
-		if sni, ok := vmessConfig["sni"].(string); ok {
-			rule.Settings.TLS = &models.TLSSettings{
-				ServerName: sni,
-			}
-		} else if host, ok := vmessConfig["host"].(string); ok {
-			rule.Settings.TLS = &models.TLSSettings{
-				ServerName: host,
-			}
-		}
-	}
-
-	// WebSocket 配置
-	if rule.Settings.Network == "ws" {
-		rule.Settings.WS = &models.WSSettings{}
-		if path, ok := vmessConfig["path"].(string); ok {
-			rule.Settings.WS.Path = path
-		}
-		if host, ok := vmessConfig["host"].(string); ok {
-			rule.Settings.WS.Headers = map[string]string{"Host": host}
-		}
-	}
-
 	return rule, nil
 }
 
-// parseVLessURL 解析 VLESS URL
-func (p *Parser) parseVLessURL(vlessURL string, index int) (models.ProxyRule, error) {
-	rule := models.ProxyRule{
-		Protocol:  "vless",
-		LocalType: "socks",
-		Source:    "subscription",
+// defaultAliasPrefix 返回各协议的占位别名前缀
+func defaultAliasPrefix(protocol string) string {
+	switch protocol {
+	case "vmess":
+		return "VMess"
+	case "vless":
+		return "VLESS"
+	case "shadowsocks":
+		return "SS"
+	case "trojan":
+		return "Trojan"
+	case "hysteria2":
+		return "Hysteria2"
+	case "tuic":
+		return "TUIC"
+	default:
+		return "Node"
 	}
-
-	u, err := url.Parse(vlessURL)
-	if err != nil {
-		return rule, fmt.Errorf("解析 VLESS URL 失败: %v", err)
-	}
-
-	// UUID
-	rule.Settings.VLessUserID = u.User.Username()
-
-	// 服务器地址和端口
-	rule.ServerAddr = u.Hostname()
-	if port, err := strconv.Atoi(u.Port()); err == nil {
-		rule.ServerPort = port
-	}
-
-	// 别名
-	if u.Fragment != "" {
-		rule.Alias = u.Fragment
-	} else {
-		rule.Alias = fmt.Sprintf("VLESS_%d", index+1)
-	}
-
-	// 查询参数
-	query := u.Query()
-	if encryption := query.Get("encryption"); encryption != "" {
-		rule.Settings.VLessEncryption = encryption
-	}
-	if flow := query.Get("flow"); flow != "" {
-		rule.Settings.VLessFlow = flow
-	}
-	if security := query.Get("security"); security != "" {
-		rule.Settings.Security = security
-		if security == "tls" {
-			rule.Settings.TLS = &models.TLSSettings{}
-			if sni := query.Get("sni"); sni != "" {
-				rule.Settings.TLS.ServerName = sni
-			}
-		}
-	}
-	if typeNet := query.Get("type"); typeNet != "" {
-		rule.Settings.Network = typeNet
-		if typeNet == "ws" {
-			rule.Settings.WS = &models.WSSettings{}
-			if path := query.Get("path"); path != "" {
-				rule.Settings.WS.Path = path
-			}
-			if host := query.Get("host"); host != "" {
-				rule.Settings.WS.Headers = map[string]string{"Host": host}
-			}
-		} else if typeNet == "grpc" {
-			rule.Settings.GRPC = &models.GRPCSettings{}
-			if serviceName := query.Get("serviceName"); serviceName != "" {
-				rule.Settings.GRPC.ServiceName = serviceName
-			}
-		}
-	}
-
-	return rule, nil
 }
 
-// parseSSURL 解析 Shadowsocks URL
-func (p *Parser) parseSSURL(ssURL string, index int) (models.ProxyRule, error) {
-	rule := models.ProxyRule{
-		Protocol:  "shadowsocks",
-		LocalType: "socks",
-		Source:    "subscription",
+// isDefaultAlias 判断别名是否是分享链接解析器给的兜底名称。
+// 这类名称对订阅里的成百上千个节点毫无区分度，需要换成带序号的形式。
+func isDefaultAlias(alias string) bool {
+	switch alias {
+	case "VMess节点", "VLESS节点", "SS节点", "Trojan节点", "Hysteria2节点", "TUIC节点":
+		return true
 	}
-
-	// 移除 ss:// 前缀
-	ssURL = strings.TrimPrefix(ssURL, "ss://")
-
-	// 分离备注
-	parts := strings.SplitN(ssURL, "#", 2)
-	if len(parts) == 2 {
-		rule.Alias, _ = url.QueryUnescape(parts[1])
-	} else {
-		rule.Alias = fmt.Sprintf("SS_%d", index+1)
-	}
-
-	// 解析主体部分
-	mainPart := parts[0]
-
-	// SIP002 格式: method:password@server:port
-	if strings.Contains(mainPart, "@") {
-		parts := strings.SplitN(mainPart, "@", 2)
-		if len(parts) != 2 {
-			return rule, fmt.Errorf("无效的 SS URL 格式")
-		}
-
-		// 解码 method:password
-		decoded, err := base64.URLEncoding.DecodeString(parts[0])
-		if err != nil {
-			decoded, err = base64.StdEncoding.DecodeString(parts[0])
-			if err != nil {
-				// 如果解码失败，可能是明文
-				decoded = []byte(parts[0])
-			}
-		}
-
-		methodPassword := strings.SplitN(string(decoded), ":", 2)
-		if len(methodPassword) == 2 {
-			rule.Settings.SSMethod = methodPassword[0]
-			rule.Settings.SSPassword = methodPassword[1]
-		}
-
-		// 解析 server:port
-		serverPort := strings.SplitN(parts[1], ":", 2)
-		if len(serverPort) == 2 {
-			rule.ServerAddr = serverPort[0]
-			if port, err := strconv.Atoi(serverPort[1]); err == nil {
-				rule.ServerPort = port
-			}
-		}
-	} else {
-		// 旧格式: Base64(method:password@server:port)
-		decoded, err := base64.URLEncoding.DecodeString(mainPart)
-		if err != nil {
-			decoded, err = base64.StdEncoding.DecodeString(mainPart)
-			if err != nil {
-				return rule, fmt.Errorf("Base64 解码失败: %v", err)
-			}
-		}
-
-		parts := strings.SplitN(string(decoded), "@", 2)
-		if len(parts) != 2 {
-			return rule, fmt.Errorf("无效的 SS URL 格式")
-		}
-
-		methodPassword := strings.SplitN(parts[0], ":", 2)
-		if len(methodPassword) == 2 {
-			rule.Settings.SSMethod = methodPassword[0]
-			rule.Settings.SSPassword = methodPassword[1]
-		}
-
-		serverPort := strings.SplitN(parts[1], ":", 2)
-		if len(serverPort) == 2 {
-			rule.ServerAddr = serverPort[0]
-			if port, err := strconv.Atoi(serverPort[1]); err == nil {
-				rule.ServerPort = port
-			}
-		}
-	}
-
-	return rule, nil
-}
-
-// parseTrojanURL 解析 Trojan URL
-func (p *Parser) parseTrojanURL(trojanURL string, index int) (models.ProxyRule, error) {
-	rule := models.ProxyRule{
-		Protocol:  "trojan",
-		LocalType: "socks",
-		Source:    "subscription",
-	}
-
-	u, err := url.Parse(trojanURL)
-	if err != nil {
-		return rule, fmt.Errorf("解析 Trojan URL 失败: %v", err)
-	}
-
-	// 密码
-	rule.Settings.TrojanPassword = u.User.Username()
-
-	// 服务器地址和端口
-	rule.ServerAddr = u.Hostname()
-	if port, err := strconv.Atoi(u.Port()); err == nil {
-		rule.ServerPort = port
-	}
-
-	// 别名
-	if u.Fragment != "" {
-		rule.Alias = u.Fragment
-	} else {
-		rule.Alias = fmt.Sprintf("Trojan_%d", index+1)
-	}
-
-	// 查询参数
-	query := u.Query()
-	if security := query.Get("security"); security != "" {
-		rule.Settings.Security = security
-		if security == "tls" {
-			rule.Settings.TLS = &models.TLSSettings{}
-			if sni := query.Get("sni"); sni != "" {
-				rule.Settings.TLS.ServerName = sni
-			}
-		}
-	} else {
-		// Trojan 默认使用 TLS
-		rule.Settings.Security = "tls"
-		rule.Settings.TLS = &models.TLSSettings{}
-		if sni := query.Get("sni"); sni != "" {
-			rule.Settings.TLS.ServerName = sni
-		}
-	}
-
-	if typeNet := query.Get("type"); typeNet != "" {
-		rule.Settings.Network = typeNet
-		if typeNet == "ws" {
-			rule.Settings.WS = &models.WSSettings{}
-			if path := query.Get("path"); path != "" {
-				rule.Settings.WS.Path = path
-			}
-			if host := query.Get("host"); host != "" {
-				rule.Settings.WS.Headers = map[string]string{"Host": host}
-			}
-		} else if typeNet == "grpc" {
-			rule.Settings.GRPC = &models.GRPCSettings{}
-			if serviceName := query.Get("serviceName"); serviceName != "" {
-				rule.Settings.GRPC.ServiceName = serviceName
-			}
-		}
-	}
-
-	return rule, nil
+	return false
 }
 
 // ParseSIP008 解析 SIP008 Shadowsocks 订阅

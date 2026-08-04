@@ -14,6 +14,45 @@ import (
 type ShareLinkParser struct{}
 
 // NewShareLinkParser 创建分享链接解析器
+// parseInsecureFlag 解析"跳过证书校验"标志。
+//
+// 各家客户端用的参数名不统一：v2rayN/Xray 系多用 allowInsecure，
+// Clash/sing-box 系用 insecure 或 skip-cert-verify，还有 allow_insecure。
+// 这个标志对伪装 SNI 的节点是必需的——例如 sni=iosapps.itunes.apple.com
+// 而服务器拿不出该域名的证书，不跳过校验就必然握手失败。
+func parseInsecureFlag(query url.Values) bool {
+	for _, key := range []string{"allowInsecure", "allow_insecure", "insecure", "skip-cert-verify"} {
+		switch strings.ToLower(query.Get(key)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
+}
+
+// vmessInsecure 从 vmess:// 的 JSON 配置里取"跳过证书校验"标志。
+// 各客户端导出的类型不一致：可能是布尔 true，也可能是字符串 "1"/"true"。
+func vmessInsecure(cfg map[string]interface{}) bool {
+	for _, key := range []string{"allowInsecure", "allow_insecure", "insecure", "skip-cert-verify"} {
+		switch v := cfg[key].(type) {
+		case bool:
+			if v {
+				return true
+			}
+		case string:
+			switch strings.ToLower(v) {
+			case "1", "true", "yes":
+				return true
+			}
+		case float64: // JSON 数字统一解析为 float64
+			if v != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func NewShareLinkParser() *ShareLinkParser {
 	return &ShareLinkParser{}
 }
@@ -181,6 +220,11 @@ func (p *ShareLinkParser) ParseVMess(vmessURL string) (models.ProxyRule, error) 
 		} else if host, ok := vmessConfig["host"].(string); ok && host != "" {
 			rule.Settings.TLS.ServerName = host
 		}
+		if fp, ok := vmessConfig["fp"].(string); ok && fp != "" {
+			rule.Settings.TLS.Fingerprint = fp
+		}
+		// vmess:// 的 JSON 里 allowInsecure 可能是字符串 "1"/"true" 或布尔 true
+		rule.Settings.TLS.AllowInsecure = vmessInsecure(vmessConfig)
 	}
 
 	// WebSocket
@@ -256,6 +300,7 @@ func (p *ShareLinkParser) ParseVless(vlessURL string) (models.ProxyRule, error) 
 			if fp := query.Get("fp"); fp != "" {
 				rule.Settings.TLS.Fingerprint = fp
 			}
+			rule.Settings.TLS.AllowInsecure = parseInsecureFlag(query)
 		}
 		// REALITY 的 pbk/sid/spx 必须保留：Xray 在 security=reality 时
 		// 强制要求 realitySettings，丢掉这些参数会导致配置直接加载失败。
@@ -458,6 +503,11 @@ func (p *ShareLinkParser) ParseTrojan(trojanURL string) (models.ProxyRule, error
 		if alpn := query.Get("alpn"); alpn != "" {
 			rule.Settings.TLS.ALPN = strings.Split(alpn, ",")
 		}
+		if fp := query.Get("fp"); fp != "" {
+			rule.Settings.TLS.Fingerprint = fp
+		}
+		// 伪装 SNI 的节点必须保留这个标志，否则证书校验必然失败
+		rule.Settings.TLS.AllowInsecure = parseInsecureFlag(query)
 	}
 
 	if typeNet := query.Get("type"); typeNet != "" {
