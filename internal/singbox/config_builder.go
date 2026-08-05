@@ -88,7 +88,64 @@ func buildTLS(rule *models.ProxyRule, defaultEnabled bool) map[string]interface{
 			tls["alpn"] = rule.Settings.TLS.ALPN
 		}
 	}
+	applyReality(rule, tls)
 	return tls
+}
+
+// applyReality 为 sing-box 的 tls 段补上 REALITY 与 uTLS 配置。
+//
+// 缺了这一段时 REALITY 节点会退化成普通 TLS 握手：公钥/short_id 被丢弃，
+// 服务端不认这个握手而返回明文，客户端读到首字节 'H'(72) 报
+// "unknown version: 72"，表现为节点启动后连不通。
+//
+// 注意与 Xray 的字段命名差异：sing-box 用 snake_case（public_key/short_id），
+// 且 REALITY 必须搭配 utls —— 没有 uTLS 指纹时 sing-box 会拒绝加载配置。
+func applyReality(rule *models.ProxyRule, tls map[string]interface{}) {
+	if rule.Settings.Security != "reality" {
+		return
+	}
+
+	reality := map[string]interface{}{"enabled": true}
+	fingerprint := ""
+	serverName := ""
+
+	if r := rule.Settings.Reality; r != nil {
+		if r.PublicKey != "" {
+			reality["public_key"] = r.PublicKey
+		}
+		if r.ShortID != "" {
+			reality["short_id"] = r.ShortID
+		}
+		fingerprint = r.Fingerprint
+		serverName = r.ServerName
+	}
+
+	// SNI / 指纹可能记录在 TLS 段里，缺失时回退取用（与 Xray 侧一致）
+	if rule.Settings.TLS != nil {
+		if serverName == "" {
+			serverName = rule.Settings.TLS.ServerName
+		}
+		if fingerprint == "" {
+			fingerprint = rule.Settings.TLS.Fingerprint
+		}
+	}
+	if serverName != "" {
+		tls["server_name"] = serverName
+	}
+
+	// sing-box 的 REALITY 依赖 uTLS，指纹为空会导致配置加载失败
+	if fingerprint == "" {
+		fingerprint = "chrome"
+	}
+	tls["utls"] = map[string]interface{}{
+		"enabled":     true,
+		"fingerprint": fingerprint,
+	}
+
+	// REALITY 自带证书校验，insecure 会被内核拒绝
+	delete(tls, "insecure")
+
+	tls["reality"] = reality
 }
 
 // buildTransport 构建 sing-box 传输层配置（ws/grpc/h2）
