@@ -60,11 +60,29 @@ func (c *Config) ToJSON() (string, error) {
 
 // buildMixedInbound 混合入站（同时支持 HTTP/SOCKS5）
 func buildMixedInbound(localPort int) map[string]interface{} {
+	return BuildInbound(localPort, "inbound")
+}
+
+// BuildInbound 构建混合入站（同时支持 HTTP/SOCKS5）。
+//
+// 与 BuildOutbound / BuildRouteRule 一起构成配置生成的三层原语：
+// 单节点、链式、故障转移、分片配置都由这三者组装而成，避免各自分叉——
+// REALITY 曾因 sing-box 侧独立实现而被漏写，节点连不通却无任何配置报错。
+func BuildInbound(localPort int, tag string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "mixed",
-		"tag":         "inbound",
+		"tag":         tag,
 		"listen":      "0.0.0.0",
 		"listen_port": localPort,
+	}
+}
+
+// BuildRouteRule 构建「入站 -> 出站」的路由规则。
+// 分片配置里每个节点各占一条，把自己的本地端口绑到自己的出站上。
+func BuildRouteRule(inboundTag, outboundTag string) map[string]interface{} {
+	return map[string]interface{}{
+		"inbound":  []string{inboundTag},
+		"outbound": outboundTag,
 	}
 }
 
@@ -376,6 +394,102 @@ func BuildChainConfig(localPort int, chainRules []*models.ProxyRule) (*Config, e
 	}
 
 	return config, nil
+}
+
+// ShardNodeTags 分片配置中一个节点占用的 inbound / outbound 标签。
+type ShardNodeTags struct {
+	Inbound  string
+	Outbound string
+}
+
+// ShardInboundTag 返回节点在分片配置中的入站标签。
+func ShardInboundTag(nodeID string) string { return "in_" + nodeID }
+
+// ShardOutboundTag 返回节点在分片配置中的出站标签。
+// 流量统计按 Clash API 连接的 chains 反查节点时也用这个标签。
+func ShardOutboundTag(nodeID string) string { return "out_" + nodeID }
+
+// SkippedNode 分片构建时被跳过的节点及原因。
+type SkippedNode struct {
+	NodeID string
+	Alias  string
+	Err    error
+}
+
+// BuildShardConfig 构建一份承载多个节点的分片配置。
+//
+// 每个节点占一组 inbound + outbound + route rule，各自监听原有的 LocalPort，
+// 因此对上层完全透明：健康检查、测速、系统代理仍然连 127.0.0.1:<LocalPort>，
+// 只是背后从「一节点一进程」变成了共享进程。
+//
+// 单个节点配置非法时跳过该节点并计入 skipped，而不是让整份配置失败——
+// 否则一个坏节点会拖垮同片其余几百个正常节点。
+// 返回的 skipped 供调用方记录日志、在界面上标记问题节点。
+func BuildShardConfig(nodes []*models.ProxyRule, apiPort int) (*Config, []SkippedNode, error) {
+	if len(nodes) == 0 {
+		return nil, nil, fmt.Errorf("分片至少需要一个节点")
+	}
+
+	config := &Config{
+		Log: map[string]interface{}{"level": "warn"},
+	}
+
+	var (
+		inbounds  []map[string]interface{}
+		outbounds []map[string]interface{}
+		rules     []map[string]interface{}
+		skipped   []SkippedNode
+		seenPorts = make(map[int]string, len(nodes))
+	)
+
+	for _, node := range nodes {
+		if node.LocalPort <= 0 {
+			skipped = append(skipped, SkippedNode{node.ID, node.Alias,
+				fmt.Errorf("没有分配本地端口")})
+			continue
+		}
+		// 同一份配置里两个 inbound 抢同一个端口会导致整个进程起不来，
+		// 这里提前挡下并说明是跟谁冲突
+		if owner, exists := seenPorts[node.LocalPort]; exists {
+			skipped = append(skipped, SkippedNode{node.ID, node.Alias,
+				fmt.Errorf("本地端口 %d 与节点 %s 冲突", node.LocalPort, owner)})
+			continue
+		}
+
+		outboundTag := ShardOutboundTag(node.ID)
+		outbound, err := BuildOutbound(node, outboundTag)
+		if err != nil {
+			skipped = append(skipped, SkippedNode{node.ID, node.Alias, err})
+			continue
+		}
+
+		inboundTag := ShardInboundTag(node.ID)
+		inbounds = append(inbounds, BuildInbound(node.LocalPort, inboundTag))
+		outbounds = append(outbounds, outbound)
+		rules = append(rules, BuildRouteRule(inboundTag, outboundTag))
+		seenPorts[node.LocalPort] = node.Alias
+	}
+
+	if len(inbounds) == 0 {
+		return nil, skipped, fmt.Errorf("分片内 %d 个节点全部无法构建配置", len(nodes))
+	}
+
+	// direct 出站兜底：route.final 必须指向一个存在的出站，
+	// 而分片内没有「默认节点」的概念，未命中任何规则的流量走直连。
+	outbounds = append(outbounds, map[string]interface{}{"type": "direct", "tag": "direct"})
+
+	config.Inbounds = inbounds
+	config.Outbounds = outbounds
+	config.Route = map[string]interface{}{
+		"rules": rules,
+		"final": "direct",
+	}
+
+	if apiPort > 0 {
+		AddClashAPI(config, apiPort)
+	}
+
+	return config, skipped, nil
 }
 
 // BuildLoadBalanceConfig 构建故障转移配置（urltest 自动选择延迟最低的节点）
