@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"xray-manager/internal/models"
@@ -8,9 +9,13 @@ import (
 	"xray-manager/internal/utils"
 )
 
-// 预算不应无故砍掉正常规模的节点数
+// 预算不应无故砍掉正常规模的节点数。
+//
+// 具体能放行多少个取决于运行时的可用内存，因此这里不写死期望值：
+// 只要机器还装得下这些节点就必须全部放行，装不下时也不能超过容量上限。
 func TestAutoStartBudgetAllowsNormalNodeCount(t *testing.T) {
-	rules := make([]models.ProxyRule, 20)
+	const nodeCount = 20
+	rules := make([]models.ProxyRule, nodeCount)
 	for i := range rules {
 		rules[i] = models.ProxyRule{ID: "r", Enabled: true, LocalPort: 11000 + i}
 	}
@@ -20,8 +25,23 @@ func TestAutoStartBudgetAllowsNormalNodeCount(t *testing.T) {
 	budget := service.autoStartBudgetLocked()
 	service.mu.Unlock()
 
-	if budget != 20 {
-		t.Errorf("budget = %d, want all 20 nodes to be startable", budget)
+	if err := process.CheckCapacity(nodeCount); err == nil {
+		// 内存充裕：不该砍掉任何节点
+		if budget != nodeCount {
+			t.Errorf("budget = %d, want all %d nodes when memory allows", budget, nodeCount)
+		}
+		return
+	}
+	// 内存紧张：预算应等于容量上限，且不为负
+	var capacityErr *process.CapacityError
+	if !errors.As(process.CheckCapacity(nodeCount), &capacityErr) {
+		t.Fatal("expected a *process.CapacityError when capacity is exceeded")
+	}
+	if budget != capacityErr.Allowed {
+		t.Errorf("budget = %d, want %d (the capacity limit)", budget, capacityErr.Allowed)
+	}
+	if budget < 0 {
+		t.Errorf("budget = %d, must never be negative", budget)
 	}
 }
 
