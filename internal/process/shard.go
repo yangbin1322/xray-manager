@@ -372,10 +372,14 @@ func (m *ShardManager) startShardProcessLocked(shard *Shard) error {
 	}
 	shard.cmd = cmd
 
-	// 进程刚 fork 出来不等于端口已就绪；等首个节点端口真正可连，
-	// 才能认为这次切换成功，否则调用方会在端口还没起来时就去用它
+	// 进程刚 fork 出来不等于端口已就绪，要等真正能连上才算切换成功，
+	// 否则调用方会在端口还没起来时就把流量打过去。
+	//
+	// 只探首个节点是不够的：个别节点可能因参数问题始终起不来（sing-box 对
+	// 配置容错很高，空 server 之类的问题要到运行时才暴露），死等它会拖住
+	// 整批操作。这里只要有任意一个节点就绪就认为进程已经起来了。
 	if len(shard.nodes) > 0 {
-		if err := waitPortListening(shard.nodes[0].LocalPort, shardStartTimeout); err != nil {
+		if err := waitShardReady(shard.nodes, shardStartTimeout); err != nil {
 			_ = cmd.Process.Kill()
 			_, _ = cmd.Process.Wait()
 			shard.cmd = nil
@@ -434,6 +438,15 @@ func (m *ShardManager) IsPortRunning(localPort int) bool {
 	}
 	shardID := m.nodeShard[nodeID]
 	return m.shards[shardID].Running()
+}
+
+// NodeIDAt 返回监听指定本地端口的节点 ID。
+// 上层多以端口为键操作（Stop/IsRunning），这里提供端口到节点的反查。
+func (m *ShardManager) NodeIDAt(localPort int) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nodeID, ok := m.portNode[localPort]
+	return nodeID, ok
 }
 
 // ShardOf 返回承载指定节点的分片 ID。
@@ -530,21 +543,34 @@ func basePortOf(nodes []*models.ProxyRule) int {
 	return nodes[0].LocalPort
 }
 
-// waitPortListening 等待端口真正可连接。
+// waitShardReady 等待分片进程就绪：任意一个节点端口能连上即可。
+//
+// 逐轮扫描全部节点而非死等某一个：个别节点可能因参数问题始终起不来，
+// 只盯着它会白等到超时、拖住整批操作。
+func waitShardReady(nodes []*models.ProxyRule, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, node := range nodes {
+			if portDialable(node.LocalPort) {
+				return nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("等待 %d 个节点的端口就绪超时", len(nodes))
+}
+
+// portDialable 端口是否已能建立连接。
 //
 // 用「能否 dial 通」而不是「端口是否已被占用」来判断：后者在端口被其他进程
 // 抢占时也会成立，会把「别人占着」误判成「我们起来了」，调用方随后把流量
 // 打到不相干的进程上。
-func waitPortListening(port int, timeout time.Duration) error {
-	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", address, time.Second)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
+func portDialable(port int) bool {
+	conn, err := net.DialTimeout("tcp",
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+	if err != nil {
+		return false
 	}
-	return fmt.Errorf("等待端口 %d 就绪超时", port)
+	_ = conn.Close()
+	return true
 }

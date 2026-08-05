@@ -3,6 +3,7 @@ package process
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,6 +45,33 @@ type Manager struct {
 	onRealIP     func(localPort int, ip string)                                            // 成功获取真实IP的回调（回填到节点）
 	pollerStop   chan struct{}
 	stopOnce     sync.Once // 确保 pollerStop 只关闭一次
+
+	// shards 非空时，普通节点由分片管理器承载（多节点共享进程）。
+	// 链式代理/故障转移有各自定制的配置，始终是独立进程。
+	shards *ShardManager
+}
+
+// EnableSharding 启用分片模式，普通节点将共享 sing-box 进程。
+func (m *Manager) EnableSharding() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shards == nil {
+		m.shards = NewShardManager(filepath.Join(m.configDir, "shards"), m.log)
+	}
+}
+
+// ShardingEnabled 是否已启用分片模式。
+func (m *Manager) ShardingEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.shards != nil
+}
+
+// Shards 返回分片管理器（未启用时为 nil）。
+func (m *Manager) Shards() *ShardManager {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.shards
 }
 
 // SetNodeFailedCallback 设置节点启动后验证失败（如无法访问外网）的回调
@@ -134,8 +162,18 @@ func FindApiPort(localPort int) int {
 	return utils.FindAvailablePort(start)
 }
 
-// Start 启动代理规则
+// Start 启动代理规则。
+//
+// 普通节点交给分片管理器：多个节点共享一个 sing-box 进程，内存从
+// 「节点数 × 33 MB」降到「分片数 × 33 MB」（实测 1583 个节点约 210 MB，
+// 一节点一进程则需约 50 GB）。节点仍监听原有的 LocalPort，对上层透明。
+//
+// 链式代理/故障转移走 StartWithOptions，它们有各自定制的配置，仍是独立进程。
 func (m *Manager) Start(rule *models.ProxyRule) error {
+	if shards := m.Shards(); shards != nil {
+		return m.startInShard(shards, rule)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -166,6 +204,87 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 		ApiPort:     apiPort,
 		FetchRealIP: true,
 	})
+}
+
+// startInShard 把单个节点加入分片并立即调谐。
+//
+// 逐个调用会让同一分片反复重启，批量场景应改用 StartNodesInShard。
+func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) error {
+	if err := rule.ValidateForXray(); err != nil {
+		return err
+	}
+	shards.AddDesired(rule)
+	result, err := shards.Reconcile()
+	if err != nil {
+		shards.RemoveDesired(rule.ID)
+		return err
+	}
+	if err := shardSkipError(result, rule.ID); err != nil {
+		shards.RemoveDesired(rule.ID)
+		return err
+	}
+	rule.ProcessID = 0 // 分片模式下节点没有独立进程
+	rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+	return nil
+}
+
+// StartNodesInShard 批量启动节点，只调谐一次。
+//
+// 相比逐个 Start，避免了同一分片被反复重启——启动 300 个节点原本要重建
+// 300 次配置，现在只重建一次。返回未能启动的节点及原因。
+func (m *Manager) StartNodesInShard(rules []*models.ProxyRule) (map[string]error, error) {
+	if m.shards == nil {
+		return nil, fmt.Errorf("分片模式未启用")
+	}
+	failures := make(map[string]error)
+	var accepted []*models.ProxyRule
+	for _, rule := range rules {
+		if err := rule.ValidateForXray(); err != nil {
+			failures[rule.ID] = err
+			continue
+		}
+		accepted = append(accepted, rule)
+	}
+	if len(accepted) == 0 {
+		return failures, nil
+	}
+
+	m.shards.AddDesired(accepted...)
+	result, err := m.shards.Reconcile()
+	if err != nil {
+		return failures, err
+	}
+	for _, rule := range accepted {
+		if skipErr := shardSkipError(result, rule.ID); skipErr != nil {
+			failures[rule.ID] = skipErr
+			m.shards.RemoveDesired(rule.ID)
+			continue
+		}
+		rule.ProcessID = 0
+		rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	return failures, nil
+}
+
+// StopNodesInShard 批量停止节点，只调谐一次。
+func (m *Manager) StopNodesInShard(nodeIDs []string) error {
+	if m.shards == nil {
+		return fmt.Errorf("分片模式未启用")
+	}
+	m.shards.RemoveDesired(nodeIDs...)
+	_, err := m.shards.Reconcile()
+	return err
+}
+
+// shardSkipError 从调谐结果里找出与该节点相关的跳过原因。
+func shardSkipError(result ReconcileResult, nodeID string) error {
+	for _, skipped := range result.Skipped {
+		var portErr *PortUnavailableError
+		if errors.As(skipped, &portErr) && portErr.NodeID == nodeID {
+			return skipped
+		}
+	}
+	return nil
 }
 
 // StartWithConfig 使用自定义配置 JSON 启动进程（不启用流量统计）
@@ -268,6 +387,16 @@ func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) 
 // 否则批量停止时，即使调用方开了并发，所有协程也会卡在这把全局锁上排队，
 // 退化成串行——每个节点耗时叠加，几百个节点就要等很久。
 func (m *Manager) Stop(localPort int) error {
+	// 分片承载的节点没有独立进程，改为从期望集合里摘除并调谐。
+	// 逐个停止会让同一分片反复重启，批量场景应改用 StopNodesInShard。
+	if shards := m.Shards(); shards != nil {
+		if nodeID, ok := shards.NodeIDAt(localPort); ok {
+			shards.RemoveDesired(nodeID)
+			_, err := shards.Reconcile()
+			return err
+		}
+	}
+
 	m.mu.Lock()
 	processInfo, exists := m.processes[localPort]
 	if exists {
@@ -386,6 +515,11 @@ func (m *Manager) killUnix(processInfo *ProcessInfo) {
 
 // IsRunning 检查端口是否正在运行
 func (m *Manager) IsRunning(localPort int) bool {
+	// 分片承载的节点没有独立进程记录，先查分片
+	if shards := m.Shards(); shards != nil && shards.IsPortRunning(localPort) {
+		return true
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	processInfo, exists := m.processes[localPort]
@@ -430,6 +564,11 @@ func (m *Manager) isProcessAlive(processInfo *ProcessInfo) bool {
 func (m *Manager) StopAll() {
 	// 停止流量轮询，避免关窗时还在 fork statsquery 子进程
 	m.stopOnce.Do(func() { close(m.pollerStop) })
+
+	// 分片进程不在 m.processes 里，需单独停
+	if shards := m.Shards(); shards != nil {
+		shards.StopAll()
+	}
 
 	// 锁内摘出所有进程并清空 map，避免并发终止时的 map 竞争
 	m.mu.Lock()
@@ -764,11 +903,17 @@ func (m *Manager) SyncState(rules []models.ProxyRule) []models.ProxyRule {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 分片模式下节点本来就没有独立进程，ProcessID 恒为 0，
+	// 逐个提示「进程不存在」只会刷屏；静默重置即可。
+	sharded := m.shards != nil
+
 	for i := range rules {
 		rule := &rules[i]
 		if rule.Enabled {
 			if rule.ProcessID <= 0 || !processExists(rule.ProcessID) {
-				m.log(fmt.Sprintf("[状态同步] 规则 %s (PID:%d) 进程不存在，重置进程状态（保留启用标记以便重启）", rule.Alias, rule.ProcessID))
+				if !sharded {
+					m.log(fmt.Sprintf("[状态同步] 规则 %s (PID:%d) 进程不存在，重置进程状态（保留启用标记以便重启）", rule.Alias, rule.ProcessID))
+				}
 				rule.ProcessID = 0
 				rule.RealIP = ""
 				// 保留 Enabled = true，以便启动时自动恢复

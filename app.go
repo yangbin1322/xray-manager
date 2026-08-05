@@ -96,6 +96,13 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		a.app.Event.EmitEvent(&application.CustomEvent{Name: "log", Data: message})
 	}, a.loadRules)
 
+	// 启用分片：普通节点共享 sing-box 进程，内存从「节点数 × 33 MB」
+	// 降到「分片数 × 33 MB」（实测 1583 个节点约 210 MB，
+	// 一节点一进程则需约 50 GB，远超常见机器的物理内存）。
+	if a.processManager != nil {
+		a.processManager.EnableSharding()
+	}
+
 	// 初始化测速管理器
 	a.speedTestManager = speedtest.NewTester(func(message string) {
 		a.logFilter.AddLog(message)
@@ -478,6 +485,12 @@ func (a *MyService) autoStartEnabledNodes() {
 	// 多少个，超出的保持启用标记不动，等用户自己决定启动哪些。
 	budget := a.autoStartBudgetLocked()
 
+	// 分片模式下把普通节点攒成一批，只调谐一次：逐个启动会让同一分片
+	// 反复重启，几百个节点就是几百次重建配置 + 重启进程。
+	sharded := a.processManager != nil && a.processManager.ShardingEnabled() &&
+		a.getPreProxyRuleLocked() == nil
+	var shardBatch []*models.ProxyRule
+
 	for i := range a.config.Rules {
 		rule := &a.config.Rules[i]
 		if rule.Enabled && a.hasPortConflictLocked(rule.ID) {
@@ -490,10 +503,36 @@ func (a *MyService) autoStartEnabledNodes() {
 				continue
 			}
 			budget--
+			if sharded {
+				a.releasePortReservationLocked(rule.LocalPort)
+				shardBatch = append(shardBatch, rule)
+				continue
+			}
 			a.log(fmt.Sprintf("自动启动规则: %s", rule.Alias))
 			if err := a.startRuleInternal(rule); err != nil {
 				a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), err)
 				rule.Enabled = false
+			}
+		}
+	}
+
+	if len(shardBatch) > 0 {
+		a.log(fmt.Sprintf("自动启动 %d 个节点（分片模式）", len(shardBatch)))
+		failures, err := a.processManager.StartNodesInShard(shardBatch)
+		if err != nil {
+			a.logError("批量启动节点失败", err)
+			for _, rule := range shardBatch {
+				rule.Enabled = false
+				a.reservePortLocked(rule.LocalPort)
+			}
+		} else {
+			for _, rule := range shardBatch {
+				if failErr, failed := failures[rule.ID]; failed {
+					a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), failErr)
+					rule.Enabled = false
+					rule.LastError = failErr.Error()
+					a.reservePortLocked(rule.LocalPort)
+				}
 			}
 		}
 	}
@@ -562,6 +601,16 @@ func (a *MyService) autoStartEnabledNodes() {
 	a.emitEvent("loadRules", nil)
 }
 
+// checkNodeCapacity 按当前运行模式判断能否再启动 count 个节点。
+//
+// 分片模式下节点共享进程，单节点开销远低于独立进程，容量上限高得多。
+func (a *MyService) checkNodeCapacity(count int) error {
+	if a.processManager != nil && a.processManager.ShardingEnabled() {
+		return process.CheckShardedCapacity(count)
+	}
+	return process.CheckCapacity(count)
+}
+
 // autoStartBudgetLocked 返回本次启动最多可自动拉起的节点数。
 //
 // 崩溃恢复时配置里可能有上千个 Enabled 节点，全部拉起会再次耗尽内存并闪退。
@@ -590,7 +639,7 @@ func (a *MyService) autoStartBudgetLocked() int {
 		}
 	}
 
-	err := process.CheckCapacity(enabled)
+	err := a.checkNodeCapacity(enabled)
 	if err == nil {
 		return enabled
 	}
@@ -1126,10 +1175,9 @@ func (a *MyService) StartNodes(ids []string) error {
 	refs := a.collectNodeRefs(ids)
 	a.mu.Unlock()
 
-	// 每个节点都是一个独立的内核进程，内存开销随节点数线性增长。
-	// 上千节点会超出物理内存，进程被系统终止、应用直接闪退——
+	// 内存开销随节点数增长，超出物理内存会让进程被系统终止、应用直接闪退。
 	// 与其让用户把机器打崩，不如提前拦下并说明还能启动多少个。
-	if err := process.CheckCapacity(len(refs)); err != nil {
+	if err := a.checkNodeCapacity(len(refs)); err != nil {
 		a.log(err.Error())
 		return err
 	}
@@ -1138,9 +1186,17 @@ func (a *MyService) StartNodes(ids []string) error {
 	// 主要收益来自：端口检测已优化为轻量探测 + 仅在最后统一保存一次配置，
 	// 避免了原先前端逐个调用时每次都 saveConfig 写盘的开销。
 	a.mu.Lock()
+
+	// 分片模式下普通节点合并为一次调谐：逐个启动会让同一分片反复重启，
+	// 300 个节点原本要重建 300 次配置，合并后只重建一次。
+	handledByShard := a.startPlainNodesInShardLocked(refs)
+
 	for _, ref := range refs {
 		switch ref.nodeType {
 		case "rule":
+			if handledByShard[ref.id] {
+				continue
+			}
 			for i := range a.config.Rules {
 				r := &a.config.Rules[i]
 				if r.ID == ref.id && !r.Enabled {
@@ -1193,6 +1249,104 @@ func (a *MyService) StartNodes(ids []string) error {
 	return err
 }
 
+// startPlainNodesInShardLocked 把普通节点合并成一次分片调谐，返回已处理的节点 ID。
+//
+// 只处理「直连出站」的普通节点：设置了全局前置代理时，节点要走链式配置
+// （经前置节点出站），那是每节点一份定制配置，不能并进分片。
+// 未启用分片模式时返回空集合，调用方按原路径逐个启动。
+// 需已持有 a.mu 锁。
+func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool {
+	handled := make(map[string]bool)
+	if a.processManager == nil || !a.processManager.ShardingEnabled() {
+		return handled
+	}
+	// 有前置代理时普通节点走链式配置，不能并入分片
+	if a.getPreProxyRuleLocked() != nil {
+		return handled
+	}
+
+	wanted := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if ref.nodeType == "rule" {
+			wanted[ref.id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return handled
+	}
+
+	var (
+		batch   []*models.ProxyRule
+		targets []*models.ProxyRule
+	)
+	for i := range a.config.Rules {
+		r := &a.config.Rules[i]
+		if !wanted[r.ID] || r.Enabled {
+			continue
+		}
+		a.releasePortReservationLocked(r.LocalPort)
+		batch = append(batch, r)
+		targets = append(targets, r)
+	}
+	if len(batch) == 0 {
+		return handled
+	}
+
+	failures, err := a.processManager.StartNodesInShard(batch)
+	if err != nil {
+		a.logError("批量启动节点失败", err)
+		for _, r := range targets {
+			a.reservePortLocked(r.LocalPort)
+		}
+		return handled
+	}
+
+	for _, r := range targets {
+		handled[r.ID] = true
+		if failErr, failed := failures[r.ID]; failed {
+			a.logError(fmt.Sprintf("启动规则 %s 失败", r.Alias), failErr)
+			r.LastError = failErr.Error()
+			a.reservePortLocked(r.LocalPort)
+			continue
+		}
+		r.Enabled = true
+		r.LastError = ""
+	}
+	return handled
+}
+
+// stopPlainNodesInShardLocked 把普通节点合并成一次分片调谐，返回已处理的节点 ID。
+// 需已持有 a.mu 锁。
+func (a *MyService) stopPlainNodesInShardLocked(refs []nodeRef) map[string]bool {
+	handled := make(map[string]bool)
+	if a.processManager == nil || !a.processManager.ShardingEnabled() {
+		return handled
+	}
+
+	var ids []string
+	for _, ref := range refs {
+		if ref.nodeType != "rule" {
+			continue
+		}
+		if _, ok := a.processManager.Shards().ShardOf(ref.id); !ok {
+			continue // 不在分片里（可能走的是链式配置），交给原路径处理
+		}
+		ids = append(ids, ref.id)
+	}
+	if len(ids) == 0 {
+		return handled
+	}
+
+	if err := a.processManager.StopNodesInShard(ids); err != nil {
+		a.logError("批量停止节点失败", err)
+		return handled
+	}
+	for _, id := range ids {
+		handled[id] = true
+	}
+	return handled
+}
+
 // StopNodes 批量停止节点，并发执行、只保存一次配置。
 // stopConcurrency 按批量大小决定停止进程的并发度。
 //
@@ -1217,6 +1371,8 @@ func (a *MyService) StopNodes(ids []string) error {
 
 	a.mu.Lock()
 	refs := a.collectNodeRefs(ids)
+	// 分片模式下普通节点合并为一次调谐，避免同一分片被反复重启
+	handledByShard := a.stopPlainNodesInShardLocked(refs)
 	a.mu.Unlock()
 
 	// 停止进程是慢操作（Windows 要 fork taskkill，Unix 要等进程退出），
@@ -1224,6 +1380,9 @@ func (a *MyService) StopNodes(ids []string) error {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, stopConcurrency(len(refs)))
 	for _, ref := range refs {
+		if handledByShard[ref.id] {
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(ref nodeRef) {
