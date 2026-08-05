@@ -8,22 +8,10 @@ import (
 	"runtime"
 )
 
-// 嵌入不同平台的 xray 二进制文件
-// 注意：需要将对应平台的 xray 二进制文件放置在以下目录：
-// - Windows: internal/assets/xray/windows/xray.exe
-// - Linux:   internal/assets/xray/linux/xray
-// - macOS:   internal/assets/xray/darwin/xray
-
-//go:embed xray/windows/xray.exe
-var xrayWindows []byte
-
-//go:embed xray/linux/xray
-var xrayLinux []byte
-
-//go:embed xray/darwin/xray
-var xrayDarwin []byte
-
-// 嵌入不同平台的 sing-box 二进制文件（Hysteria2/TUIC 协议由 sing-box 内核运行）
+// 嵌入不同平台的 sing-box 二进制文件。
+//
+// 内核已统一为 sing-box：它支持的协议是 Xray 的超集（Hysteria2/TUIC 只有
+// sing-box 能跑），且单内核省去了两套配置生成逻辑不同步的隐患。
 // - Windows: internal/assets/singbox/windows/sing-box.exe
 // - Linux:   internal/assets/singbox/linux/sing-box
 // - macOS:   internal/assets/singbox/darwin/sing-box
@@ -39,28 +27,6 @@ var singboxDarwin []byte
 
 // binDirName 内核二进制提取目录（位于可执行文件同级）
 const binDirName = "xray-bin"
-
-// ExtractXrayBinary 提取并返回当前平台的 xray 二进制文件路径
-func ExtractXrayBinary() (string, error) {
-	var binaryData []byte
-	var binaryName string
-
-	switch runtime.GOOS {
-	case "windows":
-		binaryData = xrayWindows
-		binaryName = "xray.exe"
-	case "linux":
-		binaryData = xrayLinux
-		binaryName = "xray"
-	case "darwin":
-		binaryData = xrayDarwin
-		binaryName = "xray"
-	default:
-		return "", fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
-	}
-
-	return extractBinary(binaryData, binaryName, "xray", "internal/assets/xray")
-}
 
 // ExtractSingBoxBinary 提取并返回当前平台的 sing-box 二进制文件路径
 func ExtractSingBoxBinary() (string, error) {
@@ -124,9 +90,4 @@ func extractBinary(binaryData []byte, binaryName, core, srcHint string) (string,
 	}
 
 	return binaryPath, nil
-}
-
-// GetXrayVersion 获取嵌入的 xray 版本信息（可选功能）
-func GetXrayVersion() string {
-	return "embedded"
 }

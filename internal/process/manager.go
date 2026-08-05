@@ -20,12 +20,14 @@ import (
 	"xray-manager/internal/models"
 	"xray-manager/internal/singbox"
 	"xray-manager/internal/utils"
-	"xray-manager/internal/xray"
 )
 
-// 内核类型
+// 内核类型。
+//
+// 已统一为 sing-box：它支持的协议是 Xray 的超集（Hysteria2/TUIC 只有
+// sing-box 能跑），单内核也避免了两套配置生成逻辑不同步——REALITY 曾因此
+// 在 sing-box 侧被漏写，节点启动后连不通却没有任何配置报错。
 const (
-	CoreXray    = "xray"
 	CoreSingBox = "singbox"
 )
 
@@ -142,49 +144,33 @@ func (m *Manager) Start(rule *models.ProxyRule) error {
 		return fmt.Errorf("端口 %d 已被占用 (当前规则: %s)", rule.LocalPort, existingProcess.Rule.Alias)
 	}
 
-	// 根据协议选择内核并生成配置
+	// 统一使用 sing-box 内核：它支持的协议是 Xray 的超集
+	// （Hysteria2/TUIC 只有 sing-box 能跑），单内核也避免了两套配置生成
+	// 逻辑不同步导致的问题。
 	apiPort := FindApiPort(rule.LocalPort)
-	var configJSON string
-	coreType := CoreXray
-
-	if singbox.NeedsSingBox(rule.Protocol) {
-		coreType = CoreSingBox
-		sbConfig, err := singbox.BuildConfig(rule)
-		if err != nil {
-			return fmt.Errorf("生成 sing-box 配置失败: %v", err)
-		}
-		if apiPort > 0 {
-			singbox.AddClashAPI(sbConfig, apiPort)
-		}
-		configJSON, err = sbConfig.ToJSON()
-		if err != nil {
-			return err
-		}
-	} else {
-		xrayConfig, err := xray.BuildConfig(rule)
-		if err != nil {
-			return fmt.Errorf("生成 Xray 配置失败: %v", err)
-		}
-		if apiPort > 0 {
-			xray.AddStatsAPI(xrayConfig, apiPort)
-		}
-		configJSON, err = xrayConfig.ToJSON()
-		if err != nil {
-			return fmt.Errorf("转换配置为 JSON 失败: %v", err)
-		}
+	sbConfig, err := singbox.BuildConfig(rule)
+	if err != nil {
+		return fmt.Errorf("生成 sing-box 配置失败: %v", err)
+	}
+	if apiPort > 0 {
+		singbox.AddClashAPI(sbConfig, apiPort)
+	}
+	configJSON, err := sbConfig.ToJSON()
+	if err != nil {
+		return err
 	}
 
 	return m.startProcessLocked(rule, StartOptions{
 		ConfigJSON:  configJSON,
-		CoreType:    coreType,
+		CoreType:    CoreSingBox,
 		ApiPort:     apiPort,
 		FetchRealIP: true,
 	})
 }
 
-// StartWithConfig 使用自定义配置 JSON 启动进程（默认 xray 内核，不启用流量统计）
+// StartWithConfig 使用自定义配置 JSON 启动进程（不启用流量统计）
 func (m *Manager) StartWithConfig(rule *models.ProxyRule, configJSON string) error {
-	return m.StartWithOptions(rule, StartOptions{ConfigJSON: configJSON, CoreType: CoreXray})
+	return m.StartWithOptions(rule, StartOptions{ConfigJSON: configJSON, CoreType: CoreSingBox})
 }
 
 // StartWithOptions 使用自定义配置和选项启动进程
@@ -202,7 +188,7 @@ func (m *Manager) StartWithOptions(rule *models.ProxyRule, opts StartOptions) er
 // startProcessLocked 启动内核进程（内部方法，需要已持有锁）
 func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) error {
 	if opts.CoreType == "" {
-		opts.CoreType = CoreXray
+		opts.CoreType = CoreSingBox
 	}
 
 	// 启动前确保端口未被残留进程占用（残留的 xray/sing-box 直接终止，其他程序则报错）
@@ -220,18 +206,11 @@ func (m *Manager) startProcessLocked(rule *models.ProxyRule, opts StartOptions) 
 	m.log(fmt.Sprintf("[配置] 配置文件: %s", configPath))
 
 	// 获取内核二进制
-	var coreBinary string
-	var err error
-	if opts.CoreType == CoreSingBox {
-		coreBinary, err = assets.FindSingBoxBinary()
-	} else {
-		coreBinary, err = assets.ExtractXrayBinary()
-	}
+	coreBinary, err := assets.FindSingBoxBinary()
 	if err != nil {
 		return err
 	}
 
-	// 创建命令（xray 和 sing-box 的启动参数一致: run -c config.json）
 	cmd := exec.Command(coreBinary, "run", "-c", configPath)
 
 	// Windows 平台特殊处理：创建新的进程组并隐藏控制台窗口
@@ -548,10 +527,7 @@ func (m *Manager) pollTraffic() {
 
 // queryTraffic 查询进程的累计流量（自进程启动以来，字节）
 func queryTraffic(info *ProcessInfo) (up int64, down int64, err error) {
-	if info.CoreType == CoreSingBox {
-		return querySingBoxTraffic(info.ApiPort)
-	}
-	return queryXrayTraffic(info.CoreBinary, info.ApiPort)
+	return querySingBoxTraffic(info.ApiPort)
 }
 
 // queryXrayTraffic 通过 xray api statsquery 查询出站流量

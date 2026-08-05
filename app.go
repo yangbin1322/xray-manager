@@ -23,7 +23,6 @@ import (
 	"xray-manager/internal/subscription"
 	"xray-manager/internal/updater"
 	"xray-manager/internal/utils"
-	"xray-manager/internal/xray"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -5059,65 +5058,32 @@ func (a *MyService) collectLBNodes(lb *models.LoadBalanceNode) []*models.ProxyRu
 // ==================== 多内核配置构建 ====================
 
 // buildChainConfigJSON 构建链式代理配置。
-// 链中包含 Hysteria2/TUIC 节点时使用 sing-box 内核，否则使用 xray。
 // apiPort > 0 时附加流量统计 API。
 func buildChainConfigJSON(localPort int, chainRules []*models.ProxyRule, apiPort int) (string, string, error) {
-	if singbox.RulesNeedSingBox(chainRules) {
-		cfg, err := singbox.BuildChainConfig(localPort, chainRules)
-		if err != nil {
-			return "", "", err
-		}
-		if apiPort > 0 {
-			singbox.AddClashAPI(cfg, apiPort)
-		}
-		configJSON, err := cfg.ToJSON()
-		return configJSON, process.CoreSingBox, err
-	}
-
-	cfg, err := xray.BuildChainConfig("mixed", localPort, chainRules)
+	cfg, err := singbox.BuildChainConfig(localPort, chainRules)
 	if err != nil {
 		return "", "", err
 	}
 	if apiPort > 0 {
-		xray.AddStatsAPI(cfg, apiPort)
+		singbox.AddClashAPI(cfg, apiPort)
 	}
 	configJSON, err := cfg.ToJSON()
-	return configJSON, process.CoreXray, err
+	return configJSON, process.CoreSingBox, err
 }
 
 // buildLoadBalanceConfigJSON 构建故障转移配置。
-// 子节点包含 Hysteria2/TUIC 时使用 sing-box 内核，否则使用 xray。
 // apiPort > 0 时附加流量统计 API。
 // preProxy 非空时，子节点经前置代理出站。
 func buildLoadBalanceConfigJSON(lb *models.LoadBalanceNode, localPort int, nodes []*models.ProxyRule, apiPort int, preProxy *models.ProxyRule) (string, string, error) {
-	// 前置代理若需 sing-box 内核，整体也切到 sing-box
-	needSB := singbox.RulesNeedSingBox(nodes)
-	if !needSB && preProxy != nil {
-		needSB = singbox.NeedsSingBox(preProxy.Protocol)
-	}
-	if needSB {
-		cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes, preProxy)
-		if err != nil {
-			return "", "", err
-		}
-		if apiPort > 0 {
-			singbox.AddClashAPI(cfg, apiPort)
-		}
-		configJSON, err := cfg.ToJSON()
-		return configJSON, process.CoreSingBox, err
-	}
-
-	lbCopy := *lb
-	lbCopy.LocalPort = localPort
-	cfg, err := xray.BuildLoadBalanceConfig(&lbCopy, nodes, preProxy)
+	cfg, err := singbox.BuildLoadBalanceConfig(localPort, nodes, preProxy)
 	if err != nil {
 		return "", "", err
 	}
 	if apiPort > 0 {
-		xray.AddStatsAPI(cfg, apiPort)
+		singbox.AddClashAPI(cfg, apiPort)
 	}
 	configJSON, err := cfg.ToJSON()
-	return configJSON, process.CoreXray, err
+	return configJSON, process.CoreSingBox, err
 }
 
 // resolveChainNodes 解析链中的节点（支持故障转移节点）
