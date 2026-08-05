@@ -1,14 +1,14 @@
 # Xray Manager
 
-基于 [Wails v3](https://wails.io/) + [Vue 3](https://vuejs.org/) 开发的代理规则可视化管理工具，底层由 [Xray-core](https://github.com/XTLS/Xray-core) 与 [sing-box](https://github.com/SagerNet/sing-box) 双内核驱动，提供简洁易用的图形界面来管理代理节点。
+基于 [Wails v3](https://wails.io/) + [Vue 3](https://vuejs.org/) 开发的代理规则可视化管理工具，底层由 [sing-box](https://github.com/SagerNet/sing-box) 驱动，提供简洁易用的图形界面来管理代理节点。
 
 支持 Windows、macOS、Linux 三平台。
 
 ## 功能特性
 
 **代理协议**
-- 支持 Shadowsocks、VMess、VLESS、Trojan、HTTP、SOCKS 协议（Xray 内核）
-- 支持 Hysteria2、TUIC v5 协议（sing-box 内核，涉及这两种协议的节点自动切换内核运行）
+- 支持 Shadowsocks、VMess、VLESS、Trojan、HTTP、SOCKS 协议
+- 支持 Hysteria2、TUIC v5 协议
 - 支持 TCP、WebSocket、gRPC、HTTP/2 传输协议
 - 支持 TLS / Reality 传输层安全配置
 
@@ -87,9 +87,48 @@
 - 进程管理：启停时自动清理端口残留进程，避免僵尸进程导致端口占用
 - 深色模式：亮色/深色主题切换
 - 实时日志：支持搜索、按级别（警告 / 错误等）筛选，鼠标悬停时暂停自动滚动便于查看
-- 嵌入式二进制：使用 go:embed 打包 Xray 与 sing-box 双内核，开箱即用无需额外安装
+- 嵌入式二进制：使用 go:embed 打包 sing-box 内核，开箱即用无需额外安装
 
 ## 下载安装
+
+### 未发布
+
+**重大变更**
+
+- 内核统一为 sing-box，移除 Xray-core。sing-box 支持的协议是 Xray 的超集
+  （Hysteria2 / TUIC 只有 sing-box 能运行），且单内核避免了两套配置生成逻辑
+  不同步——REALITY 就曾因此在 sing-box 侧被漏写。安装包体积因此减少约 96 MB。
+  节点配置无需改动，原有节点全部照常工作
+- 内置 sing-box 升级至 1.13.16（原 1.13.14）
+
+**修复**
+
+- 修复 REALITY 节点经 Hysteria2 / TUIC 前置代理时连不通：设置全局前置代理后，
+  普通节点会并入链式配置改由 sing-box 运行，而 sing-box 侧的配置生成漏写了
+  REALITY，公钥与 short_id 被静默丢弃、退化成普通 TLS 握手。该配置在语法上
+  完全合法（`sing-box check` 通过），只在运行时报 `unknown version: 72`
+- 修复大量节点时界面打不开、按钮一直转圈无响应：
+  - 端口预留改为惰性记账。此前为每个未启动节点常驻一个 TCP 监听来「占住」端口，
+    上千节点即上千个套接字，启动阶段耗尽句柄并长时间持有全局锁
+  - Windows 上获取进程名不再 fork `tasklist`。该命令依赖 RPC，在部分机器上会卡到
+    超时（实测单次 303 秒后报错返回空），足以让启动流程僵住；改用 Win32 进程快照，
+    耗时降至约 10 毫秒
+  - 端口占用查询改为一次取回全表并短时缓存，批量启动 N 个节点的 `netstat` /
+    `lsof` 调用从 N 次降到约 1 次
+- 修复 Windows 端口匹配误判：此前用后缀匹配，`:110808` 会被误认为 `:10808`；
+  同时正确处理 IPv6 的 `[::]:port` 写法
+- 修复 Linux / macOS 上 `lsof` 因部分文件无权限访问而退出码非 0 时，
+  整张端口占用表被丢弃、导致所有端口被误判为未占用
+
+**新增**
+
+- 内存容量保护：每个节点是一个独立内核进程，实测常驻约 33 MB，上千节点会超出
+  物理内存导致进程被系统终止（表现为闪退）。现在批量启动前按可用内存估算容量，
+  超出时明确提示「最多可启动约 N 个」而不是让机器被打崩。
+  崩溃恢复路径同样受保护：此前崩溃前启用了多少节点、重启就会全部自动拉起，
+  于是一开就再崩、陷入打不开的循环
+- 自动启动改为后台执行，窗口不再等待节点全部拉起才显示。此前 Wails 要等
+  `ServiceStartup` 返回才创建窗口，节点一多就只能看到进程、看不到界面
 
 ### v2.5.0 更新内容
 
@@ -169,7 +208,7 @@
 - **macOS** (arm64 / Apple Silicon): 下载 `xray-manager-macos-arm64.dmg`，拖入 Applications 即可
 - **Linux** (amd64): 下载 `xray-manager-linux-amd64`，`chmod +x` 后运行；需桌面环境（图形界面），并安装运行库 `libgtk-3-0 libwebkit2gtk-4.1-0`
 
-> 首次运行时会自动将内置的 Xray / sing-box 内核提取到可执行文件同级的 `xray-bin/` 目录，请在有写入权限的目录中运行。
+> 首次运行时会自动将内置的 sing-box 内核提取到可执行文件同级的 `xray-bin/` 目录，请在有写入权限的目录中运行。
 
 ## 从源码构建
 
@@ -197,12 +236,12 @@
 
 5. **内核二进制文件（已内置于仓库）**
 
-   仓库已包含三平台的 Xray-core 与 sing-box 二进制（通过 `go:embed` 打包），
+   仓库已包含三平台的 sing-box 二进制（通过 `go:embed` 打包），
    正常构建无需额外下载。如需自行更新版本，替换以下文件即可：
-   - Xray: `internal/assets/xray/{windows/xray.exe, linux/xray, darwin/xray}`
-   - sing-box: `internal/assets/singbox/{windows/sing-box.exe, linux/sing-box, darwin/sing-box}`
+   - `internal/assets/singbox/{windows/sing-box.exe, linux/sing-box, darwin/sing-box}`
 
-   > 注意：同一平台的 Xray 与 sing-box 必须为相同架构（Windows/Linux 为 amd64，macOS 为 arm64）。
+   > 注意：架构需与目标平台一致（Windows/Linux 为 amd64，macOS 为 arm64）。
+   > 替换后无需清理 `xray-bin/`：程序按文件大小判断是否复用，体积不同会自动覆盖旧的提取副本。
 
 ### 系统依赖
 
@@ -412,9 +451,8 @@ xray-manager/
 ├── internal/
 │   ├── models/                 # 数据模型
 │   ├── config/                 # 配置管理、开机自启、系统代理
-│   ├── process/                # 进程管理（Xray/sing-box 内核、端口清理、流量轮询）
-│   ├── xray/                   # Xray 配置生成器
-│   ├── singbox/                # sing-box 配置生成器（Hysteria2/TUIC）
+│   ├── process/                # 进程管理（sing-box 内核、端口清理、流量轮询、容量保护）
+│   ├── singbox/                # sing-box 配置生成器
 │   ├── relay/                  # 动态会话代理中继（凭证改写、HTTP/SOCKS5 入站、前置代理拨号）
 │   ├── subscription/           # 订阅解析
 │   ├── parser/                 # 分享链接解析
@@ -423,7 +461,7 @@ xray-manager/
 │   ├── group/                  # 分组管理
 │   ├── logger/                 # 日志过滤
 │   ├── utils/                  # 端口检测与进程清理等工具
-│   └── assets/                 # 内置内核二进制（xray/、singbox/）与 go:embed 提取逻辑
+│   └── assets/                 # 内置 sing-box 二进制与 go:embed 提取逻辑
 ├── build/                      # 各平台构建配置
 └── .github/workflows/          # GitHub Actions CI/CD
 ```
@@ -433,13 +471,12 @@ xray-manager/
 - **桌面框架**: [Wails v3](https://wails.io/)
 - **后端语言**: Go 1.24
 - **前端框架**: Vue 3 + Vite + Pinia
-- **代理核心**: [Xray-core](https://github.com/XTLS/Xray-core)（主）、[sing-box](https://github.com/SagerNet/sing-box)（Hysteria2/TUIC）
+- **代理核心**: [sing-box](https://github.com/SagerNet/sing-box) 1.13.16
 
 ## 致谢
 
 - [Wails](https://wails.io/) - Go 桌面应用框架
-- [Xray-core](https://github.com/XTLS/Xray-core) - 代理核心
-- [sing-box](https://github.com/SagerNet/sing-box) - Hysteria2/TUIC 内核
+- [sing-box](https://github.com/SagerNet/sing-box) - 代理核心
 - [Vue.js](https://vuejs.org/) - 前端框架
 
 ## License
