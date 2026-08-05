@@ -691,7 +691,10 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 
 	// IP 查询服务列表
 	ipServices := []string{
+		"https://checkip.amazonaws.com",
 		"https://api.ipify.org",
+		"https://ipinfo.io/ip",
+		"https://api.ip.sb/ip",
 		"https://ifconfig.me/ip",
 		"https://icanhazip.com",
 	}
