@@ -12,9 +12,24 @@ import (
 	"xray-manager/internal/utils"
 )
 
+// 跨实例的端口去重由全局端口注册表保证（生产环境 ServiceStartup 必定初始化它，
+// 初始化失败会直接中止启动），因此这里让两个实例共享同一个注册表，
+// 与真实运行方式一致。
 func TestRecommendPortReservesAcrossServiceInstances(t *testing.T) {
-	first := &MyService{config: &models.Config{}}
-	second := &MyService{config: &models.Config{}}
+	root := t.TempDir()
+	registry := portregistry.NewAt(filepath.Join(root, "port-registry.json"))
+	firstExecutable := filepath.Join(root, "client-a.exe")
+	firstConfig := filepath.Join(root, "client-a.json")
+	secondExecutable := filepath.Join(root, "client-b.exe")
+	secondConfig := filepath.Join(root, "client-b.json")
+	for _, path := range []string{firstExecutable, firstConfig, secondExecutable, secondConfig} {
+		if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := &MyService{config: &models.Config{}, portRegistry: registry, executablePath: firstExecutable, configPath: firstConfig}
+	second := &MyService{config: &models.Config{}, portRegistry: registry, executablePath: secondExecutable, configPath: secondConfig}
 	t.Cleanup(first.releaseAllPortReservations)
 	t.Cleanup(second.releaseAllPortReservations)
 
@@ -29,8 +44,10 @@ func TestRecommendPortReservesAcrossServiceInstances(t *testing.T) {
 	if !first.CheckPortAvailable(firstPort) {
 		t.Fatalf("service should recognize its own reservation for port %d", firstPort)
 	}
-	if utils.CheckPortAvailable(firstPort) {
-		t.Fatalf("reserved port %d is still available to another process", firstPort)
+	// 端口预留是记账而非常驻监听，因此不再断言端口对其他进程不可用；
+	// 真正要保证的是两个实例不会推荐到同一个端口（已在上面断言）。
+	if !first.portReservations[firstPort] {
+		t.Fatalf("port %d was not recorded as reserved by the first instance", firstPort)
 	}
 }
 
@@ -151,15 +168,16 @@ func TestStoppedConfiguredPortIsReserved(t *testing.T) {
 	t.Cleanup(other.releaseAllPortReservations)
 
 	owner.reserveStoppedPorts()
-	if utils.CheckPortAvailable(port) {
+	// 未启动节点的端口只做记账，不再常驻监听（上千节点会耗尽句柄并卡死启动），
+	// 因此这里断言的是记账结果，而不是端口对外是否可绑定。
+	owner.mu.RLock()
+	recorded := owner.portReservations[port]
+	owner.mu.RUnlock()
+	if !recorded {
 		t.Fatalf("stopped configured port %d was not reserved", port)
 	}
-	other.mu.Lock()
-	reserved := other.reservePortLocked(port)
-	other.mu.Unlock()
-	if reserved {
-		t.Fatalf("another service instance reserved configured port %d", port)
-	}
+	// 跨实例的端口归属改由全局端口注册表保证（见 TestAddRuleReportsGlobalOwnerPath），
+	// 未接入注册表的实例不再被本地监听挡住。
 }
 
 func TestReleasedReservationBecomesAvailable(t *testing.T) {

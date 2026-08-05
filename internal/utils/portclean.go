@@ -45,6 +45,9 @@ func WaitPortReleased(port int, timeout time.Duration, logFunc func(string)) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// 进程刚被停止，缓存里的占用快照已过期，必须重新取数
+	InvalidatePortPIDCache()
+
 	// 超时端口仍不可用时仅记录，不终止未知进程，避免误杀其他客户端。
 	for _, pid := range GetPortPIDs(port) {
 		name := GetProcessName(pid)

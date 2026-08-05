@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,9 +43,14 @@ type MyService struct {
 	config              *models.Config
 	mu                  sync.RWMutex
 
-	trafficDirty     bool // 流量统计有未保存的变更
-	httpServer       *http.Server
-	portReservations map[int]net.Listener
+	trafficDirty bool // 流量统计有未保存的变更
+	httpServer   *http.Server
+	// portReservations 记录本实例已占有的本地端口（惰性记账）。
+	//
+	// 早期实现给每个未启动节点常驻一个 net.Listener 来"占住"端口，节点上千时
+	// 等于开上千个监听套接字，启动阶段就会耗尽句柄并把 a.mu 堵死，界面直接卡住。
+	// 现在只记账不监听：真正的占用检测推迟到启动节点时由 EnsurePortFree 完成。
+	portReservations map[int]bool
 	portRegistry     *portregistry.Registry
 	executablePath   string
 	configPath       string
@@ -497,52 +501,65 @@ func (a *MyService) usedLocalPorts() map[int]bool {
 	return used
 }
 
+// reservePortLocked 把端口记为本实例占有。
+//
+// 只做内存记账，不再实际 net.Listen：上千个常驻监听会耗尽句柄并拖垮启动流程。
+// 返回 false 表示该端口已被本机其他进程占用（本实例已持有的端口视为成功）。
 func (a *MyService) reservePortLocked(port int) bool {
 	if port <= 0 || port > 65535 {
 		return false
 	}
 	if a.portReservations == nil {
-		a.portReservations = make(map[int]net.Listener)
+		a.portReservations = make(map[int]bool)
 	}
-	if _, exists := a.portReservations[port]; exists {
+	if a.portReservations[port] {
 		return true
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort("0.0.0.0", fmt.Sprintf("%d", port)))
-	if err != nil {
+	// 端口被本机其他进程实际监听时才拒绝。这里是一次性探测，不保留监听。
+	if !utils.CheckPortAvailable(port) {
 		return false
 	}
-	a.portReservations[port] = listener
+	a.portReservations[port] = true
 	return true
 }
 
 func (a *MyService) releasePortReservationLocked(port int) {
-	if listener, exists := a.portReservations[port]; exists {
-		_ = listener.Close()
-		delete(a.portReservations, port)
-	}
+	delete(a.portReservations, port)
 }
 
+// reserveStoppedPorts 把所有未启动节点的端口记为本实例占有。
+//
+// 纯记账，不做可用性探测：启动阶段对上千个端口逐个 net.Listen 会持锁数分钟，
+// 界面根本出不来。端口是否真的能用留到启动该节点时由 EnsurePortFree 判定。
 func (a *MyService) reserveStoppedPorts() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.portReservations == nil {
+		a.portReservations = make(map[int]bool)
+	}
+	record := func(port int) {
+		if port > 0 && port <= 65535 {
+			a.portReservations[port] = true
+		}
+	}
 	for _, rule := range a.config.Rules {
 		if !rule.Enabled {
-			a.reservePortLocked(rule.LocalPort)
+			record(rule.LocalPort)
 		}
 	}
 	for _, item := range a.config.LoadBalancers {
 		if !item.Enabled {
-			a.reservePortLocked(item.LocalPort)
+			record(item.LocalPort)
 		}
 	}
 	for _, item := range a.config.ChainProxies {
 		if !item.Enabled {
-			a.reservePortLocked(item.LocalPort)
+			record(item.LocalPort)
 		}
 	}
 	for _, item := range a.config.SessionRelays {
 		if !item.Enabled {
-			a.reservePortLocked(item.LocalPort)
+			record(item.LocalPort)
 		}
 	}
 }
@@ -550,11 +567,13 @@ func (a *MyService) reserveStoppedPorts() {
 func (a *MyService) releaseAllPortReservations() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for port := range a.portReservations {
-		a.releasePortReservationLocked(port)
-	}
+	a.portReservations = nil
 }
 
+// runWithReleasedPortLocked 在"端口已交给内核进程"的前提下执行 action。
+//
+// 端口预留是纯记账，不占用实际监听，因此这里只做归属转移：启动成功后端口由
+// 内核进程持有，失败则把记账恢复回来，避免端口被漏记而分配给别的节点。
 func (a *MyService) runWithReleasedPortLocked(port int, action func() error) error {
 	a.releasePortReservationLocked(port)
 	if err := action(); err != nil {
@@ -2072,7 +2091,7 @@ func (a *MyService) loadRules() {
 // CheckPortAvailable 检查端口是否可用
 func (a *MyService) CheckPortAvailable(port int) bool {
 	a.mu.RLock()
-	_, reservedBySelf := a.portReservations[port]
+	reservedBySelf := a.portReservations[port]
 	a.mu.RUnlock()
 	if reservedBySelf {
 		return true
