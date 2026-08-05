@@ -231,80 +231,6 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		}
 		_ = a.saveConfig()
 
-		// 自动启动已启用的规则
-		for i := range a.config.Rules {
-			rule := &a.config.Rules[i]
-			if rule.Enabled && a.hasPortConflictLocked(rule.ID) {
-				a.log(fmt.Sprintf("[端口冲突] 规则 %s 暂不自动启动，等待用户处理", rule.Alias))
-				rule.Enabled = false
-				continue
-			}
-			if rule.Enabled {
-				a.log(fmt.Sprintf("自动启动规则: %s", rule.Alias))
-				if err := a.startRuleInternal(rule); err != nil {
-					a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), err)
-					rule.Enabled = false
-				}
-			}
-		}
-
-		// 自动启动已启用的故障转移节点
-		for i := range a.config.LoadBalancers {
-			lb := &a.config.LoadBalancers[i]
-			if lb.Enabled && a.hasPortConflictLocked(lb.ID) {
-				a.log(fmt.Sprintf("[端口冲突] 故障转移 %s 暂不自动启动，等待用户处理", lb.Alias))
-				lb.Enabled = false
-				continue
-			}
-			if lb.Enabled {
-				a.log(fmt.Sprintf("自动启动故障转移: %s", lb.Alias))
-				if err := a.startLoadBalancerInternal(lb); err != nil {
-					a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
-					lb.Enabled = false
-				}
-			}
-		}
-
-		// 自动启动已启用的链式代理
-		for i := range a.config.ChainProxies {
-			chain := &a.config.ChainProxies[i]
-			if chain.Enabled && a.hasPortConflictLocked(chain.ID) {
-				a.log(fmt.Sprintf("[端口冲突] 链式代理 %s 暂不自动启动，等待用户处理", chain.Alias))
-				chain.Enabled = false
-				continue
-			}
-			if chain.Enabled {
-				a.log(fmt.Sprintf("自动启动链式代理: %s", chain.Alias))
-				if err := a.startChainProxyInternal(chain); err != nil {
-					a.logError(fmt.Sprintf("启动链式代理 %s 失败", chain.Alias), err)
-					chain.Enabled = false
-				}
-			}
-		}
-
-		// 自动启动已启用的动态会话代理。
-		// 放在最后：其前置加速节点可能是上面刚启动的普通节点/链式/故障转移。
-		for i := range a.config.SessionRelays {
-			sr := &a.config.SessionRelays[i]
-			if sr.Enabled && a.hasPortConflictLocked(sr.ID) {
-				a.log(fmt.Sprintf("[端口冲突] 动态会话代理 %s 暂不自动启动，等待用户处理", sr.Alias))
-				sr.Enabled = false
-				continue
-			}
-			if sr.Enabled {
-				a.log(fmt.Sprintf("自动启动动态会话代理: %s", sr.Alias))
-				sr.Enabled = false // startSessionRelayInternal 成功后置回 true
-				if err := a.startSessionRelayInternal(sr); err != nil {
-					a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
-					sr.Enabled = false
-					sr.LastError = err.Error()
-				}
-			}
-		}
-
-		// 保存自动启动后的状态
-		_ = a.saveConfig()
-
 		// 启动后台健康检查（按配置）
 		a.healthCheckManager.Configure(a.config.HealthCheck)
 
@@ -316,6 +242,14 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		// 为所有未启动节点保留本地端口，避免多个客户端实例分配到同一端口。
 		a.reserveStoppedPorts()
+
+		// 自动启动放到后台执行。
+		//
+		// Wails 要等 ServiceStartup 返回才创建窗口，而拉起 N 个内核进程是慢操作
+		// （每个都要写配置、fork 进程、探测端口）。节点一多，窗口就要等上几分钟甚至
+		// 更久才出现，用户只能看到进程看不到界面。放后台后窗口立即可用，
+		// 节点在界面上逐个变为已启动。
+		go a.autoStartEnabledNodes()
 	}
 
 	// 定期保存流量统计（避免每次流量更新都写盘）
@@ -525,6 +459,151 @@ func (a *MyService) reservePortLocked(port int) bool {
 
 func (a *MyService) releasePortReservationLocked(port int) {
 	delete(a.portReservations, port)
+}
+
+// autoStartEnabledNodes 拉起配置中所有已启用的节点。
+//
+// 在后台协程中运行，不阻塞窗口创建。整段持锁：启动过程要读写 config 里的节点
+// 状态，且期间不应让用户从界面并发改动同一批节点。锁本身很快就能被界面操作抢到
+// ——真正慢的是逐个 fork 内核进程，而那已经不在窗口创建的关键路径上了。
+func (a *MyService) autoStartEnabledNodes() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.config == nil {
+		return
+	}
+
+	// 崩溃前启用了多少节点，重启时就会全部自动拉起——而崩溃往往正是节点太多
+	// 导致的，于是一开就再崩，陷入"打不开"的循环。这里按可用内存算出还能带动
+	// 多少个，超出的保持启用标记不动，等用户自己决定启动哪些。
+	budget := a.autoStartBudgetLocked()
+
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if rule.Enabled && a.hasPortConflictLocked(rule.ID) {
+			a.log(fmt.Sprintf("[端口冲突] 规则 %s 暂不自动启动，等待用户处理", rule.Alias))
+			rule.Enabled = false
+			continue
+		}
+		if rule.Enabled {
+			if budget <= 0 {
+				continue
+			}
+			budget--
+			a.log(fmt.Sprintf("自动启动规则: %s", rule.Alias))
+			if err := a.startRuleInternal(rule); err != nil {
+				a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), err)
+				rule.Enabled = false
+			}
+		}
+	}
+
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.Enabled && a.hasPortConflictLocked(lb.ID) {
+			a.log(fmt.Sprintf("[端口冲突] 故障转移 %s 暂不自动启动，等待用户处理", lb.Alias))
+			lb.Enabled = false
+			continue
+		}
+		if lb.Enabled {
+			if budget <= 0 {
+				continue
+			}
+			budget--
+			a.log(fmt.Sprintf("自动启动故障转移: %s", lb.Alias))
+			if err := a.startLoadBalancerInternal(lb); err != nil {
+				a.logError(fmt.Sprintf("启动故障转移 %s 失败", lb.Alias), err)
+				lb.Enabled = false
+			}
+		}
+	}
+
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.Enabled && a.hasPortConflictLocked(chain.ID) {
+			a.log(fmt.Sprintf("[端口冲突] 链式代理 %s 暂不自动启动，等待用户处理", chain.Alias))
+			chain.Enabled = false
+			continue
+		}
+		if chain.Enabled {
+			if budget <= 0 {
+				continue
+			}
+			budget--
+			a.log(fmt.Sprintf("自动启动链式代理: %s", chain.Alias))
+			if err := a.startChainProxyInternal(chain); err != nil {
+				a.logError(fmt.Sprintf("启动链式代理 %s 失败", chain.Alias), err)
+				chain.Enabled = false
+			}
+		}
+	}
+
+	// 会话代理放在最后：其前置加速节点可能是上面刚启动的普通节点/链式/故障转移。
+	// 它们运行在本进程内，不占内核进程的内存预算，因此不计入 budget。
+	for i := range a.config.SessionRelays {
+		sr := &a.config.SessionRelays[i]
+		if sr.Enabled && a.hasPortConflictLocked(sr.ID) {
+			a.log(fmt.Sprintf("[端口冲突] 动态会话代理 %s 暂不自动启动，等待用户处理", sr.Alias))
+			sr.Enabled = false
+			continue
+		}
+		if sr.Enabled {
+			a.log(fmt.Sprintf("自动启动动态会话代理: %s", sr.Alias))
+			sr.Enabled = false // startSessionRelayInternal 成功后置回 true
+			if err := a.startSessionRelayInternal(sr); err != nil {
+				a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
+				sr.Enabled = false
+				sr.LastError = err.Error()
+			}
+		}
+	}
+
+	_ = a.saveConfig()
+	a.emitEvent("loadRules", nil)
+}
+
+// autoStartBudgetLocked 返回本次启动最多可自动拉起的节点数。
+//
+// 崩溃恢复时配置里可能有上千个 Enabled 节点，全部拉起会再次耗尽内存并闪退。
+// 超出预算的节点保持 Enabled 不变，只是这一轮不启动，用户可在界面上按需启动。
+// 需已持有 a.mu 锁。
+func (a *MyService) autoStartBudgetLocked() int {
+	enabled := 0
+	for i := range a.config.Rules {
+		if a.config.Rules[i].Enabled {
+			enabled++
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if a.config.LoadBalancers[i].Enabled {
+			enabled++
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if a.config.ChainProxies[i].Enabled {
+			enabled++
+		}
+	}
+	for i := range a.config.SessionRelays {
+		if a.config.SessionRelays[i].Enabled {
+			enabled++
+		}
+	}
+
+	err := process.CheckCapacity(enabled)
+	if err == nil {
+		return enabled
+	}
+	capacityErr, ok := err.(*process.CapacityError)
+	if !ok {
+		return enabled
+	}
+	a.log(fmt.Sprintf(
+		"[容量保护] 配置中有 %d 个节点处于启用状态，按当前可用内存仅自动启动前 %d 个；"+
+			"其余节点保持启用标记，可在界面上手动启动。",
+		enabled, capacityErr.Allowed))
+	return capacityErr.Allowed
 }
 
 // reserveStoppedPorts 把所有未启动节点的端口记为本实例占有。
@@ -1047,6 +1126,14 @@ func (a *MyService) StartNodes(ids []string) error {
 	a.mu.Lock()
 	refs := a.collectNodeRefs(ids)
 	a.mu.Unlock()
+
+	// 每个节点都是一个独立的内核进程，内存开销随节点数线性增长。
+	// 上千节点会超出物理内存，进程被系统终止、应用直接闪退——
+	// 与其让用户把机器打崩，不如提前拦下并说明还能启动多少个。
+	if err := process.CheckCapacity(len(refs)); err != nil {
+		a.log(err.Error())
+		return err
+	}
 
 	// 逐个启动（持锁，因为启动需读写 config 中的节点状态）。
 	// 主要收益来自：端口检测已优化为轻量探测 + 仅在最后统一保存一次配置，
