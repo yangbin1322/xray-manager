@@ -2,6 +2,10 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 const STORAGE_KEY = 'nodeListColumns'
+const WIDTH_STORAGE_KEY = 'nodeListColumnWidths'
+
+// 列宽下限，避免拖到看不见、之后再也抓不到把手
+export const MIN_COLUMN_WIDTH = 40
 
 // 节点列表的可配置列。key 与模板中的 col-* 类名对应。
 // 勾选框和操作列不在此列表里——它们是交互入口，隐藏后表格就没法用了。
@@ -40,8 +44,26 @@ function loadVisible() {
   return base
 }
 
+// 用户拖动过的列宽。未拖动过的列不在表里，仍由样式表的默认宽度决定。
+function loadWidths() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WIDTH_STORAGE_KEY) || '{}')
+    const known = new Set(NODE_COLUMNS.map(c => c.key))
+    const result = {}
+    for (const [key, value] of Object.entries(saved)) {
+      if (known.has(key) && Number.isFinite(value) && value >= MIN_COLUMN_WIDTH) {
+        result[key] = value
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
 export const useColumnsStore = defineStore('columns', () => {
   const visible = ref(loadVisible())
+  const widths = ref(loadWidths())
 
   function persist() {
     try {
@@ -49,6 +71,36 @@ export const useColumnsStore = defineStore('columns', () => {
     } catch {
       // 隐私模式下 localStorage 可能不可写，忽略即可
     }
+  }
+
+  function persistWidths() {
+    try {
+      localStorage.setItem(WIDTH_STORAGE_KEY, JSON.stringify(widths.value))
+    } catch {
+      // 同上，写不进去不影响本次会话内的使用
+    }
+  }
+
+  // 设置列宽。整体替换以触发响应式更新。
+  function setWidth(key, px) {
+    const width = Math.max(MIN_COLUMN_WIDTH, Math.round(px))
+    widths.value = { ...widths.value, [key]: width }
+  }
+
+  // 拖动结束后再落盘：拖动过程中每帧都写 localStorage 会明显掉帧
+  function commitWidths() {
+    persistWidths()
+  }
+
+  function resetWidths() {
+    widths.value = {}
+    persistWidths()
+  }
+
+  // 未设置过的列返回空样式，沿用样式表里的默认宽度
+  function styleOf(key) {
+    const width = widths.value[key]
+    return width ? { width: `${width}px` } : {}
   }
 
   function toggle(key) {
@@ -65,6 +117,7 @@ export const useColumnsStore = defineStore('columns', () => {
   function reset() {
     visible.value = defaultVisible()
     persist()
+    resetWidths()
   }
 
   const isVisible = (key) => visible.value[key] !== false
@@ -78,5 +131,8 @@ export const useColumnsStore = defineStore('columns', () => {
     () => NODE_COLUMNS.filter(c => !visible.value[c.key]).length
   )
 
-  return { visible, isVisible, visibleCount, hiddenCount, toggle, setAll, reset }
+  return {
+    visible, isVisible, visibleCount, hiddenCount, toggle, setAll, reset,
+    widths, styleOf, setWidth, commitWidths, resetWidths,
+  }
 })

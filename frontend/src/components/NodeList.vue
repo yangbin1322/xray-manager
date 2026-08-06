@@ -27,34 +27,64 @@
           <th class="col-check">
             <input type="checkbox" :checked="allSelected" @change="rulesStore.selectAll($event.target.checked)" />
           </th>
-          <th v-if="cols.isVisible('alias')" class="col-alias">别名</th>
-          <th v-if="cols.isVisible('group')" class="col-group">所属分组</th>
-          <th v-if="cols.isVisible('protocol')" class="col-protocol">协议</th>
-          <th v-if="cols.isVisible('server')" class="col-server">服务器地址</th>
-          <th v-if="cols.isVisible('sport')" class="col-sport">服务器端口</th>
-          <th v-if="cols.isVisible('lport')" class="col-lport">本地端口</th>
-          <th v-if="cols.isVisible('health')" class="col-health sortable" @click="rulesStore.setSort('healthLatency')">
-            健康
-            <span v-if="rulesStore.sortColumn === 'healthLatency'" class="sort-arrow">
-              {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
-            </span>
+          <th v-if="cols.isVisible('alias')" class="col-alias sortable" :style="cols.styleOf('alias')"
+              @click="rulesStore.setSort('alias')">
+            别名<span v-if="rulesStore.sortColumn === 'alias'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('alias', $event)"></span>
           </th>
-          <th v-if="cols.isVisible('latency')" class="col-latency sortable" @click="rulesStore.setSort('latency')">
-            延迟
-            <span v-if="rulesStore.sortColumn === 'latency'" class="sort-arrow">
-              {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
-            </span>
+          <th v-if="cols.isVisible('group')" class="col-group" :style="cols.styleOf('group')">
+            所属分组
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('group', $event)"></span>
           </th>
-          <th v-if="cols.isVisible('speed')" class="col-speed sortable" @click="rulesStore.setSort('downloadSpeed')">
-            速度
-            <span v-if="rulesStore.sortColumn === 'downloadSpeed'" class="sort-arrow">
-              {{ rulesStore.sortDirection === 'asc' ? '▲' : '▼' }}
-            </span>
+          <th v-if="cols.isVisible('protocol')" class="col-protocol sortable" :style="cols.styleOf('protocol')"
+              @click="rulesStore.setSort('protocol')">
+            协议<span v-if="rulesStore.sortColumn === 'protocol'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('protocol', $event)"></span>
           </th>
-          <th v-if="cols.isVisible('traffic')" class="col-traffic">实时流量</th>
-          <th v-if="cols.isVisible('trafficTotal')" class="col-traffic-total">今日/累计</th>
-          <th v-if="cols.isVisible('ip')" class="col-ip">真实IP</th>
-          <th v-if="cols.isVisible('status')" class="col-status">状态</th>
+          <th v-if="cols.isVisible('server')" class="col-server sortable" :style="cols.styleOf('server')"
+              @click="rulesStore.setSort('serverAddr')">
+            服务器地址<span v-if="rulesStore.sortColumn === 'serverAddr'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('server', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('sport')" class="col-sport sortable" :style="cols.styleOf('sport')"
+              @click="rulesStore.setSort('serverPort')">
+            服务器端口<span v-if="rulesStore.sortColumn === 'serverPort'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('sport', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('lport')" class="col-lport sortable" :style="cols.styleOf('lport')"
+              @click="rulesStore.setSort('localPort')">
+            本地端口<span v-if="rulesStore.sortColumn === 'localPort'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('lport', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('health')" class="col-health sortable" :style="cols.styleOf('health')"
+              @click="rulesStore.setSort('healthLatency')">
+            健康<span v-if="rulesStore.sortColumn === 'healthLatency'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('health', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('latency')" class="col-latency sortable" :style="cols.styleOf('latency')"
+              @click="rulesStore.setSort('latency')">
+            延迟<span v-if="rulesStore.sortColumn === 'latency'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('latency', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('speed')" class="col-speed sortable" :style="cols.styleOf('speed')"
+              @click="rulesStore.setSort('downloadSpeed')">
+            速度<span v-if="rulesStore.sortColumn === 'downloadSpeed'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('speed', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('traffic')" class="col-traffic" :style="cols.styleOf('traffic')">
+            实时流量
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('traffic', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('trafficTotal')" class="col-traffic-total" :style="cols.styleOf('trafficTotal')">
+            今日/累计
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('trafficTotal', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('ip')" class="col-ip sortable" :style="cols.styleOf('ip')"
+              @click="rulesStore.setSort('realIp')">
+            真实IP<span v-if="rulesStore.sortColumn === 'realIp'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('ip', $event)"></span>
+          </th>
+          <th v-if="cols.isVisible('status')" class="col-status" :style="cols.styleOf('status')">状态</th>
           <th class="col-actions">
             操作
             <!-- 列设置入口放在表头最右侧，靠近它要控制的对象 -->
@@ -196,6 +226,45 @@ const rulesStore = useRulesStore()
 const cols = useColumnsStore()
 const appStore = useAppStore()
 
+// 当前排序方向的箭头，各可排序列共用
+const sortArrow = computed(() => (rulesStore.sortDirection === 'asc' ? '▲' : '▼'))
+
+// ===== 列宽拖动 =====
+//
+// 表格是 table-layout: fixed，给 th 设了宽度就会生效。
+// 拖动过程中直接改 store 里的宽度（响应式，立即可见），
+// 松手后才落盘——每帧写一次 localStorage 会明显掉帧。
+let resizeState = null
+
+function startResize(key, event) {
+  const th = event.currentTarget.parentElement
+  resizeState = {
+    key,
+    startX: event.clientX,
+    startWidth: th.getBoundingClientRect().width,
+  }
+  window.addEventListener('mousemove', onResizing)
+  window.addEventListener('mouseup', stopResize)
+  // 拖动时禁掉文本选中，否则会选中表头文字、光标也会闪
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+}
+
+function onResizing(event) {
+  if (!resizeState) return
+  cols.setWidth(resizeState.key, resizeState.startWidth + (event.clientX - resizeState.startX))
+}
+
+function stopResize() {
+  if (!resizeState) return
+  resizeState = null
+  window.removeEventListener('mousemove', onResizing)
+  window.removeEventListener('mouseup', stopResize)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  cols.commitWidths()
+}
+
 // ===== 列显示菜单 =====
 // 菜单用 fixed 定位，打开时按触发按钮的位置算一次坐标
 const showColumnMenu = ref(false)
@@ -333,6 +402,8 @@ onUnmounted(() => {
   window.removeEventListener('keyup', handleKeyup)
   window.removeEventListener('blur', resetShift)
   if (resizeObserver) resizeObserver.disconnect()
+  // 拖动中途卸载时收尾，避免监听器和光标样式残留
+  stopResize()
 })
 
 const allSelected = computed(() => {
@@ -714,7 +785,25 @@ async function handleDelete(rule) {
 
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--primary-color); }
-.sort-arrow { font-size: 10px; }
+.sort-arrow { font-size: 10px; margin-left: 2px; }
+
+/* 列宽拖动把手：贴在表头右缘的一条窄热区。
+   th 是 sticky，本身就建立了定位上下文，这里直接绝对定位即可。 */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  /* 半透明竖线在浅色/深色主题下都可见，且不喧宾夺主 */
+  border-right: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+.col-resizer:hover,
+.col-resizer:active {
+  border-right-color: var(--primary-color);
+}
 
 .empty-row {
   text-align: center;

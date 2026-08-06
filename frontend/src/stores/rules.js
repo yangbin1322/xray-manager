@@ -108,12 +108,22 @@ export const useRulesStore = defineStore('rules', () => {
       result = result.filter(r => matchesHealth(r, healthFilter.value))
     }
 
-    // 排序
+    // 排序。
+    //
+    // 别名等文本列要按字符串比较：直接相减会得到 NaN，排序结果随机。
+    // 中文用 localeCompare 才能按拼音排，且数字串（"节点2" / "节点10"）
+    // 靠 numeric 选项按数值大小排，而不是按字符逐位比。
     if (sortColumn.value) {
+      const dir = sortDirection.value === 'asc' ? 1 : -1
       result = [...result].sort((a, b) => {
-        const aVal = a[sortColumn.value] || 0
-        const bVal = b[sortColumn.value] || 0
-        return sortDirection.value === 'asc' ? aVal - bVal : bVal - aVal
+        const aVal = a[sortColumn.value]
+        const bVal = b[sortColumn.value]
+        if (typeof aVal === 'string' || typeof bVal === 'string') {
+          return dir * String(aVal ?? '').localeCompare(String(bVal ?? ''), 'zh-CN', {
+            numeric: true, sensitivity: 'base',
+          })
+        }
+        return dir * ((aVal || 0) - (bVal || 0))
       })
     }
 
