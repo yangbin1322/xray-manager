@@ -202,6 +202,8 @@
     <!-- 统计信息 -->
     <div class="table-footer">
       <span>总计 {{ rulesStore.totalCount }} 个节点，运行中 {{ rulesStore.runningCount }} 个</span>
+      <!-- 验证中单独计数：这些节点已启动但还不确定能否用，不计入运行中 -->
+      <span v-if="rulesStore.verifyingCount > 0">，验证中 {{ rulesStore.verifyingCount }} 个</span>
       <span v-if="rulesStore.filteredRules.length !== rulesStore.totalCount">
         ，当前筛选 {{ rulesStore.filteredRules.length }} 个
       </span>
@@ -696,10 +698,10 @@ async function handleDelete(rule) {
   font-size: 13px;
   /* 固定布局：虚拟滚动下每次只渲染部分行，自动布局会让列宽随可视内容跳动 */
   table-layout: fixed;
-  /* 定宽列合计约 854px，再给文本列留出可读空间。
+  /* 定宽列合计约 894px，再给文本列留出可读空间。
      窗口更宽时文本列自动摊开；比这更窄则退化为表格内横向滚动，
      而不是把操作按钮挤到不可用 */
-  min-width: 1100px;
+  min-width: 1140px;
 }
 
 .rules-table th {
@@ -765,7 +767,16 @@ async function handleDelete(rule) {
 .ip-error { color: #e74c3c; font-size: 11px; }
 .col-status { width: 36px; text-align: center; }
 /* 操作列按钮较多（启动/编辑/测速/检测/删除），压不下去 */
-.col-actions { width: 206px; }
+/* 五个按钮（启停/编辑/测速/检测/删除）各约 47px，合计约 235px。
+   宽度给不够时最后的「删除」会被挤成省略号，因此按实际内容留足。 */
+.col-actions { width: 246px; }
+
+/* 操作列放的是按钮不是文本：td 上的 text-overflow 会把最后一个按钮
+   截成省略号。这里取消截断，让按钮完整显示。 */
+.rules-table td.col-actions {
+  overflow: visible;
+  text-overflow: clip;
+}
 /* 以下列不设 width，自动瓜分剩余宽度 */
 .col-alias,
 .col-group,

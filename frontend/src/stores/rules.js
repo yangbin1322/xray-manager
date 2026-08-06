@@ -132,7 +132,12 @@ export const useRulesStore = defineStore('rules', () => {
 
   const selectedRuleIds = computed(() => Array.from(selectedIds.value))
 
-  const runningCount = computed(() => allNodes.value.filter(r => r.enabled).length)
+  // 运行中不含「验证中」：连通性还没确认，此时计入会让用户以为
+  // 已经有这么多节点可用，而它们可能几秒后就被判定不通并自动停用
+  const runningCount = computed(
+    () => allNodes.value.filter(r => r.enabled && !r.verifying).length
+  )
+  const verifyingCount = computed(() => allNodes.value.filter(r => r.verifying).length)
   const totalCount = computed(() => allNodes.value.length)
   const ungroupedCount = computed(() => allNodes.value.filter(r => !r.groupId).length)
 
@@ -470,7 +475,7 @@ export const useRulesStore = defineStore('rules', () => {
     groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
     allNodes, nodeById,
-    filteredRules, selectedRuleIds, runningCount, totalCount, ungroupedCount, groupCounts, healthCounts,
+    filteredRules, selectedRuleIds, runningCount, verifyingCount, totalCount, ungroupedCount, groupCounts, healthCounts,
     // Actions
     loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
