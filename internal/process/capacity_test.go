@@ -46,3 +46,43 @@ func TestCapacityErrorMessageIsActionable(t *testing.T) {
 		}
 	}
 }
+
+// 内存偏紧时不能把小批量也拦下。
+//
+// 曾有的 bug：分片模式沿用了 4 GB 的系统预留，可用内存 3.2 GB 时
+// 「可用 - 预留」为负、被钳到 0，于是算出「最多可启动 0 个」，
+// 连启动 5 个节点（约 2.5 MB）都会被拒绝。
+func TestShardedCapacityAllowsSmallBatchesUnderMemoryPressure(t *testing.T) {
+	for _, count := range []int{1, 5, 20, 100} {
+		if err := CheckShardedCapacity(count); err != nil {
+			t.Errorf("starting %d sharded nodes was rejected: %v", count, err)
+		}
+	}
+}
+
+// 分片模式的预留必须远小于一节点一进程模式，否则小批量会被误拦
+func TestShardedReserveIsSmallerThanPerProcess(t *testing.T) {
+	if ReservedSystemMemorySharded >= ReservedSystemMemory {
+		t.Errorf("sharded reserve (%d) should be well below the per-process reserve (%d)",
+			ReservedSystemMemorySharded, ReservedSystemMemory)
+	}
+}
+
+// 真正超出内存的请求仍要被拦下，且给出的上限要合理
+func TestShardedCapacityStillRejectsImpossibleBatches(t *testing.T) {
+	const huge = 10_000_000 // 约 4.8 TB，任何机器都放不下
+	err := CheckShardedCapacity(huge)
+	if err == nil {
+		t.Fatal("an impossibly large batch must be rejected")
+	}
+	var capacityErr *CapacityError
+	if !asCapacityError(err, &capacityErr) {
+		t.Fatalf("expected *CapacityError, got %T", err)
+	}
+	if capacityErr.Allowed >= huge {
+		t.Errorf("Allowed = %d, should be far below the request", capacityErr.Allowed)
+	}
+	if capacityErr.Allowed < 0 {
+		t.Errorf("Allowed = %d, must never be negative", capacityErr.Allowed)
+	}
+}

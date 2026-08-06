@@ -19,8 +19,17 @@ const EstimatedNodeMemory = 33 << 20
 // 取 0.5 MB 留出余量，覆盖连接活跃时的缓冲区增长。
 const EstimatedShardedNodeMemory = 512 << 10
 
-// ReservedSystemMemory 预留给系统和其他程序的内存，不参与节点容量计算。
+// ReservedSystemMemory 一节点一进程模式下预留给系统和其他程序的内存。
+//
+// 该模式每个节点要 33 MB，动辄吃掉几 GB，留出 4 GB 缓冲是合理的。
 const ReservedSystemMemory = 4 << 30
+
+// ReservedSystemMemorySharded 分片模式下预留给系统和其他程序的内存。
+//
+// 分片模式每个节点只要约 0.5 MB，几百个节点也就一两百 MB。
+// 若沿用 4 GB 的预留，可用内存低于 4 GB 时会算出「最多可启动 0 个」，
+// 连启动 5 个节点（约 2.5 MB）都会被拦下——预留必须与开销量级匹配。
+const ReservedSystemMemorySharded = 512 << 20
 
 // CapacityError 批量启动会超出可用内存时返回，供上层原样提示给用户。
 type CapacityError struct {
@@ -49,7 +58,7 @@ func (e *CapacityError) Error() string {
 
 // CheckCapacity 判断再启动 count 个节点是否会超出可用内存（一节点一进程模式）。
 func CheckCapacity(count int) error {
-	return checkCapacityWith(count, EstimatedNodeMemory)
+	return checkCapacityWith(count, EstimatedNodeMemory, ReservedSystemMemory)
 }
 
 // CheckShardedCapacity 判断分片模式下再启动 count 个节点是否会超出可用内存。
@@ -57,13 +66,13 @@ func CheckCapacity(count int) error {
 // 分片模式下节点共享进程，单节点开销远低于独立进程，因此上限高得多：
 // 同样的内存，独立进程只能跑几百个，分片模式能跑上万个。
 func CheckShardedCapacity(count int) error {
-	return checkCapacityWith(count, EstimatedShardedNodeMemory)
+	return checkCapacityWith(count, EstimatedShardedNodeMemory, ReservedSystemMemorySharded)
 }
 
-// checkCapacityWith 按给定的单节点内存估算判断容量。
+// checkCapacityWith 按给定的单节点内存估算与系统预留判断容量。
 //
 // 取不到内存信息时返回 nil——放行而不是误拦。
-func checkCapacityWith(count int, perNode uint64) error {
+func checkCapacityWith(count int, perNode, reserved uint64) error {
 	if count <= 0 {
 		return nil
 	}
@@ -72,11 +81,18 @@ func checkCapacityWith(count int, perNode uint64) error {
 		return nil
 	}
 
-	usable := int64(available) - ReservedSystemMemory
-	if usable < 0 {
-		usable = 0
+	var usable uint64
+	if available > reserved {
+		usable = available - reserved
 	}
-	allowed := int(uint64(usable) / perNode)
+	allowed := int(usable / perNode)
+
+	// 本次请求所需内存本就远小于可用内存时直接放行。
+	// 否则内存紧张（可用量接近预留值）时会算出「最多 0 个」，
+	// 连启动几个只占几 MB 的节点都会被拦下，与实际情况不符。
+	if uint64(count)*perNode < available/2 {
+		return nil
+	}
 	if count <= allowed {
 		return nil
 	}
