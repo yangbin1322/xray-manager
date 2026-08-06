@@ -22,6 +22,14 @@ type ProxyRule struct {
 	ProcessID  int           `json:"processId"`  // 进程ID
 	LastError  string        `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 
+	// Verifying 表示已启动但连通性尚未验证完成。
+	//
+	// 启动只说明本地端口起来了，能否真正访问外网还要经代理请求一次探测点。
+	// 批量启动上千节点时这一步要跑一阵子，期间若显示成「运行中」，
+	// 用户会误以为已经可用；验证完成后由成功/失败分支清除该标记。
+	// 不落盘：进程重启后一切从头验证，持久化没有意义。
+	Verifying bool `json:"verifying,omitempty"`
+
 	// 测速相关字段
 	Latency       int     `json:"latency"`       // TCP 延迟（毫秒）
 	DownloadSpeed float64 `json:"downloadSpeed"` // 下载速度（MB/s）

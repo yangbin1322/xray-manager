@@ -268,6 +268,14 @@ func (m *Manager) verifyStartedNodes(rules []*models.ProxyRule) {
 	if len(rules) == 0 {
 		return
 	}
+	// 先把整批标记为验证中再开工：并发有上限，排队中的节点要等一阵才轮到，
+	// 若等轮到时才标记，界面上这些节点会先显示成「运行中」，
+	// 用户会误以为已经可用
+	for _, rule := range rules {
+		rule.Verifying = true
+	}
+	m.notifyLoadRules()
+
 	go func() {
 		sem := make(chan struct{}, realIPConcurrency)
 		var wg sync.WaitGroup
@@ -281,6 +289,8 @@ func (m *Manager) verifyStartedNodes(rules []*models.ProxyRule) {
 			}(rule)
 		}
 		wg.Wait()
+		// 整批验证完成，刷新一次让最终状态落到界面上
+		m.notifyLoadRules()
 	}()
 }
 
@@ -945,6 +955,11 @@ func (m *Manager) notifyLoadRules() {
 
 // getRealIP 获取真实 IP
 func (m *Manager) getRealIP(rule *models.ProxyRule) {
+	// 标记为「验证中」，让界面区分「已启动但还不知道能不能用」和「确认可用」。
+	// 用 defer 清除：这个函数有多个提前返回的分支，逐个清容易漏。
+	rule.Verifying = true
+	defer func() { rule.Verifying = false }()
+
 	// 等待入站真正开始监听。
 	//
 	// 原为无条件 sleep 2 秒：单个节点无所谓，但批量时每个 worker 都要白等，

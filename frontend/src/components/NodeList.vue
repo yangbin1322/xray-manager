@@ -169,7 +169,7 @@
             <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
           <td v-if="cols.isVisible('status')" class="col-status">
-            <span :class="['status-dot', statusClass(rule)]" :title="rule.lastError || ''"></span>
+            <span :class="['status-dot', statusClass(rule)]" :title="statusTitle(rule)"></span>
           </td>
           <td class="col-actions" @click.stop>
             <button
@@ -553,10 +553,21 @@ async function handleHealthCheck(rule) {
 }
 
 function statusClass(rule) {
+  // 已启动但连通性还没验证完：不能显示成「运行中」，
+  // 否则用户会以为节点已经可用，而它可能几秒后就被判定不通并自动停用
+  if (rule.verifying) return 'status-verifying'
   if (rule.enabled) return 'status-running'
   if (rule.lastError) return 'status-failed'
   if (rule.testStatus === 'failed') return 'status-failed'
   return 'status-stopped'
+}
+
+// 状态圆点的悬停说明。失败时优先显示具体原因。
+function statusTitle(rule) {
+  if (rule.verifying) return '正在验证连通性…'
+  if (rule.lastError) return rule.lastError
+  if (rule.enabled) return '运行中'
+  return '已停止'
 }
 
 // Set 需整体替换才会触发视图更新
@@ -854,6 +865,18 @@ async function handleDelete(rule) {
 .status-running { background: #27ae60; box-shadow: 0 0 6px rgba(39, 174, 96, 0.5); }
 .status-failed { background: #e74c3c; }
 .status-stopped { background: #bdc3c7; }
+
+/* 验证中：琥珀色 + 呼吸效果。既区别于「运行中」的绿色，
+   也不像红色那样让人误以为出错——此时结论还没出来。 */
+.status-verifying {
+  background: #f39c12;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 .latency-good { color: #27ae60; }
 .latency-ok { color: #f39c12; }

@@ -1060,6 +1060,19 @@ export class ProxyRule {
              */
             this["lastError"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Verifying 表示已启动但连通性尚未验证完成。
+             * 
+             * 启动只说明本地端口起来了，能否真正访问外网还要经代理请求一次探测点。
+             * 批量启动上千节点时这一步要跑一阵子，期间若显示成「运行中」，
+             * 用户会误以为已经可用；验证完成后由成功/失败分支清除该标记。
+             * 不落盘：进程重启后一切从头验证，持久化没有意义。
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["verifying"] = undefined;
+        }
         if (!("latency" in $$source)) {
             /**
              * 测速相关字段
@@ -1195,13 +1208,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType2;
-        const $$createField19_0 = $$createType1;
+        const $$createField20_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField19_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField20_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }

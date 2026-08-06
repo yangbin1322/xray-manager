@@ -2,6 +2,7 @@ package process
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -348,5 +349,41 @@ func TestRealIPProbeSettingsFavorAccuracy(t *testing.T) {
 	if realIPDialTimeout >= realIPProbeTimeout {
 		t.Errorf("realIPDialTimeout (%s) must be well below realIPProbeTimeout (%s), "+
 			"otherwise dead nodes cannot fail fast", realIPDialTimeout, realIPProbeTimeout)
+	}
+}
+
+// 整批节点必须在开工前就标记为「验证中」。
+//
+// 并发有上限，排队中的节点要等一阵才轮到；若等轮到时才标记，
+// 界面上这些节点会先显示成「运行中」，用户会误以为已经可用，
+// 而它们可能几秒后就被判定不通并自动停用。
+func TestVerifyStartedNodesMarksWholeBatchUpFront(t *testing.T) {
+	rules := make([]*models.ProxyRule, 0, realIPConcurrency*2)
+	for i := 0; i < cap(rules); i++ {
+		// 端口 0 让探测立刻失败，测试不必等真实网络
+		rules = append(rules, testNode(fmt.Sprintf("n%d", i), 0))
+	}
+
+	m := &Manager{processes: make(map[int]*ProcessInfo), pollerStop: make(chan struct{})}
+	m.verifyStartedNodes(rules)
+
+	// verifyStartedNodes 同步标记后才开协程，返回时整批都应已标记
+	for _, rule := range rules {
+		if !rule.Verifying {
+			t.Fatalf("node %s was not marked as verifying before the batch started", rule.ID)
+		}
+	}
+}
+
+// 验证结束后必须清除标记，否则节点会永远停在「验证中」
+func TestGetRealIPClearsVerifyingFlag(t *testing.T) {
+	m := &Manager{processes: make(map[int]*ProcessInfo), pollerStop: make(chan struct{})}
+	// 端口 0 无法连通，探测会走失败分支
+	rule := testNode("done", 0)
+
+	m.getRealIP(rule)
+
+	if rule.Verifying {
+		t.Error("verifying flag was left set after the probe finished")
 	}
 }
