@@ -191,10 +191,18 @@ function listenToBackendEvents() {
     rulesStore.updateRuleInList(event.data)
   })
 
+  // 批量启动时每个节点拿到真实 IP / 判定失败都会触发一次该事件，
+  // 几百个节点就是几百次整表重载（每次都要把上千行搬进前端）。
+  // 这里合并成一次：短时间内的连续事件只在末尾刷新一遍。
+  let loadRulesTimer = null
   Events.On('loadRules', () => {
-    rulesStore.loadRules()
-    // 节点变动常常伴随分组增删（如删订阅会连带删分组），一并刷新侧边栏
-    groupsStore.loadGroups()
+    if (loadRulesTimer) clearTimeout(loadRulesTimer)
+    loadRulesTimer = setTimeout(() => {
+      loadRulesTimer = null
+      rulesStore.loadRules()
+      // 节点变动常常伴随分组增删（如删订阅会连带删分组），一并刷新侧边栏
+      groupsStore.loadGroups()
+    }, 300)
   })
 
   Events.On('speedTestResult', () => {
@@ -233,10 +241,30 @@ function listenToBackendEvents() {
     appStore.showToast('健康检测完成', 'success')
   })
 
-  // 节点启动后不通，已被自动停用
+  // 节点启动后不通，已被自动停用。
+  //
+  // 批量启动时可能有几十个节点同时失败，逐个弹窗会刷屏并遮挡界面。
+  // 这里在短窗口内合并：只弹一条，说明总数与首个节点，详情看日志。
+  let failedBuffer = []
+  let failedTimer = null
   Events.On('nodeFailed', (event) => {
     const d = event.data || {}
-    appStore.showToast(`节点「${d.alias || ''}」启动后不通（${d.reason || '未知原因'}），已自动停用`, 'error', 5000)
+    failedBuffer.push({ alias: d.alias || '', reason: d.reason || '未知原因' })
+    if (failedTimer) return
+    failedTimer = setTimeout(() => {
+      const items = failedBuffer
+      failedBuffer = []
+      failedTimer = null
+      if (items.length === 1) {
+        appStore.showToast(
+          `节点「${items[0].alias}」启动后不通（${items[0].reason}），已自动停用`,
+          'error', 5000)
+      } else {
+        appStore.showToast(
+          `${items.length} 个节点启动后不通，已自动停用（如「${items[0].alias}」：${items[0].reason}），详见日志`,
+          'error', 6000)
+      }
+    }, 1500)
   })
 
   // 启动自动检查发现新版本

@@ -33,9 +33,17 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // === Toast 通知 ===
+  // 同屏最多保留的提示条数。批量操作可能瞬间产生几百条（例如启动 300 个
+  // 节点、其中几十个不通），全部塞进 DOM 既遮挡界面又拖慢渲染。
+  const MAX_TOASTS = 5
+
   function showToast(message, type = 'info', duration = 3000) {
     const id = ++toastId
     toasts.value.push({ id, message, type })
+    // 超出上限时丢掉最旧的，保证用户看到的是最新状态
+    if (toasts.value.length > MAX_TOASTS) {
+      toasts.value = toasts.value.slice(-MAX_TOASTS)
+    }
     setTimeout(() => {
       toasts.value = toasts.value.filter(t => t.id !== id)
     }, duration)
