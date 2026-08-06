@@ -532,6 +532,12 @@ components:
           properties:
             id: { type: string }
             enabled: { type: boolean }
+            verifying:
+              type: boolean
+              description: |
+                已启动但连通性尚未验证完成。启动只说明本地端口起来了，
+                能否访问外网还要经代理探测一次；此时节点可能几秒后被判定
+                不通并自动停用，不宜直接当作可用。
             processId: { type: integer }
             realIp: { type: string }
             source: { type: string, enum: [manual, subscription] }
