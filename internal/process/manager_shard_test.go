@@ -303,3 +303,31 @@ func TestWaitLocalPortReadyRespectsTimeout(t *testing.T) {
 		t.Errorf("waited %s, far beyond the requested timeout", elapsed)
 	}
 }
+
+// 探测参数必须在「快」和「准」之间取得平衡。
+//
+// 曾把重试上限压到 2、单次超时压到 5 秒来提速，结果 1426 个可用节点
+// 被误判到只剩 970 个——单个查询服务限流或抖动就足以让可用节点出局。
+func TestRealIPProbeSettingsFavorAccuracy(t *testing.T) {
+	// 至少要给几次机会，才能扛住单个查询服务的抖动
+	if realIPMaxAttempts < 3 {
+		t.Errorf("realIPMaxAttempts = %d, too few retries; transient failures will "+
+			"misjudge working nodes as dead", realIPMaxAttempts)
+	}
+	// 重试次数不能超过可用服务数，否则后面的循环是空转
+	if realIPMaxAttempts > len(baseIPServices) {
+		t.Errorf("realIPMaxAttempts = %d exceeds the %d available services",
+			realIPMaxAttempts, len(baseIPServices))
+	}
+	// 跨境线路握手加请求经常要好几秒，超时太短会误伤慢但可用的节点
+	if realIPProbeTimeout < 8*time.Second {
+		t.Errorf("realIPProbeTimeout = %s, too short for slow cross-border links",
+			realIPProbeTimeout)
+	}
+	// 建连超时要明显短于整体超时：坏节点卡在建连阶段，靠它快速出局，
+	// 而已连上的慢节点仍有完整时间读完响应
+	if realIPDialTimeout >= realIPProbeTimeout {
+		t.Errorf("realIPDialTimeout (%s) must be well below realIPProbeTimeout (%s), "+
+			"otherwise dead nodes cannot fail fast", realIPDialTimeout, realIPProbeTimeout)
+	}
+}

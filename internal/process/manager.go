@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -239,17 +240,24 @@ const realIPConcurrency = 64
 
 // realIPProbeTimeout 单次 IP 查询的超时。
 //
-// 原为 10 秒：一个连不通的节点要把 6 个查询服务依次试完才判定失败，
-// 最坏 60 秒，上千节点里几十个坏节点就会拖住整批。
-// 5 秒足够让可用节点完成一次跨境请求，坏节点则能更快出局。
-const realIPProbeTimeout = 5 * time.Second
+// 跨境线路握手加请求经常要好几秒，超时给太短会把慢但可用的节点判成不通。
+// 缩短总耗时靠的是提高并发与尽早放弃真正连不上的节点（见 realIPDialTimeout），
+// 而不是压缩这个值。
+const realIPProbeTimeout = 10 * time.Second
+
+// realIPDialTimeout 经代理建立 TCP 连接的超时。
+//
+// 与整体超时分开：连不通的节点卡在建连阶段，几秒内就能判定；
+// 而已经连上、只是响应慢的节点仍有 realIPProbeTimeout 的完整时间读完响应。
+// 这样既让坏节点快速出局，又不会误伤慢速可用节点。
+const realIPDialTimeout = 4 * time.Second
 
 // realIPMaxAttempts 判定节点不通前最多尝试的 IP 查询服务数。
 //
-// 全部试完（6 个）对可用节点没有意义——第一个就成功了；
-// 只有坏节点才会走完全程，而它们越早出局越好。
-// 试 2 个足以排除单个服务自身故障导致的误判。
-const realIPMaxAttempts = 2
+// 单个查询服务可能限流或临时故障，只试一两次就下结论会把可用节点误判为不通
+// （实测把上限压到 2 时，1426 个可用节点被误判到只剩 970 个）。
+// 多给几次机会，配合按端口错开起始服务，才能既快又准。
+const realIPMaxAttempts = 4
 
 // verifyStartedNodes 为刚启动的节点获取真实 IP 并做连通性验证。
 //
@@ -903,12 +911,17 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	}
 
 	// 创建 HTTP 客户端，支持代理。
+	//
+	// 建连超时单独设短：连不通的节点卡在这一步，几秒即可判定；
+	// 已连上但响应慢的节点仍有完整的 Timeout 读完响应，不会被误伤。
 	// 每个节点用完即弃，关掉长连接复用，避免上千个空闲连接堆在内存里。
 	client := &http.Client{
 		Timeout: realIPProbeTimeout,
 		Transport: &http.Transport{
-			Proxy:             http.ProxyURL(proxyURL),
-			DisableKeepAlives: true,
+			Proxy:               http.ProxyURL(proxyURL),
+			DisableKeepAlives:   true,
+			DialContext:         (&net.Dialer{Timeout: realIPDialTimeout}).DialContext,
+			TLSHandshakeTimeout: realIPDialTimeout,
 		},
 	}
 
