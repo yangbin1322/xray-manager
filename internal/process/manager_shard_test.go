@@ -2,6 +2,7 @@ package process
 
 import (
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -230,5 +231,75 @@ func TestShardStartTriggersRealIPProbe(t *testing.T) {
 		}
 	case <-time.After(90 * time.Second):
 		t.Fatal("shard-hosted node was never probed for its real IP")
+	}
+}
+
+// 查询服务要按端口错开起始位置：上千节点同时探测时若都从同一个服务开始，
+// 那个服务会瞬间被打满而限流，导致可用节点被误判为不通。
+func TestRotatedIPServicesSpreadsLoad(t *testing.T) {
+	n := len(baseIPServices)
+	if n < 2 {
+		t.Skip("need at least two services to rotate")
+	}
+
+	firsts := make(map[string]int)
+	for port := 11000; port < 11000+n*3; port++ {
+		services := rotatedIPServices(port)
+		if len(services) != n {
+			t.Fatalf("port %d: got %d services, want %d", port, len(services), n)
+		}
+		// 轮转后集合必须不变，只是顺序不同
+		seen := make(map[string]bool, n)
+		for _, s := range services {
+			seen[s] = true
+		}
+		if len(seen) != n {
+			t.Fatalf("port %d: rotation lost or duplicated services: %v", port, services)
+		}
+		firsts[services[0]]++
+	}
+
+	// 所有服务都应当被用作过起点，而不是集中在一两个上
+	if len(firsts) != n {
+		t.Errorf("only %d of %d services were used as a starting point", len(firsts), n)
+	}
+}
+
+func TestRotatedIPServicesHandlesInvalidPort(t *testing.T) {
+	for _, port := range []int{0, -1} {
+		services := rotatedIPServices(port)
+		if len(services) != len(baseIPServices) {
+			t.Errorf("port %d: got %d services, want %d", port, len(services), len(baseIPServices))
+		}
+	}
+}
+
+// 端口就绪后应立即返回，不必等满超时——批量探测时每个 worker
+// 白等固定时长会直接拖长整批耗时。
+func TestWaitLocalPortReadyReturnsEarly(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	start := time.Now()
+	waitLocalPortReady(port, 3*time.Second)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("waited %s for an already-listening port, expected to return promptly", elapsed)
+	}
+}
+
+// 端口始终不可用时必须在超时后返回，不能无限等待
+func TestWaitLocalPortReadyRespectsTimeout(t *testing.T) {
+	start := time.Now()
+	waitLocalPortReady(1, 300*time.Millisecond) // 端口 1 几乎不可能被监听
+	elapsed := time.Since(start)
+	if elapsed < 250*time.Millisecond {
+		t.Errorf("returned after %s, should have waited for the timeout", elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("waited %s, far beyond the requested timeout", elapsed)
 	}
 }

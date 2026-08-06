@@ -231,9 +231,25 @@ func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) err
 
 // realIPConcurrency 启动后并发获取真实 IP 的上限。
 //
-// 每个节点都要发一次 HTTPS 请求，几百个节点同时发会打满连接数、
-// 也容易被 IP 查询服务限流；限并发既保证及时性又不至于把网络压垮。
-const realIPConcurrency = 16
+// 每个节点要发一次 HTTPS 请求，整体是等网络 IO、几乎不吃 CPU，
+// 因此并发可以开得比较高。上千节点时这是决定总耗时的主要因素：
+// 并发 16 时 1500 个节点要几分钟，提到 64 后降到一分钟出头。
+// 再往上收益递减，且容易被 IP 查询服务限流。
+const realIPConcurrency = 64
+
+// realIPProbeTimeout 单次 IP 查询的超时。
+//
+// 原为 10 秒：一个连不通的节点要把 6 个查询服务依次试完才判定失败，
+// 最坏 60 秒，上千节点里几十个坏节点就会拖住整批。
+// 5 秒足够让可用节点完成一次跨境请求，坏节点则能更快出局。
+const realIPProbeTimeout = 5 * time.Second
+
+// realIPMaxAttempts 判定节点不通前最多尝试的 IP 查询服务数。
+//
+// 全部试完（6 个）对可用节点没有意义——第一个就成功了；
+// 只有坏节点才会走完全程，而它们越早出局越好。
+// 试 2 个足以排除单个服务自身故障导致的误判。
+const realIPMaxAttempts = 2
 
 // verifyStartedNodes 为刚启动的节点获取真实 IP 并做连通性验证。
 //
@@ -816,6 +832,45 @@ func (m *Manager) readLog(reader io.Reader, alias, level string, processInfo *Pr
 	}
 }
 
+// baseIPServices 用于探测出口 IP 的查询服务。
+var baseIPServices = []string{
+	"https://checkip.amazonaws.com",
+	"https://api.ipify.org",
+	"https://ipinfo.io/ip",
+	"https://api.ip.sb/ip",
+	"https://ifconfig.me/ip",
+	"https://icanhazip.com",
+}
+
+// rotatedIPServices 按端口错开查询服务的起始位置。
+//
+// 上千个节点同时探测时，若都从同一个服务开始，那个服务会瞬间收到上千请求
+// 而触发限流，导致大量可用节点被误判为不通。按端口轮转即可把压力摊开。
+func rotatedIPServices(localPort int) []string {
+	n := len(baseIPServices)
+	offset := 0
+	if localPort > 0 {
+		offset = localPort % n
+	}
+	rotated := make([]string, 0, n)
+	rotated = append(rotated, baseIPServices[offset:]...)
+	rotated = append(rotated, baseIPServices[:offset]...)
+	return rotated
+}
+
+// waitLocalPortReady 等待本地入站端口可连接，最多等 timeout。
+//
+// 比无条件 sleep 更快：端口通常几十毫秒就绪，无需固定等满。
+func waitLocalPortReady(localPort int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if portDialable(localPort) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // notifyLoadRules 通知前端刷新规则列表。回调未设置时静默跳过。
 func (m *Manager) notifyLoadRules() {
 	if m.loadRules != nil {
@@ -825,8 +880,11 @@ func (m *Manager) notifyLoadRules() {
 
 // getRealIP 获取真实 IP
 func (m *Manager) getRealIP(rule *models.ProxyRule) {
-	// 等待服务启动
-	time.Sleep(2 * time.Second)
+	// 等待入站真正开始监听。
+	//
+	// 原为无条件 sleep 2 秒：单个节点无所谓，但批量时每个 worker 都要白等，
+	// 直接拖长整批耗时。改为轮询端口，通常几十毫秒就绪即可继续。
+	waitLocalPortReady(rule.LocalPort, 2*time.Second)
 
 	// 检查进程是否还在运行
 	if !m.IsRunning(rule.LocalPort) {
@@ -844,26 +902,27 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		return
 	}
 
-	// 创建 HTTP 客户端，支持代理
+	// 创建 HTTP 客户端，支持代理。
+	// 每个节点用完即弃，关掉长连接复用，避免上千个空闲连接堆在内存里。
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: realIPProbeTimeout,
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
+			Proxy:             http.ProxyURL(proxyURL),
+			DisableKeepAlives: true,
 		},
 	}
 
-	// IP 查询服务列表
-	ipServices := []string{
-		"https://checkip.amazonaws.com",
-		"https://api.ipify.org",
-		"https://ipinfo.io/ip",
-		"https://api.ip.sb/ip",
-		"https://ifconfig.me/ip",
-		"https://icanhazip.com",
-	}
+	// IP 查询服务列表。
+	// 每个节点从不同位置开始轮转，避免上千个节点同时压同一个服务被限流。
+	ipServices := rotatedIPServices(rule.LocalPort)
 
 	var lastErr string
-	for _, service := range ipServices {
+	for attempt, service := range ipServices {
+		// 可用节点第一次就能成功；试满 realIPMaxAttempts 仍失败的基本是真不通，
+		// 继续把剩余服务试完只会拖慢整批
+		if attempt >= realIPMaxAttempts {
+			break
+		}
 		// 再次检查进程是否还在运行
 		if !m.IsRunning(rule.LocalPort) {
 			m.log(fmt.Sprintf("[警告] %s 进程已停止，停止IP获取", rule.Alias))
@@ -871,10 +930,12 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 			return
 		}
 
+		// 单次尝试失败不记日志：批量启动上千节点时，每个坏节点都写几条
+		// 会瞬间刷出几千行、把日志面板和前端事件通道压满。
+		// 最终判定不通时会有一条汇总日志，足够定位问题。
 		resp, err := client.Get(service)
 		if err != nil {
 			lastErr = err.Error()
-			m.log(fmt.Sprintf("[警告] %s 请求 %s 失败: %v", rule.Alias, service, err))
 			continue
 		}
 
@@ -882,7 +943,6 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err.Error()
-			m.log(fmt.Sprintf("[警告] %s 读取 %s 响应失败: %v", rule.Alias, service, err))
 			continue
 		}
 
@@ -896,10 +956,13 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 				m.mu.RLock()
 				ipcb := m.onRealIP
 				m.mu.RUnlock()
+				// 回调内部已通知前端刷新，这里不再重复发事件——
+				// 上千节点各发两次会把事件通道压满
 				if ipcb != nil {
 					ipcb(rule.LocalPort, realIP)
+				} else {
+					m.notifyLoadRules()
 				}
-				m.notifyLoadRules()
 				return
 			}
 		}
