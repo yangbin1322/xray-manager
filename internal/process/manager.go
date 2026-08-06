@@ -840,8 +840,21 @@ func (m *Manager) readLog(reader io.Reader, alias, level string, processInfo *Pr
 	}
 }
 
-// baseIPServices 用于探测出口 IP 的查询服务。
+// headerIPServices 通过响应头返回出口 IP 的探测点。
+//
+// 相比常规 IP 查询服务有两个好处：HEAD 请求不必传输响应体，更快；
+// 且是 CDN 静态资源，不像公共 IP 查询 API 那样容易在批量探测时限流——
+// 上千节点同时探测时，限流会把可用节点误判为不通。
+var headerIPServices = map[string]string{
+	"https://ti.volccdn.com/obj/net-fe/fe/net-probe/favicon.png": "x-response-cinfo",
+}
+
+// baseIPServices 用于探测出口 IP 的服务，按可靠性排序。
+//
+// 排在最前的走 HEAD + 响应头，最快也最不容易被限流；
+// 其余是常规的「返回纯文本 IP」服务，作为兜底。
 var baseIPServices = []string{
+	"https://ti.volccdn.com/obj/net-fe/fe/net-probe/favicon.png",
 	"https://checkip.amazonaws.com",
 	"https://api.ipify.org",
 	"https://ipinfo.io/ip",
@@ -850,20 +863,64 @@ var baseIPServices = []string{
 	"https://icanhazip.com",
 }
 
-// rotatedIPServices 按端口错开查询服务的起始位置。
+// probeExitIP 经代理请求探测点，返回出口 IP。
 //
-// 上千个节点同时探测时，若都从同一个服务开始，那个服务会瞬间收到上千请求
-// 而触发限流，导致大量可用节点被误判为不通。按端口轮转即可把压力摊开。
+// 支持两种响应形式：从响应头取（HEAD 请求即可，无需传输响应体），
+// 以及从响应体取纯文本 IP。
+func probeExitIP(client *http.Client, service string) (string, error) {
+	if header, ok := headerIPServices[service]; ok {
+		resp, err := client.Head(service)
+		if err != nil {
+			return "", err
+		}
+		// HEAD 无响应体，但仍要关掉以归还连接
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		return strings.TrimSpace(resp.Header.Get(header)), nil
+	}
+
+	resp, err := client.Get(service)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	// 限制读取量：正常响应只有一个 IP，异常时（如返回整页 HTML）
+	// 不该把它全部读进内存
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return strings.TrimSpace(string(body)), nil
+}
+
+// rotatedIPServices 返回该节点的探测顺序。
+//
+// 首选项固定不变：它走 HEAD + 响应头、是 CDN 静态资源，批量探测也不会限流，
+// 所以让所有节点都先试它，成功率和速度都最好。
+// 其余兜底服务按端口错开起始位置——公共 IP 查询 API 在上千节点同时请求时
+// 会触发限流，把可用节点误判为不通，轮转可以把压力摊开。
 func rotatedIPServices(localPort int) []string {
-	n := len(baseIPServices)
+	if len(baseIPServices) <= 1 {
+		return append([]string(nil), baseIPServices...)
+	}
+
+	primary := baseIPServices[0]
+	fallbacks := baseIPServices[1:]
+
 	offset := 0
 	if localPort > 0 {
-		offset = localPort % n
+		offset = localPort % len(fallbacks)
 	}
-	rotated := make([]string, 0, n)
-	rotated = append(rotated, baseIPServices[offset:]...)
-	rotated = append(rotated, baseIPServices[:offset]...)
-	return rotated
+	ordered := make([]string, 0, len(baseIPServices))
+	ordered = append(ordered, primary)
+	ordered = append(ordered, fallbacks[offset:]...)
+	ordered = append(ordered, fallbacks[:offset]...)
+	return ordered
 }
 
 // waitLocalPortReady 等待本地入站端口可连接，最多等 timeout。
@@ -946,40 +1003,31 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		// 单次尝试失败不记日志：批量启动上千节点时，每个坏节点都写几条
 		// 会瞬间刷出几千行、把日志面板和前端事件通道压满。
 		// 最终判定不通时会有一条汇总日志，足够定位问题。
-		resp, err := client.Get(service)
+		realIP, err := probeExitIP(client, service)
 		if err != nil {
 			lastErr = err.Error()
 			continue
 		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = err.Error()
+		if realIP == "" {
+			lastErr = "响应中没有 IP"
 			continue
 		}
 
-		if resp.StatusCode == 200 {
-			realIP := strings.TrimSpace(string(body))
-			if realIP != "" {
-				rule.RealIP = realIP
-				rule.LastError = "" // 成功，清除失败原因
-				m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
-				// 回填到对应节点（普通节点直接命中；故障转移/链式代理经回调按端口回填）
-				m.mu.RLock()
-				ipcb := m.onRealIP
-				m.mu.RUnlock()
-				// 回调内部已通知前端刷新，这里不再重复发事件——
-				// 上千节点各发两次会把事件通道压满
-				if ipcb != nil {
-					ipcb(rule.LocalPort, realIP)
-				} else {
-					m.notifyLoadRules()
-				}
-				return
-			}
+		rule.RealIP = realIP
+		rule.LastError = "" // 成功，清除失败原因
+		m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
+		// 回填到对应节点（普通节点直接命中；故障转移/链式代理经回调按端口回填）
+		m.mu.RLock()
+		ipcb := m.onRealIP
+		m.mu.RUnlock()
+		// 回调内部已通知前端刷新，这里不再重复发事件——
+		// 上千节点各发两次会把事件通道压满
+		if ipcb != nil {
+			ipcb(rule.LocalPort, realIP)
+		} else {
+			m.notifyLoadRules()
 		}
-		lastErr = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return
 	}
 
 	// 全部 IP 服务都失败：节点虽已启动但无法访问外网，视为不通。

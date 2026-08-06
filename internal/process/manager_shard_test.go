@@ -234,19 +234,24 @@ func TestShardStartTriggersRealIPProbe(t *testing.T) {
 	}
 }
 
-// 查询服务要按端口错开起始位置：上千节点同时探测时若都从同一个服务开始，
-// 那个服务会瞬间被打满而限流，导致可用节点被误判为不通。
-func TestRotatedIPServicesSpreadsLoad(t *testing.T) {
+// 首选探测点对所有节点固定不变（HEAD + 响应头、CDN 静态资源，批量也不限流），
+// 兜底服务则按端口错开——公共 IP 查询 API 被上千节点同时请求会限流，
+// 把可用节点误判为不通。
+func TestRotatedIPServicesKeepsPrimaryFirst(t *testing.T) {
 	n := len(baseIPServices)
-	if n < 2 {
-		t.Skip("need at least two services to rotate")
+	if n < 3 {
+		t.Skip("need at least three services")
 	}
+	primary := baseIPServices[0]
 
-	firsts := make(map[string]int)
+	firstFallbacks := make(map[string]int)
 	for port := 11000; port < 11000+n*3; port++ {
 		services := rotatedIPServices(port)
 		if len(services) != n {
 			t.Fatalf("port %d: got %d services, want %d", port, len(services), n)
+		}
+		if services[0] != primary {
+			t.Errorf("port %d: first service = %s, want the primary %s", port, services[0], primary)
 		}
 		// 轮转后集合必须不变，只是顺序不同
 		seen := make(map[string]bool, n)
@@ -256,12 +261,26 @@ func TestRotatedIPServicesSpreadsLoad(t *testing.T) {
 		if len(seen) != n {
 			t.Fatalf("port %d: rotation lost or duplicated services: %v", port, services)
 		}
-		firsts[services[0]]++
+		firstFallbacks[services[1]]++
 	}
 
-	// 所有服务都应当被用作过起点，而不是集中在一两个上
-	if len(firsts) != n {
-		t.Errorf("only %d of %d services were used as a starting point", len(firsts), n)
+	// 兜底服务应当轮流排在首选项之后，而不是集中在一两个上
+	if len(firstFallbacks) != n-1 {
+		t.Errorf("only %d of %d fallback services were used as the first fallback",
+			len(firstFallbacks), n-1)
+	}
+}
+
+// 首选探测点必须在 headerIPServices 里登记，否则会退化成 GET 读响应体，
+// 而它返回的是 PNG 图片、body 里没有 IP。
+func TestPrimaryProbeUsesResponseHeader(t *testing.T) {
+	primary := baseIPServices[0]
+	header, ok := headerIPServices[primary]
+	if !ok {
+		t.Fatalf("primary probe %s is not registered as a header-based service", primary)
+	}
+	if header == "" {
+		t.Error("header name must not be empty")
 	}
 }
 
