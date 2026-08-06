@@ -305,6 +305,34 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/v1/local-pr
 
 本地代理接口返回同一混合端口的 HTTP 与 SOCKS5 地址，并通过 `type` 区分 `rule`、`loadBalancer` 和 `chainProxy`。全部接口也会返回尚未启动的资源配置；需要可立即使用的代理时，请调用对应的 `/enabled` 接口。
 
+#### 批量出口轮换（爬虫等场景）
+
+节点采用分片运行，上千个节点也只占几个进程、约几百 MB 内存，因此可以一次全部启动，
+再由客户端在这些本地端口之间轮换，每个端口对应一个独立出口 IP：
+
+```python
+import itertools, requests
+
+# 取出全部已启动节点的本地代理地址
+proxies = requests.get(
+    "http://127.0.0.1:9090/api/v1/local-proxies/enabled",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+).json()["data"]
+
+pool = itertools.cycle([p["httpUrl"] for p in proxies])
+
+for url in urls:
+    proxy = next(pool)          # 每个请求换一个出口 IP
+    requests.get(url, proxies={"http": proxy, "https": proxy})
+```
+
+返回的每项形如 `{"id": ..., "type": "rule", "alias": ..., "localPort": 11000,
+"httpUrl": "http://127.0.0.1:11000", "socks5Url": "socks5://127.0.0.1:11000", ...}`。
+
+先用 `POST /api/v1/nodes/start` 批量启动（Body 为 `{"ids": [...]}`），
+再调 `/local-proxies/enabled` 取实际可用的那批——启动失败或连不通的节点会被自动停用，
+不会出现在结果里。
+
 主要接口：
 
 | 方法 | 路径 | 功能 |

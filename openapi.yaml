@@ -71,7 +71,7 @@ paths:
       tags: [Nodes]
       summary: 批量删除节点
       description: |
-        支持普通节点、故障转移、链式代理和动态会话代理。会先并发停止进程，
+        支持普通节点、故障转移、链式代理和动态会话代理。会先批量停止，
         再一次性移除并保存配置，比逐个调用 DELETE /nodes/{id} 快得多。
         用 POST 而非 DELETE：带请求体的 DELETE 在部分客户端/代理上支持不佳。
       requestBody: { $ref: '#/components/requestBodies/NodeIDs' }
