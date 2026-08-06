@@ -487,8 +487,10 @@ func (a *MyService) autoStartEnabledNodes() {
 
 	// 分片模式下把普通节点攒成一批，只调谐一次：逐个启动会让同一分片
 	// 反复重启，几百个节点就是几百次重建配置 + 重启进程。
-	sharded := a.processManager != nil && a.processManager.ShardingEnabled() &&
-		a.getPreProxyRuleLocked() == nil
+	sharded := a.processManager != nil && a.processManager.ShardingEnabled()
+	if sharded {
+		a.syncShardPreProxyLocked()
+	}
 	var shardBatch []*models.ProxyRule
 
 	for i := range a.config.Rules {
@@ -1260,10 +1262,9 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 	if a.processManager == nil || !a.processManager.ShardingEnabled() {
 		return handled
 	}
-	// 有前置代理时普通节点走链式配置，不能并入分片
-	if a.getPreProxyRuleLocked() != nil {
-		return handled
-	}
+	// 前置代理在分片配置里是一份共享出站，各节点用 detour 指向它，
+	// 因此设置了前置代理也能共享进程
+	a.syncShardPreProxyLocked()
 
 	wanted := make(map[string]bool, len(refs))
 	for _, ref := range refs {
@@ -1313,6 +1314,22 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 		r.LastError = ""
 	}
 	return handled
+}
+
+// syncShardPreProxyLocked 把当前的全局前置代理同步给分片管理器。
+//
+// 前置代理在分片配置里只有一份出站，各节点通过 detour 共用；
+// 它变更时所有分片的出站都要重建，SetPreProxy 会做相应标记。
+// 需已持有 a.mu 锁。
+func (a *MyService) syncShardPreProxyLocked() {
+	if a.processManager == nil {
+		return
+	}
+	shards := a.processManager.Shards()
+	if shards == nil {
+		return
+	}
+	shards.SetPreProxy(a.getPreProxyRuleLocked())
 }
 
 // stopPlainNodesInShardLocked 把普通节点合并成一次分片调谐，返回已处理的节点 ID。
@@ -4297,6 +4314,14 @@ func (a *MyService) startRuleInternal(rule *models.ProxyRule) error {
 	}
 
 	pre := a.getPreProxyRuleLocked()
+
+	// 分片模式下前置代理是配置里的一份共享出站，节点用 detour 指向它，
+	// 因此设置了前置代理也不必退化成一节点一进程。
+	if a.processManager != nil && a.processManager.ShardingEnabled() {
+		a.syncShardPreProxyLocked()
+		return a.processManager.Start(rule)
+	}
+
 	if pre == nil || pre.ID == rule.ID {
 		return a.processManager.Start(rule)
 	}
@@ -4344,7 +4369,8 @@ func (a *MyService) SetPreProxy(nodeID string) error {
 			return nil
 		}
 		a.config.PreProxyNodeID = ""
-		a.log("已清除全局前置代理")
+		a.syncShardPreProxyLocked()
+		a.log("已清除全局前置代理（重新启动节点后生效）")
 		return a.saveConfig()
 	}
 
@@ -4362,6 +4388,7 @@ func (a *MyService) SetPreProxy(nodeID string) error {
 	}
 
 	a.config.PreProxyNodeID = nodeID
+	a.syncShardPreProxyLocked()
 	a.log(fmt.Sprintf("全局前置代理已设置为: %s（重新启动节点后生效）", alias))
 	return a.saveConfig()
 }
@@ -4852,6 +4879,9 @@ func (a *MyService) handleRealIP(localPort int, ip string) {
 			a.config.Rules[i].RealIP = ip
 			a.config.Rules[i].LastError = ""
 			a.mu.Unlock()
+			// 与故障转移/链式分支一致地通知前端刷新，
+			// 否则真实 IP 已经拿到却不会显示在界面上
+			a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
 			return
 		}
 	}

@@ -426,6 +426,16 @@ type SkippedNode struct {
 // 否则一个坏节点会拖垮同片其余几百个正常节点。
 // 返回的 skipped 供调用方记录日志、在界面上标记问题节点。
 func BuildShardConfig(nodes []*models.ProxyRule, apiPort int) (*Config, []SkippedNode, error) {
+	return BuildShardConfigWithPreProxy(nodes, nil, apiPort)
+}
+
+// BuildShardConfigWithPreProxy 构建分片配置，并让各节点经共享的前置代理出站。
+//
+// 前置代理在整份配置里只有一份出站，各节点用 detour 指向它——
+// 因此设置了全局前置代理时，节点依然可以共享同一个进程，
+// 不必退化成一节点一进程。
+// preProxy 为 nil 时行为与 BuildShardConfig 一致（直连出站）。
+func BuildShardConfigWithPreProxy(nodes []*models.ProxyRule, preProxy *models.ProxyRule, apiPort int) (*Config, []SkippedNode, error) {
 	if len(nodes) == 0 {
 		return nil, nil, fmt.Errorf("分片至少需要一个节点")
 	}
@@ -441,6 +451,18 @@ func BuildShardConfig(nodes []*models.ProxyRule, apiPort int) (*Config, []Skippe
 		skipped   []SkippedNode
 		seenPorts = make(map[int]string, len(nodes))
 	)
+
+	// 前置代理在整份配置里只有一份出站，各节点通过 detour 共用它
+	const preProxyTag = "pre_proxy"
+	usePreProxy := false
+	if preProxy != nil {
+		preOutbound, err := BuildOutbound(preProxy, preProxyTag)
+		if err != nil {
+			return nil, nil, fmt.Errorf("生成前置代理出站失败: %v", err)
+		}
+		outbounds = append(outbounds, preOutbound)
+		usePreProxy = true
+	}
 
 	for _, node := range nodes {
 		if node.LocalPort <= 0 {
@@ -461,6 +483,10 @@ func BuildShardConfig(nodes []*models.ProxyRule, apiPort int) (*Config, []Skippe
 		if err != nil {
 			skipped = append(skipped, SkippedNode{node.ID, node.Alias, err})
 			continue
+		}
+		// 节点自身就是前置代理时不能 detour 到自己，否则会成环
+		if usePreProxy && node.ID != preProxy.ID {
+			outbound["detour"] = preProxyTag
 		}
 
 		inboundTag := ShardInboundTag(node.ID)

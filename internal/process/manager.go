@@ -225,7 +225,39 @@ func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) err
 	}
 	rule.ProcessID = 0 // 分片模式下节点没有独立进程
 	rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+	go m.getRealIP(rule)
 	return nil
+}
+
+// realIPConcurrency 启动后并发获取真实 IP 的上限。
+//
+// 每个节点都要发一次 HTTPS 请求，几百个节点同时发会打满连接数、
+// 也容易被 IP 查询服务限流；限并发既保证及时性又不至于把网络压垮。
+const realIPConcurrency = 16
+
+// verifyStartedNodes 为刚启动的节点获取真实 IP 并做连通性验证。
+//
+// 分片模式下节点没有独立进程，不走 startProcessLocked，
+// 因此这一步要在批量启动完成后单独触发——否则界面上不会显示真实 IP，
+// 连不通的节点也不会被标记和自动停用。
+func (m *Manager) verifyStartedNodes(rules []*models.ProxyRule) {
+	if len(rules) == 0 {
+		return
+	}
+	go func() {
+		sem := make(chan struct{}, realIPConcurrency)
+		var wg sync.WaitGroup
+		for _, rule := range rules {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(r *models.ProxyRule) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				m.getRealIP(r)
+			}(rule)
+		}
+		wg.Wait()
+	}()
 }
 
 // StartNodesInShard 批量启动节点，只调谐一次。
@@ -233,7 +265,8 @@ func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) err
 // 相比逐个 Start，避免了同一分片被反复重启——启动 300 个节点原本要重建
 // 300 次配置，现在只重建一次。返回未能启动的节点及原因。
 func (m *Manager) StartNodesInShard(rules []*models.ProxyRule) (map[string]error, error) {
-	if m.shards == nil {
+	shards := m.Shards()
+	if shards == nil {
 		return nil, fmt.Errorf("分片模式未启用")
 	}
 	failures := make(map[string]error)
@@ -249,30 +282,38 @@ func (m *Manager) StartNodesInShard(rules []*models.ProxyRule) (map[string]error
 		return failures, nil
 	}
 
-	m.shards.AddDesired(accepted...)
-	result, err := m.shards.Reconcile()
+	shards.AddDesired(accepted...)
+	result, err := shards.Reconcile()
 	if err != nil {
 		return failures, err
 	}
+
+	var started []*models.ProxyRule
 	for _, rule := range accepted {
 		if skipErr := shardSkipError(result, rule.ID); skipErr != nil {
 			failures[rule.ID] = skipErr
-			m.shards.RemoveDesired(rule.ID)
+			shards.RemoveDesired(rule.ID)
 			continue
 		}
 		rule.ProcessID = 0
 		rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+		started = append(started, rule)
 	}
+
+	// 分片模式不走 startProcessLocked，真实 IP 与连通性验证需在此单独触发，
+	// 否则界面上不显示真实 IP，连不通的节点也不会被标记和自动停用
+	m.verifyStartedNodes(started)
 	return failures, nil
 }
 
 // StopNodesInShard 批量停止节点，只调谐一次。
 func (m *Manager) StopNodesInShard(nodeIDs []string) error {
-	if m.shards == nil {
+	shards := m.Shards()
+	if shards == nil {
 		return fmt.Errorf("分片模式未启用")
 	}
-	m.shards.RemoveDesired(nodeIDs...)
-	_, err := m.shards.Reconcile()
+	shards.RemoveDesired(nodeIDs...)
+	_, err := shards.Reconcile()
 	return err
 }
 
@@ -775,6 +816,13 @@ func (m *Manager) readLog(reader io.Reader, alias, level string, processInfo *Pr
 	}
 }
 
+// notifyLoadRules 通知前端刷新规则列表。回调未设置时静默跳过。
+func (m *Manager) notifyLoadRules() {
+	if m.loadRules != nil {
+		m.loadRules()
+	}
+}
+
 // getRealIP 获取真实 IP
 func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	// 等待服务启动
@@ -783,7 +831,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	// 检查进程是否还在运行
 	if !m.IsRunning(rule.LocalPort) {
 		m.log(fmt.Sprintf("[警告] %s 进程已停止，跳过IP获取", rule.Alias))
-		m.loadRules()
+		m.notifyLoadRules()
 		return
 	}
 
@@ -792,7 +840,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	if err != nil {
 		m.log(fmt.Sprintf("[错误] %s 构建代理 URL 失败: %v", rule.Alias, err))
 		rule.RealIP = "获取失败"
-		m.loadRules()
+		m.notifyLoadRules()
 		return
 	}
 
@@ -819,7 +867,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		// 再次检查进程是否还在运行
 		if !m.IsRunning(rule.LocalPort) {
 			m.log(fmt.Sprintf("[警告] %s 进程已停止，停止IP获取", rule.Alias))
-			m.loadRules()
+			m.notifyLoadRules()
 			return
 		}
 
@@ -851,7 +899,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 				if ipcb != nil {
 					ipcb(rule.LocalPort, realIP)
 				}
-				m.loadRules()
+				m.notifyLoadRules()
 				return
 			}
 		}
@@ -871,7 +919,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	if cb != nil {
 		cb(rule.LocalPort, reason)
 	} else {
-		m.loadRules()
+		m.notifyLoadRules()
 	}
 }
 

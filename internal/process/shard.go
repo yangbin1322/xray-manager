@@ -36,6 +36,10 @@ type Shard struct {
 	configPath string
 	configSeq  int
 	nodes      []*models.ProxyRule // 当前进程实际承载的节点（已剔除构建/绑定失败的）
+
+	// stale 标记配置已作废（如前置代理变更），下次调谐必须重建，
+	// 即便节点集合本身没有变化。
+	stale bool
 }
 
 // Nodes 返回该分片当前承载的节点副本。
@@ -137,6 +141,39 @@ type ShardManager struct {
 
 	apiPortAlloc func(int) int // 为分片分配 Clash API 端口，便于测试注入
 	shardSize    int
+
+	// preProxy 全局前置代理。非空时各节点经它出站（配置里共享一份出站，
+	// 节点用 detour 指向），因此设置前置代理后节点依然共享进程。
+	preProxy *models.ProxyRule
+}
+
+// SetPreProxy 设置全局前置代理，nil 表示直连。
+//
+// 前置代理变更会影响所有节点的出站，需要重建全部分片；
+// 这里只记录变更，由调用方随后执行 Reconcile。返回值表示配置是否真的变了。
+func (m *ShardManager) SetPreProxy(preProxy *models.ProxyRule) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	oldID := ""
+	if m.preProxy != nil {
+		oldID = m.preProxy.ID
+	}
+	newID := ""
+	if preProxy != nil {
+		newID = preProxy.ID
+	}
+	if oldID == newID {
+		return false
+	}
+
+	m.preProxy = preProxy
+	// 前置代理变了，现有分片的出站配置全部作废，下次调谐必须重建。
+	// 不能直接清空 nodes——停止分片时要靠它逐个等待端口释放。
+	for _, shard := range m.shards {
+		shard.stale = true
+	}
+	return true
 }
 
 // NewShardManager 创建分片管理器。configDir 用于存放各分片的配置文件。
@@ -253,7 +290,7 @@ func (m *ShardManager) Reconcile() (ReconcileResult, error) {
 		nodes := plan[shardID]
 		existing := m.shards[shardID]
 
-		if existing != nil && existing.Running() && sameNodeSet(existing.nodes, nodes) {
+		if existing != nil && existing.Running() && !existing.stale && sameNodeSet(existing.nodes, nodes) {
 			result.NodesRunning += len(existing.nodes)
 			continue
 		}
@@ -309,7 +346,7 @@ func (m *ShardManager) applyShardLocked(shardID string, nodes []*models.ProxyRul
 		apiPort = m.apiPortAlloc(basePortOf(usable))
 	}
 
-	config, skipped, err := singbox.BuildShardConfig(usable, apiPort)
+	config, skipped, err := singbox.BuildShardConfigWithPreProxy(usable, m.preProxy, apiPort)
 	for _, s := range skipped {
 		rejected = append(rejected, fmt.Errorf("节点「%s」配置无效，已跳过: %v", s.Alias, s.Err))
 	}

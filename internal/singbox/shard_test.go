@@ -234,3 +234,84 @@ func TestBuildShardConfigAtScale(t *testing.T) {
 	}
 	t.Logf("%d nodes -> %d KB of JSON", count, len(raw)/1024)
 }
+
+// 设置全局前置代理后，节点应通过 detour 共用同一份前置出站——
+// 而不是退化成一节点一份配置、一节点一个进程。
+func TestBuildShardConfigWithPreProxy(t *testing.T) {
+	pre := shardNode("pre", 11100, "trojan")
+	nodes := []*models.ProxyRule{
+		shardNode("a", 11101, "trojan"),
+		shardNode("b", 11102, "vless"),
+	}
+
+	config, skipped, err := BuildShardConfigWithPreProxy(nodes, pre, 0)
+	if err != nil {
+		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("unexpected skipped nodes: %v", skipped)
+	}
+
+	// 前置出站只有一份
+	preCount := 0
+	for _, out := range config.Outbounds {
+		if out["tag"] == "pre_proxy" {
+			preCount++
+		}
+	}
+	if preCount != 1 {
+		t.Errorf("found %d pre_proxy outbounds, want exactly 1 shared one", preCount)
+	}
+
+	// 每个节点都 detour 到它
+	for _, node := range nodes {
+		var found bool
+		for _, out := range config.Outbounds {
+			if out["tag"] != ShardOutboundTag(node.ID) {
+				continue
+			}
+			found = true
+			if out["detour"] != "pre_proxy" {
+				t.Errorf("node %s detour = %v, want pre_proxy", node.ID, out["detour"])
+			}
+		}
+		if !found {
+			t.Errorf("node %s has no outbound", node.ID)
+		}
+	}
+}
+
+// 节点自身就是前置代理时不能 detour 到自己，否则成环
+func TestBuildShardConfigPreProxyAvoidsSelfLoop(t *testing.T) {
+	pre := shardNode("pre", 11110, "trojan")
+	nodes := []*models.ProxyRule{pre, shardNode("other", 11111, "trojan")}
+
+	config, _, err := BuildShardConfigWithPreProxy(nodes, pre, 0)
+	if err != nil {
+		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
+	}
+	for _, out := range config.Outbounds {
+		if out["tag"] == ShardOutboundTag("pre") {
+			if _, hasDetour := out["detour"]; hasDetour {
+				t.Error("the pre-proxy node must not detour through itself")
+			}
+		}
+	}
+}
+
+// 不传前置代理时行为与 BuildShardConfig 一致
+func TestBuildShardConfigWithoutPreProxyHasNoDetour(t *testing.T) {
+	nodes := []*models.ProxyRule{shardNode("a", 11120, "trojan")}
+	config, _, err := BuildShardConfigWithPreProxy(nodes, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, out := range config.Outbounds {
+		if _, hasDetour := out["detour"]; hasDetour {
+			t.Errorf("outbound %v should not have a detour without a pre-proxy", out["tag"])
+		}
+		if out["tag"] == "pre_proxy" {
+			t.Error("no pre_proxy outbound should exist")
+		}
+	}
+}

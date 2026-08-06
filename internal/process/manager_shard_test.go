@@ -3,6 +3,7 @@ package process
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"xray-manager/internal/models"
 )
@@ -200,4 +201,34 @@ func TestShardedCapacityIsHigher(t *testing.T) {
 
 func asCapacityError(err error, target **CapacityError) bool {
 	return err != nil && errors.As(err, target)
+}
+
+// 分片节点启动后必须触发真实 IP 获取与连通性验证。
+//
+// 分片节点不走 startProcessLocked，这一步曾被漏掉：表现为节点能正常代理，
+// 但界面上不显示真实 IP，连不通的节点也不会被标记和自动停用。
+func TestShardStartTriggersRealIPProbe(t *testing.T) {
+	requireSingBox(t)
+	m := newShardedManager(t)
+
+	probed := make(chan int, 4)
+	m.SetRealIPCallback(func(localPort int, ip string) { probed <- localPort })
+	m.SetNodeFailedCallback(func(localPort int, reason string) { probed <- localPort })
+
+	port := freePorts(t, 1)[0]
+	rule := testNode("probe", port)
+	if _, err := m.StartNodesInShard([]*models.ProxyRule{rule}); err != nil {
+		t.Fatalf("StartNodesInShard: %v", err)
+	}
+
+	// 节点指向不可达的测试地址，探测必然走到失败回调；
+	// 关键是「有没有被探测」，而不是探测结果本身。
+	select {
+	case got := <-probed:
+		if got != port {
+			t.Errorf("probe reported port %d, want %d", got, port)
+		}
+	case <-time.After(90 * time.Second):
+		t.Fatal("shard-hosted node was never probed for its real IP")
+	}
 }
