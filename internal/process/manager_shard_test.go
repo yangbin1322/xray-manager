@@ -219,6 +219,10 @@ func TestShardStartTriggersRealIPProbe(t *testing.T) {
 
 	port := freePorts(t, 1)[0]
 	rule := testNode("probe", port)
+	// 与实际启动流程一致：上层在探测前会把节点置为已启用。
+	// 探测发现节点被停止时会提前返回（用户手动停止不该被记成节点故障），
+	// 这里不置位就走不到失败回调。
+	rule.Enabled = true
 	if _, err := m.StartNodesInShard([]*models.ProxyRule{rule}); err != nil {
 		t.Fatalf("StartNodesInShard: %v", err)
 	}
@@ -385,5 +389,35 @@ func TestGetRealIPClearsVerifyingFlag(t *testing.T) {
 
 	if rule.Verifying {
 		t.Error("verifying flag was left set after the probe finished")
+	}
+}
+
+// 探测期间被用户停止的节点，不该被记成「启动后不通」。
+//
+// 停止会让探测失败，但那是停止导致的、不是节点本身的问题；
+// 照常回调停用会给节点留下一条莫名其妙的错误原因。
+func TestGetRealIPSkipsFailureForStoppedNode(t *testing.T) {
+	m := &Manager{processes: make(map[int]*ProcessInfo), pollerStop: make(chan struct{})}
+
+	failed := make(chan int, 1)
+	m.SetNodeFailedCallback(func(localPort int, reason string) { failed <- localPort })
+
+	// 端口 0 无法连通，探测必然失败；节点未启用代表已被停止
+	rule := testNode("stopped", 0)
+	rule.Enabled = false
+
+	m.getRealIP(rule)
+
+	select {
+	case port := <-failed:
+		t.Errorf("stopped node reported as failed (port %d); a user-initiated stop "+
+			"must not be recorded as a node failure", port)
+	default:
+	}
+	if rule.LastError != "" {
+		t.Errorf("LastError = %q, should stay empty for a stopped node", rule.LastError)
+	}
+	if rule.Verifying {
+		t.Error("verifying flag must be cleared even when the probe exits early")
 	}
 }

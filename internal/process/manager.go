@@ -285,6 +285,13 @@ func (m *Manager) verifyStartedNodes(rules []*models.ProxyRule) {
 			go func(r *models.ProxyRule) {
 				defer wg.Done()
 				defer func() { <-sem }()
+				// 排队期间节点可能已被停止（用户点了「全部停止」）。
+				// 此时不必再探测，但一定要清掉验证中标记——
+				// 否则这些节点会永远停在「验证中」，状态灯一直黄着。
+				if !r.Enabled {
+					r.Verifying = false
+					return
+				}
 				m.getRealIP(r)
 			}(rule)
 		}
@@ -1042,6 +1049,12 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 		} else {
 			m.notifyLoadRules()
 		}
+		return
+	}
+
+	// 探测期间节点被用户停止时，失败是停止导致的，不是节点本身不通。
+	// 此时若照常标记失败并回调停用，会给节点留下一条莫名其妙的错误原因。
+	if !rule.Enabled {
 		return
 	}
 

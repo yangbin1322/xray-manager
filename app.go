@@ -330,7 +330,20 @@ func (a *MyService) ServiceShutdown() error {
 func (a *MyService) GetRules() []models.ProxyRule {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.config.Rules
+
+	// 未启动的节点不可能处于「验证中」。
+	//
+	// 停止节点的入口有十几处（单个停止、批量停止、按分组停止、删除、
+	// 订阅更新重建……），逐个补清标记迟早会漏，漏掉的节点会一直显示
+	// 黄色呼吸灯。这里在唯一的读取出口统一兜底，保证界面看到的状态自洽。
+	rules := make([]models.ProxyRule, len(a.config.Rules))
+	copy(rules, a.config.Rules)
+	for i := range rules {
+		if !rules[i].Enabled {
+			rules[i].Verifying = false
+		}
+	}
+	return rules
 }
 
 // generateUniqueRuleID 生成唯一的规则ID
@@ -1430,6 +1443,10 @@ func (a *MyService) StopNodes(ids []string) error {
 			a.config.Rules[i].Enabled = false
 			a.config.Rules[i].ProcessID = 0
 			a.config.Rules[i].RealIP = ""
+			// 停止时立刻清掉验证中标记：后台还排着队的探测任务要等一阵才轮到，
+			// 不在这里清的话，这些节点会一直显示「验证中」（黄灯呼吸），
+			// 直到整批队列跑完
+			a.config.Rules[i].Verifying = false
 			a.reservePortLocked(a.config.Rules[i].LocalPort)
 		}
 	}
@@ -1530,6 +1547,8 @@ func (a *MyService) StopRule(id string) error {
 			rule.Enabled = false
 			rule.ProcessID = 0
 			rule.RealIP = ""
+			// 后台可能还在探测该节点，停止时一并清掉验证中标记
+			rule.Verifying = false
 			a.reservePortLocked(rule.LocalPort)
 
 			if err := a.saveConfig(); err != nil {
@@ -4921,6 +4940,7 @@ func (a *MyService) handleNodeFailed(localPort int, reason string) {
 			a.config.Rules[i].Enabled = false
 			a.config.Rules[i].ProcessID = 0
 			a.config.Rules[i].RealIP = ""
+			a.config.Rules[i].Verifying = false
 			a.config.Rules[i].LastError = reason
 			alias = a.config.Rules[i].Alias
 			matched = true
