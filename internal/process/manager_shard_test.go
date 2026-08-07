@@ -421,3 +421,31 @@ func TestGetRealIPSkipsFailureForStoppedNode(t *testing.T) {
 		t.Error("verifying flag must be cleared even when the probe exits early")
 	}
 }
+
+// StartNodesInShard 必须在触发验证之前把节点置为已启用。
+//
+// 验证协程会跳过未启用的节点（那代表用户已停止）。若把置位留给调用方
+// 在本函数返回后再做，先跑起来的协程会把正在启动的节点误当成已停止、
+// 直接跳过探测——实测表现为上千节点里只有几十个走了验证，
+// 其余秒变「运行中」且没有真实 IP。
+func TestStartNodesInShardEnablesBeforeVerifying(t *testing.T) {
+	requireSingBox(t)
+	m := newShardedManager(t)
+
+	ports := freePorts(t, 3)
+	var nodes []*models.ProxyRule
+	for i, port := range ports {
+		nodes = append(nodes, testNode(fmt.Sprintf("n%d", i), port))
+	}
+
+	if _, err := m.StartNodesInShard(nodes); err != nil {
+		t.Fatalf("StartNodesInShard: %v", err)
+	}
+
+	// 函数返回时节点必须已置为启用，验证协程才不会把它们当成已停止
+	for _, node := range nodes {
+		if !node.Enabled {
+			t.Errorf("node %s was not enabled before verification started", node.ID)
+		}
+	}
+}

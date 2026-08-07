@@ -545,6 +545,7 @@ func (a *MyService) autoStartEnabledNodes() {
 				if failErr, failed := failures[rule.ID]; failed {
 					a.logError(fmt.Sprintf("启动规则 %s 失败", rule.Alias), failErr)
 					rule.Enabled = false
+					rule.Verifying = false
 					rule.LastError = failErr.Error()
 					a.reservePortLocked(rule.LocalPort)
 				}
@@ -1310,6 +1311,9 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 	if err != nil {
 		a.logError("批量启动节点失败", err)
 		for _, r := range targets {
+			// 整批失败：回退 StartNodesInShard 里的乐观置位
+			r.Enabled = false
+			r.Verifying = false
 			a.reservePortLocked(r.LocalPort)
 		}
 		return handled
@@ -1319,11 +1323,14 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 		handled[r.ID] = true
 		if failErr, failed := failures[r.ID]; failed {
 			a.logError(fmt.Sprintf("启动规则 %s 失败", r.Alias), failErr)
+			// StartNodesInShard 会先把节点置为已启用（验证协程依赖这个标记），
+			// 启动失败的要在这里回退，否则界面上会显示成运行中
+			r.Enabled = false
+			r.Verifying = false
 			r.LastError = failErr.Error()
 			a.reservePortLocked(r.LocalPort)
 			continue
 		}
-		r.Enabled = true
 		r.LastError = ""
 	}
 	return handled

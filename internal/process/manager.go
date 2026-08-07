@@ -226,6 +226,9 @@ func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) err
 	}
 	rule.ProcessID = 0 // 分片模式下节点没有独立进程
 	rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+	// 同 StartNodesInShard：必须先置位再触发验证，否则探测协程会把
+	// 正在启动的节点误当成已停止而跳过
+	rule.Enabled = true
 	go m.getRealIP(rule)
 	return nil
 }
@@ -338,6 +341,11 @@ func (m *Manager) StartNodesInShard(rules []*models.ProxyRule) (map[string]error
 		}
 		rule.ProcessID = 0
 		rule.LastStartTime = time.Now().Format("2006-01-02 15:04:05")
+		// 必须在触发验证之前置位：验证协程会跳过未启用的节点
+		//（那代表用户已把它停掉），若留给调用方在本函数返回后再置位，
+		// 先跑起来的协程会把正在启动的节点误当成已停止，直接跳过探测——
+		// 表现为大部分节点秒变「运行中」却没有真实 IP。
+		rule.Enabled = true
 		started = append(started, rule)
 	}
 
