@@ -56,6 +56,12 @@
             <button class="more-item" @click="runMore(handleBatchEdit)">批量编辑</button>
             <button class="more-item" @click="runMore(handleResetTraffic)">流量清零</button>
             <div class="more-sep"></div>
+            <!-- 复制本地代理地址：供爬虫等程序直接使用，一行一个 -->
+            <button class="more-item" @click="runMore(() => copyProxies('http'))"
+                    :title="copyProxyTitle">复制本地代理 (HTTP)</button>
+            <button class="more-item" @click="runMore(() => copyProxies('socks5'))"
+                    :title="copyProxyTitle">复制本地代理 (SOCKS5)</button>
+            <div class="more-sep"></div>
             <button class="more-item" @click="runMore(() => selectHealth('healthy'))">选中健康节点</button>
             <button class="more-item" @click="runMore(() => selectHealth('failed'))">选中失败节点</button>
           </div>
@@ -578,6 +584,36 @@ async function handleOpenRelease() {
     appStore.showToast(`打开 Releases 失败: ${e}`, 'error')
   }
 }
+
+// 复制本地代理地址到剪贴板，一行一个，供爬虫等程序直接使用。
+// 与「健康检测」一致：选中了就复制选中的，没选中就复制全部已启用节点。
+async function copyProxies(protocol) {
+  const scope = selectedCount.value > 0 ? 'selected' : 'enabled'
+  try {
+    const { count, skipped } = await rulesStore.copyLocalProxies({ scope, protocol })
+    if (count === 0) {
+      appStore.showToast(
+        scope === 'selected' ? '选中的节点都没有可用的本地端口' : '当前没有已启用的节点',
+        'warning')
+      return
+    }
+    const label = protocol === 'socks5' ? 'SOCKS5' : 'HTTP'
+    const range = scope === 'selected' ? '选中' : '已启用'
+    appStore.showToast(
+      `已复制 ${count} 个${range}节点的 ${label} 代理地址` +
+      (skipped ? `，跳过 ${skipped} 个未启动或无端口的节点` : ''),
+      'success')
+  } catch (e) {
+    appStore.showToast(`写入系统剪贴板失败: ${e}`, 'error')
+  }
+}
+
+// 菜单项悬停说明：说清复制范围，避免用户以为总是复制全部
+const copyProxyTitle = computed(() =>
+  selectedCount.value > 0
+    ? `复制选中的 ${selectedCount.value} 个节点的本地代理地址`
+    : '复制全部已启用节点的本地代理地址（验证中的节点除外）'
+)
 
 async function handleCheckHealth() {
   try {

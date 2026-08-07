@@ -460,6 +460,34 @@ export const useRulesStore = defineStore('rules', () => {
     return { count: ruleIds.length, skipped }
   }
 
+  // 复制本地代理地址。
+  //
+  // 与 copySelected（复制节点分享链接）不同，这里复制的是「本机监听地址」，
+  // 供爬虫等程序直接拿去用。因此包含全部节点类型——故障转移和链式代理
+  // 同样对外提供本地端口，只是没有通用分享链接。
+  //
+  // scope 为 'selected' 时只取选中项，否则取全部已启用节点。
+  // 验证中的节点连通性还没确认，可能几秒后被判不通并停用，默认排除。
+  async function copyLocalProxies({ scope = 'enabled', protocol = 'http' } = {}) {
+    let nodes
+    if (scope === 'selected') {
+      nodes = allNodes.value.filter(node => selectedIds.value.has(node.id))
+    } else {
+      nodes = allNodes.value.filter(node => node.enabled && !node.verifying)
+    }
+
+    const usable = nodes.filter(node => node.enabled && node.localPort > 0)
+    const skipped = nodes.length - usable.length
+    if (usable.length === 0) return { count: 0, skipped }
+
+    const scheme = protocol === 'socks5' ? 'socks5' : 'http'
+    const text = usable
+      .map(node => `${scheme}://127.0.0.1:${node.localPort}`)
+      .join('\n')
+    await navigator.clipboard.writeText(text)
+    return { count: usable.length, skipped }
+  }
+
   async function pasteNodes() {
     const text = (await navigator.clipboard.readText()).trim()
     if (!text) return { successCount: 0, failCount: 0, errors: [] }
@@ -481,7 +509,7 @@ export const useRulesStore = defineStore('rules', () => {
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, selectByHealth, deselect, handleRowSelect, setSort,
-    copySelected, pasteNodes,
+    copySelected, copyLocalProxies, pasteNodes,
     applyTrafficUpdate, applyRelayStats, applyHealthCheckResult, applyHealthCheckResults,
     checkSelectedHealth, checkAllHealth, resetTraffic,
   }
