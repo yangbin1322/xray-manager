@@ -192,17 +192,25 @@ function listenToBackendEvents() {
   })
 
   // 批量启动时每个节点拿到真实 IP / 判定失败都会触发一次该事件，
-  // 几百个节点就是几百次整表重载（每次都要把上千行搬进前端）。
-  // 这里合并成一次：短时间内的连续事件只在末尾刷新一遍。
+  // 上千个节点就是上千次整表重载（每次都要把全部行搬进前端）。
+  //
+  // 这里用节流而不是防抖：验证期间事件是持续不断的，防抖（每来一个事件
+  // 就重置计时器）会一直等不到空档，界面要到整批跑完才更新一次，
+  // 表现为「日志里已经出 IP 了，列表却半天不动」。
+  // 节流保证最多每 500ms 刷新一次，既看得到进度又不会把前端压垮。
   let loadRulesTimer = null
+  const refreshRules = () => {
+    // 静默刷新：后台驱动的更新每秒来好几次，亮遮罩会让界面不停闪烁
+    rulesStore.loadRules({ silent: true })
+    // 节点变动常常伴随分组增删（如删订阅会连带删分组），一并刷新侧边栏
+    groupsStore.loadGroups()
+  }
   Events.On('loadRules', () => {
-    if (loadRulesTimer) clearTimeout(loadRulesTimer)
+    if (loadRulesTimer) return // 已有待执行的刷新，本次事件并入其中
     loadRulesTimer = setTimeout(() => {
       loadRulesTimer = null
-      rulesStore.loadRules()
-      // 节点变动常常伴随分组增删（如删订阅会连带删分组），一并刷新侧边栏
-      groupsStore.loadGroups()
-    }, 300)
+      refreshRules()
+    }, 500)
   })
 
   Events.On('speedTestResult', () => {

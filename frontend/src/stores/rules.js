@@ -151,8 +151,13 @@ export const useRulesStore = defineStore('rules', () => {
   })
 
   // === 动作 ===
-  async function loadRules() {
-    loading.value = true
+  // silent 为 true 时不显示加载遮罩。
+  //
+  // 后台事件驱动的刷新（验证进度、流量更新）每秒可能来好几次，
+  // 每次都亮一下遮罩会让界面不停闪烁——那比数字晚几百毫秒更难受。
+  // 用户主动触发的加载仍然显示遮罩，让操作有反馈。
+  async function loadRules({ silent = false } = {}) {
+    if (!silent) loading.value = true
     try {
       rules.value = await api.getRules() || []
       try { loadBalancers.value = await api.getLoadBalancers() || [] } catch { loadBalancers.value = [] }
@@ -161,7 +166,7 @@ export const useRulesStore = defineStore('rules', () => {
     } catch (e) {
       console.error('加载规则失败:', e)
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
