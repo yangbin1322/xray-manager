@@ -142,16 +142,23 @@ type ShardManager struct {
 	apiPortAlloc func(int) int // 为分片分配 Clash API 端口，便于测试注入
 	shardSize    int
 
-	// preProxy 全局前置代理。非空时各节点经它出站（配置里共享一份出站，
-	// 节点用 detour 指向），因此设置前置代理后节点依然共享进程。
+	// preProxy 前置代理节点。非空时受其影响的节点经它出站（配置里共享一份出站，
+	// 节点用 detour 指向），因此启用前置代理后节点依然共享进程。
 	preProxy *models.ProxyRule
+	// preProxyPolicy 决定具体哪些节点走前置代理（按分组生效、可排除个别节点）。
+	// 为 nil 表示除前置节点自身外全部生效。
+	preProxyPolicy singbox.PreProxyPolicy
+	// preProxyScope 生效范围的指纹，用于判断范围是否变化——
+	// 节点 ID 没变但分组/排除名单变了，同样需要重建分片。
+	preProxyScope string
 }
 
-// SetPreProxy 设置全局前置代理，nil 表示直连。
+// SetPreProxy 设置前置代理及其生效范围，preProxy 为 nil 表示全部直连。
 //
-// 前置代理变更会影响所有节点的出站，需要重建全部分片；
+// scope 是生效范围的指纹（调用方拼接分组与排除名单），只用于判断是否变化。
+// 前置代理或其范围变更都会影响节点出站，需要重建全部分片；
 // 这里只记录变更，由调用方随后执行 Reconcile。返回值表示配置是否真的变了。
-func (m *ShardManager) SetPreProxy(preProxy *models.ProxyRule) bool {
+func (m *ShardManager) SetPreProxy(preProxy *models.ProxyRule, policy singbox.PreProxyPolicy, scope string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -163,11 +170,14 @@ func (m *ShardManager) SetPreProxy(preProxy *models.ProxyRule) bool {
 	if preProxy != nil {
 		newID = preProxy.ID
 	}
-	if oldID == newID {
+	// 生效范围也要比：前置节点没换，但改了分组或排除名单时同样得重建
+	if oldID == newID && m.preProxyScope == scope {
 		return false
 	}
 
 	m.preProxy = preProxy
+	m.preProxyPolicy = policy
+	m.preProxyScope = scope
 	// 前置代理变了，现有分片的出站配置全部作废，下次调谐必须重建。
 	// 不能直接清空 nodes——停止分片时要靠它逐个等待端口释放。
 	for _, shard := range m.shards {
@@ -346,7 +356,7 @@ func (m *ShardManager) applyShardLocked(shardID string, nodes []*models.ProxyRul
 		apiPort = m.apiPortAlloc(basePortOf(usable))
 	}
 
-	config, skipped, err := singbox.BuildShardConfigWithPreProxy(usable, m.preProxy, apiPort)
+	config, skipped, err := singbox.BuildShardConfigWithPreProxy(usable, m.preProxy, apiPort, m.preProxyPolicy)
 	for _, s := range skipped {
 		rejected = append(rejected, fmt.Errorf("节点「%s」配置无效，已跳过: %v", s.Alias, s.Err))
 	}

@@ -426,16 +426,20 @@ type SkippedNode struct {
 // 否则一个坏节点会拖垮同片其余几百个正常节点。
 // 返回的 skipped 供调用方记录日志、在界面上标记问题节点。
 func BuildShardConfig(nodes []*models.ProxyRule, apiPort int) (*Config, []SkippedNode, error) {
-	return BuildShardConfigWithPreProxy(nodes, nil, apiPort)
+	return BuildShardConfigWithPreProxy(nodes, nil, apiPort, nil)
 }
 
-// BuildShardConfigWithPreProxy 构建分片配置，并让各节点经共享的前置代理出站。
+// PreProxyPolicy 决定某个节点是否经前置代理出站。
+// 为 nil 时该分片内所有节点都经前置代理（前置节点自身除外）。
+type PreProxyPolicy func(node *models.ProxyRule) bool
+
+// BuildShardConfigWithPreProxy 构建分片配置，并让指定节点经共享的前置代理出站。
 //
 // 前置代理在整份配置里只有一份出站，各节点用 detour 指向它——
-// 因此设置了全局前置代理时，节点依然可以共享同一个进程，
-// 不必退化成一节点一进程。
-// preProxy 为 nil 时行为与 BuildShardConfig 一致（直连出站）。
-func BuildShardConfigWithPreProxy(nodes []*models.ProxyRule, preProxy *models.ProxyRule, apiPort int) (*Config, []SkippedNode, error) {
+// 因此启用前置代理时，节点依然可以共享同一个进程，不必退化成一节点一进程。
+// 同一分片内可以混有走前置和直连的节点：detour 是逐个出站上的字段。
+// preProxy 为 nil 时行为与 BuildShardConfig 一致（全部直连）。
+func BuildShardConfigWithPreProxy(nodes []*models.ProxyRule, preProxy *models.ProxyRule, apiPort int, policy PreProxyPolicy) (*Config, []SkippedNode, error) {
 	if len(nodes) == 0 {
 		return nil, nil, fmt.Errorf("分片至少需要一个节点")
 	}
@@ -484,8 +488,9 @@ func BuildShardConfigWithPreProxy(nodes []*models.ProxyRule, preProxy *models.Pr
 			skipped = append(skipped, SkippedNode{node.ID, node.Alias, err})
 			continue
 		}
-		// 节点自身就是前置代理时不能 detour 到自己，否则会成环
-		if usePreProxy && node.ID != preProxy.ID {
+		// 节点自身就是前置代理时不能 detour 到自己，否则会成环；
+		// policy 进一步限定生效范围（按分组、排除个别节点）
+		if usePreProxy && node.ID != preProxy.ID && (policy == nil || policy(node)) {
 			outbound["detour"] = preProxyTag
 		}
 

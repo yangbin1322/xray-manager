@@ -408,8 +408,10 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
     put:
       tags: [Settings]
-      summary: 设置全局前置代理
-      description: body.nodeId 为普通节点 ID；传空字符串清除。已运行节点需重新启动后生效。
+      summary: 设置前置代理及生效范围
+      description: |
+        body.nodeId 为普通节点 ID；传空字符串清除（同时清空生效范围）。
+        已运行节点需重新启动后生效。
       requestBody:
         required: true
         content:
@@ -418,6 +420,14 @@ paths:
               type: object
               properties:
                 nodeId: { type: string, description: 前置节点 ID，空表示清除 }
+                groupIds:
+                  type: array
+                  items: { type: string }
+                  description: 生效范围（分组 ID）。留空表示对全部节点生效
+                excludedIds:
+                  type: array
+                  items: { type: string }
+                  description: 例外节点 ID。即使落在生效范围内也直连
       responses:
         '200':
           description: 更新后的前置代理配置
@@ -483,6 +493,14 @@ components:
       properties:
         nodeId: { type: string, description: 前置节点 ID，空表示未启用 }
         alias: { type: string, description: 节点别名 }
+        groupIds:
+          type: array
+          items: { type: string }
+          description: 生效范围（分组 ID）。留空表示对全部节点生效
+        excludedIds:
+          type: array
+          items: { type: string }
+          description: 例外节点 ID。即使落在生效范围内也直连
 
     Response:
       type: object

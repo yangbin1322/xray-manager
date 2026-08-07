@@ -916,7 +916,7 @@ export class PortConflict {
 }
 
 /**
- * PreProxyConfig 全局前置代理配置（用于 API 回显）
+ * PreProxyConfig 前置代理配置（用于 API 回显与设置）
  */
 export class PreProxyConfig {
     /**
@@ -940,6 +940,22 @@ export class PreProxyConfig {
              */
             this["alias"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * GroupIDs 生效范围，为空表示对全部节点生效
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["groupIds"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * ExcludedIDs 例外节点，即使在范围内也直连
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["excludedIds"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -950,7 +966,15 @@ export class PreProxyConfig {
      * @returns {PreProxyConfig}
      */
     static createFrom($$source = {}) {
+        const $$createField2_0 = $$createType0;
+        const $$createField3_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("groupIds" in $$parsedSource) {
+            $$parsedSource["groupIds"] = $$createField2_0($$parsedSource["groupIds"]);
+        }
+        if ("excludedIds" in $$parsedSource) {
+            $$parsedSource["excludedIds"] = $$createField3_0($$parsedSource["excludedIds"]);
+        }
         return new PreProxyConfig(/** @type {Partial<PreProxyConfig>} */($$parsedSource));
     }
 }
@@ -1059,6 +1083,18 @@ export class ProxyRule {
              * @type {string}
              */
             this["lastError"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * BypassPreProxy 为 true 时该节点直连出站，不经全局前置代理。
+             * 
+             * 用于前置代理本身不可达、或该节点必须从本机 IP 出去的场景
+             * （例如只允许特定来源 IP 的服务）。前置代理节点自身无需设置，
+             * 构建配置时会自动跳过，避免 detour 成环。
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["bypassPreProxy"] = undefined;
         }
         if (/** @type {any} */(false)) {
             /**
@@ -1208,13 +1244,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType2;
-        const $$createField20_0 = $$createType1;
+        const $$createField21_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField20_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField21_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }

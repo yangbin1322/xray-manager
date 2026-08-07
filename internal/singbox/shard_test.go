@@ -244,7 +244,7 @@ func TestBuildShardConfigWithPreProxy(t *testing.T) {
 		shardNode("b", 11102, "vless"),
 	}
 
-	config, skipped, err := BuildShardConfigWithPreProxy(nodes, pre, 0)
+	config, skipped, err := BuildShardConfigWithPreProxy(nodes, pre, 0, nil)
 	if err != nil {
 		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestBuildShardConfigPreProxyAvoidsSelfLoop(t *testing.T) {
 	pre := shardNode("pre", 11110, "trojan")
 	nodes := []*models.ProxyRule{pre, shardNode("other", 11111, "trojan")}
 
-	config, _, err := BuildShardConfigWithPreProxy(nodes, pre, 0)
+	config, _, err := BuildShardConfigWithPreProxy(nodes, pre, 0, nil)
 	if err != nil {
 		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestBuildShardConfigPreProxyAvoidsSelfLoop(t *testing.T) {
 // 不传前置代理时行为与 BuildShardConfig 一致
 func TestBuildShardConfigWithoutPreProxyHasNoDetour(t *testing.T) {
 	nodes := []*models.ProxyRule{shardNode("a", 11120, "trojan")}
-	config, _, err := BuildShardConfigWithPreProxy(nodes, nil, 0)
+	config, _, err := BuildShardConfigWithPreProxy(nodes, nil, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +312,58 @@ func TestBuildShardConfigWithoutPreProxyHasNoDetour(t *testing.T) {
 		}
 		if out["tag"] == "pre_proxy" {
 			t.Error("no pre_proxy outbound should exist")
+		}
+	}
+}
+
+// policy 决定同一分片内哪些节点走前置代理——detour 是逐个出站上的字段，
+// 因此走前置和直连的节点可以混在同一个进程里。
+func TestBuildShardConfigPreProxyPolicy(t *testing.T) {
+	pre := shardNode("pre", 11200, "trojan")
+	viaPre := shardNode("via", 11201, "trojan")
+	direct := shardNode("direct", 11202, "vless")
+
+	// 只让 viaPre 走前置代理
+	policy := func(node *models.ProxyRule) bool { return node.ID == "via" }
+
+	config, _, err := BuildShardConfigWithPreProxy(
+		[]*models.ProxyRule{viaPre, direct}, pre, 0, policy)
+	if err != nil {
+		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
+	}
+
+	detours := make(map[string]interface{})
+	for _, out := range config.Outbounds {
+		if tag, ok := out["tag"].(string); ok {
+			detours[tag] = out["detour"]
+		}
+	}
+	if detours[ShardOutboundTag("via")] != "pre_proxy" {
+		t.Errorf("in-scope node detour = %v, want pre_proxy", detours[ShardOutboundTag("via")])
+	}
+	if detours[ShardOutboundTag("direct")] != nil {
+		t.Errorf("out-of-scope node should have no detour, got %v",
+			detours[ShardOutboundTag("direct")])
+	}
+}
+
+// policy 为 nil 时保持原行为：除前置节点自身外全部走前置代理
+func TestBuildShardConfigNilPolicyAppliesToAll(t *testing.T) {
+	pre := shardNode("pre", 11210, "trojan")
+	nodes := []*models.ProxyRule{
+		shardNode("a", 11211, "trojan"),
+		shardNode("b", 11212, "vless"),
+	}
+
+	config, _, err := BuildShardConfigWithPreProxy(nodes, pre, 0, nil)
+	if err != nil {
+		t.Fatalf("BuildShardConfigWithPreProxy: %v", err)
+	}
+	for _, node := range nodes {
+		for _, out := range config.Outbounds {
+			if out["tag"] == ShardOutboundTag(node.ID) && out["detour"] != "pre_proxy" {
+				t.Errorf("node %s detour = %v, want pre_proxy", node.ID, out["detour"])
+			}
 		}
 	}
 }

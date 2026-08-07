@@ -335,6 +335,11 @@ export async function setPreProxy(nodeID) {
   return await MyService.SetPreProxy(nodeID)
 }
 
+// 设置前置代理及其生效范围（分组 + 例外节点）
+export async function setPreProxyConfig(cfg) {
+  return await MyService.SetPreProxyConfig(cfg)
+}
+
 // ==================== 系统代理 ====================
 
 export async function enableSystemProxy(ruleID) {

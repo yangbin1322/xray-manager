@@ -22,6 +22,13 @@ type ProxyRule struct {
 	ProcessID  int           `json:"processId"`  // 进程ID
 	LastError  string        `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 
+	// BypassPreProxy 为 true 时该节点直连出站，不经全局前置代理。
+	//
+	// 用于前置代理本身不可达、或该节点必须从本机 IP 出去的场景
+	// （例如只允许特定来源 IP 的服务）。前置代理节点自身无需设置，
+	// 构建配置时会自动跳过，避免 detour 成环。
+	BypassPreProxy bool `json:"bypassPreProxy,omitempty"`
+
 	// Verifying 表示已启动但连通性尚未验证完成。
 	//
 	// 启动只说明本地端口起来了，能否真正访问外网还要经代理请求一次探测点。
@@ -309,8 +316,17 @@ type Config struct {
 	SpeedTest      SpeedTestConfig    `json:"speedTest"`      // 测速配置
 	Subscription   SubscriptionConfig `json:"subscription"`   // 订阅拉取配置
 	HTTPAPI        HTTPAPIConfig      `json:"httpApi"`        // HTTP API 配置
-	PreProxyNodeID string             `json:"preProxyNodeId"` // 全局前置代理节点 ID（空表示未启用）
-	Update         UpdateConfig       `json:"update"`         // 检测更新 / 自动更新
+	PreProxyNodeID string             `json:"preProxyNodeId"` // 前置代理节点 ID（空表示未启用）
+
+	// PreProxyGroupIDs 前置代理的生效范围：只有这些分组内的节点才经前置代理出站。
+	// 为空表示对全部节点生效（兼容旧配置：此前前置代理是全局的，没有范围概念）。
+	PreProxyGroupIDs []string `json:"preProxyGroupIds,omitempty"`
+
+	// PreProxyExcludedIDs 例外节点：即使落在生效范围内也直连出站。
+	// 用于个别节点必须从本机 IP 出去、或经前置代理反而不通的情况。
+	PreProxyExcludedIDs []string `json:"preProxyExcludedIds,omitempty"`
+
+	Update UpdateConfig `json:"update"` // 检测更新 / 自动更新
 }
 
 // SubscriptionConfig 订阅拉取的全局配置。
@@ -322,10 +338,15 @@ type SubscriptionConfig struct {
 	UserAgent string `json:"userAgent"` // 拉取订阅时使用的 User-Agent（空则用默认）
 }
 
-// PreProxyConfig 全局前置代理配置（用于 API 回显）
+// PreProxyConfig 前置代理配置（用于 API 回显与设置）
 type PreProxyConfig struct {
 	NodeID string `json:"nodeId"` // 前置节点 ID，空表示未启用
 	Alias  string `json:"alias"`  // 节点别名（只读回显）
+
+	// GroupIDs 生效范围，为空表示对全部节点生效
+	GroupIDs []string `json:"groupIds,omitempty"`
+	// ExcludedIDs 例外节点，即使在范围内也直连
+	ExcludedIDs []string `json:"excludedIds,omitempty"`
 }
 
 // UpdateConfig 应用更新设置

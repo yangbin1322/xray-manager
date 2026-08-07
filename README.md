@@ -16,7 +16,8 @@
 - 添加、编辑、删除代理规则，支持拖拽排序
 - 批量编辑：多选节点后统一编辑，每个节点一张可折叠卡片
 - 导入/导出规则为 JSON 文件（仅导出选中节点及其关联的分组/故障转移/链式代理）
-- **全局前置代理**：客户端内节点经指定前置节点出站，用于中转加速（设置 → 前置代理）
+- **前置代理**：客户端内节点经指定前置节点出站，用于中转加速（设置 → 前置代理）。
+  可限定只对选中的分组生效，并单独排除个别节点（例如必须从本机 IP 出去的节点）
 - **检查更新 / 自动更新**：从 GitHub Releases 检测新版本，支持手动与启动时自动更新
 - **多选 Delete 快捷键**：选中节点后按 Delete 删除（弹窗确认）
 - 解析分享链接（vmess://、vless://、ss://、trojan://、http(s)://、socks://、socks5://、hysteria2://、hy2://、tuic://）；
@@ -90,6 +91,15 @@
 - 嵌入式二进制：使用 go:embed 打包 sing-box 内核，开箱即用无需额外安装
 
 ## 下载安装
+
+### 未发布
+
+**新增**
+
+- 前置代理支持限定生效范围：可选择多个分组，只有这些分组内的节点经前置节点出站；
+  也可单独排除个别节点，让它们直连（适合必须从本机 IP 出去、或经前置反而不通的节点）。
+  留空表示对全部节点生效，与此前的全局行为一致，旧配置无需改动
+- HTTP API 的 `PUT /api/v1/settings/pre-proxy` 相应支持 `groupIds` 与 `excludedIds`
 
 ### v2.6.1 更新内容
 
@@ -398,7 +408,7 @@ for url in urls:
 | POST | `/api/v1/load-balancers/{id}/start`、`/stop` | 启动 / 停止故障转移节点 |
 | GET | `/api/v1/load-balancers/{id}/local-proxy` | 获取指定故障转移的本地代理地址 |
 | GET | `/api/v1/load-balancers/local-proxies`、`/enabled` | 获取全部 / 已启动故障转移的本地代理地址 |
-| GET / PUT | `/api/v1/settings/pre-proxy` | 获取 / 设置全局前置代理 |
+| GET / PUT | `/api/v1/settings/pre-proxy` | 获取 / 设置前置代理（含生效分组与例外节点） |
 | GET / POST | `/api/v1/chain-proxies` | 获取 / 创建链式代理 |
 | GET / PUT / DELETE | `/api/v1/chain-proxies/{id}` | 获取 / 修改 / 删除链式代理 |
 | POST | `/api/v1/chain-proxies/{id}/start`、`/stop` | 启动 / 停止链式代理 |

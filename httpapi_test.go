@@ -134,6 +134,10 @@ func (f *fakeHTTPAPIService) SetPreProxy(id string) error {
 	return fmt.Errorf("前置代理节点不存在: %s", id)
 }
 
+func (f *fakeHTTPAPIService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
+	return f.SetPreProxy(cfg.NodeID)
+}
+
 func TestHTTPAPIRequiresConfiguredToken(t *testing.T) {
 	handler := newHTTPAPIHandler(&fakeHTTPAPIService{}, "secret")
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)

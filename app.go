@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1048,7 +1049,7 @@ func (a *MyService) DeleteNodes(ids []string) error {
 		a.releasePortReservationLocked(r.LocalPort)
 		if a.config.PreProxyNodeID == r.ID {
 			a.config.PreProxyNodeID = ""
-			a.log("已清空全局前置代理（节点已删除）")
+			a.log("已清空前置代理（节点已删除）")
 		}
 		a.clearRelayPreProxyRefLocked(r.ID)
 		if r.GroupID != "" {
@@ -1057,6 +1058,8 @@ func (a *MyService) DeleteNodes(ids []string) error {
 		removed++
 	}
 	a.config.Rules = keptRules
+	// 被删的节点若在前置代理的排除名单里，一并摘掉
+	a.dropDeletedFromPreProxyScopeLocked(idSet, nil)
 
 	keptLBs := a.config.LoadBalancers[:0]
 	for i := range a.config.LoadBalancers {
@@ -1122,11 +1125,12 @@ func (a *MyService) DeleteRule(id string) error {
 			// 删除规则
 			a.config.Rules = append(a.config.Rules[:i], a.config.Rules[i+1:]...)
 
-			// 若删除的是全局前置代理节点，自动清空设置
+			// 若删除的是前置代理节点，自动清空设置
 			if a.config.PreProxyNodeID == id {
 				a.config.PreProxyNodeID = ""
-				a.log("已清空全局前置代理（节点已删除）")
+				a.log("已清空前置代理（节点已删除）")
 			}
+			a.dropDeletedFromPreProxyScopeLocked(map[string]bool{id: true}, nil)
 			a.clearRelayPreProxyRefLocked(id)
 
 			if err := a.saveConfig(); err != nil {
@@ -1336,10 +1340,10 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 	return handled
 }
 
-// syncShardPreProxyLocked 把当前的全局前置代理同步给分片管理器。
+// syncShardPreProxyLocked 把当前的前置代理及其生效范围同步给分片管理器。
 //
-// 前置代理在分片配置里只有一份出站，各节点通过 detour 共用；
-// 它变更时所有分片的出站都要重建，SetPreProxy 会做相应标记。
+// 前置代理在分片配置里只有一份出站，受影响的节点通过 detour 共用；
+// 它或其生效范围变更时所有分片的出站都要重建，SetPreProxy 会做相应标记。
 // 需已持有 a.mu 锁。
 func (a *MyService) syncShardPreProxyLocked() {
 	if a.processManager == nil {
@@ -1349,7 +1353,69 @@ func (a *MyService) syncShardPreProxyLocked() {
 	if shards == nil {
 		return
 	}
-	shards.SetPreProxy(a.getPreProxyRuleLocked())
+
+	pre := a.getPreProxyRuleLocked()
+	if pre == nil {
+		shards.SetPreProxy(nil, nil, "")
+		return
+	}
+
+	// 把生效范围快照进闭包：策略会在调谐时（可能已不持锁）被调用，
+	// 直接读 a.config 会有并发问题
+	groups := make(map[string]bool, len(a.config.PreProxyGroupIDs))
+	for _, id := range a.config.PreProxyGroupIDs {
+		groups[id] = true
+	}
+	excluded := make(map[string]bool, len(a.config.PreProxyExcludedIDs))
+	for _, id := range a.config.PreProxyExcludedIDs {
+		excluded[id] = true
+	}
+	preID := pre.ID
+
+	policy := func(node *models.ProxyRule) bool {
+		if node == nil || node.ID == preID || excluded[node.ID] {
+			return false
+		}
+		if len(groups) == 0 {
+			return true // 未限定分组时对全部节点生效
+		}
+		return groups[node.GroupID]
+	}
+
+	shards.SetPreProxy(pre, policy, a.preProxyScopeLocked())
+}
+
+// dropDeletedFromPreProxyScopeLocked 把已删除的节点/分组从前置代理的
+// 生效范围里摘掉，避免留下永远匹配不到的残留 ID。需已持有 a.mu 锁。
+func (a *MyService) dropDeletedFromPreProxyScopeLocked(nodeIDs, groupIDs map[string]bool) {
+	if len(nodeIDs) > 0 && len(a.config.PreProxyExcludedIDs) > 0 {
+		kept := a.config.PreProxyExcludedIDs[:0]
+		for _, id := range a.config.PreProxyExcludedIDs {
+			if !nodeIDs[id] {
+				kept = append(kept, id)
+			}
+		}
+		a.config.PreProxyExcludedIDs = kept
+	}
+	if len(groupIDs) > 0 && len(a.config.PreProxyGroupIDs) > 0 {
+		kept := a.config.PreProxyGroupIDs[:0]
+		for _, id := range a.config.PreProxyGroupIDs {
+			if !groupIDs[id] {
+				kept = append(kept, id)
+			}
+		}
+		a.config.PreProxyGroupIDs = kept
+	}
+}
+
+// preProxyScopeLocked 生成生效范围的指纹，用于判断范围是否变化。
+// 分组与排除名单排序后拼接，避免顺序变动被误判为内容变更。
+func (a *MyService) preProxyScopeLocked() string {
+	groups := append([]string(nil), a.config.PreProxyGroupIDs...)
+	excluded := append([]string(nil), a.config.PreProxyExcludedIDs...)
+	sort.Strings(groups)
+	sort.Strings(excluded)
+	return strings.Join(groups, ",") + "|" + strings.Join(excluded, ",")
 }
 
 // stopPlainNodesInShardLocked 把普通节点合并成一次分片调谐，返回已处理的节点 ID。
@@ -3274,6 +3340,9 @@ func (a *MyService) DeleteGroup(groupID string) error {
 			break
 		}
 	}
+	// 分组已删除，从前置代理的生效范围里摘掉，避免留下匹配不到的残留 ID
+	a.dropDeletedFromPreProxyScopeLocked(nil, map[string]bool{groupID: true})
+	a.syncShardPreProxyLocked()
 
 	if err := a.saveConfig(); err != nil {
 		return err
@@ -4311,6 +4380,36 @@ func (a *MyService) getPreProxyRuleLocked() *models.ProxyRule {
 	return nil
 }
 
+// preProxyAppliesToLocked 判断某个节点是否应经前置代理出站（调用方需已持有锁）。
+//
+// 规则依次为：
+//  1. 前置代理节点自身直连——否则 detour 指向自己会成环
+//  2. 在例外名单里的节点直连
+//  3. 未配置生效范围时对全部节点生效（兼容旧配置，此前前置代理是全局的）
+//  4. 配置了生效范围时，只有落在这些分组里的节点才走前置代理
+func (a *MyService) preProxyAppliesToLocked(rule *models.ProxyRule) bool {
+	if rule == nil || a.config.PreProxyNodeID == "" {
+		return false
+	}
+	if rule.ID == a.config.PreProxyNodeID {
+		return false
+	}
+	for _, id := range a.config.PreProxyExcludedIDs {
+		if id == rule.ID {
+			return false
+		}
+	}
+	if len(a.config.PreProxyGroupIDs) == 0 {
+		return true
+	}
+	for _, groupID := range a.config.PreProxyGroupIDs {
+		if groupID == rule.GroupID {
+			return true
+		}
+	}
+	return false
+}
+
 // prependPreProxyLocked 将全局前置代理插入链首（已在链中则不重复）。
 func (a *MyService) prependPreProxyLocked(chainRules []*models.ProxyRule) []*models.ProxyRule {
 	pre := a.getPreProxyRuleLocked()
@@ -4348,7 +4447,9 @@ func (a *MyService) startRuleInternal(rule *models.ProxyRule) error {
 		return a.processManager.Start(rule)
 	}
 
-	if pre == nil || pre.ID == rule.ID {
+	// 不在前置代理生效范围内（未启用、节点自身是前置、被排除、或不属于目标分组）
+	// 时直连启动
+	if pre == nil || !a.preProxyAppliesToLocked(rule) {
 		return a.processManager.Start(rule)
 	}
 
@@ -4370,7 +4471,11 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	cfg := models.PreProxyConfig{NodeID: a.config.PreProxyNodeID}
+	cfg := models.PreProxyConfig{
+		NodeID:      a.config.PreProxyNodeID,
+		GroupIDs:    append([]string(nil), a.config.PreProxyGroupIDs...),
+		ExcludedIDs: append([]string(nil), a.config.PreProxyExcludedIDs...),
+	}
 	if cfg.NodeID == "" {
 		return cfg
 	}
@@ -4384,39 +4489,85 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 	return cfg
 }
 
-// SetPreProxy 设置全局前置代理。nodeID 为空表示清除。
+// SetPreProxy 设置前置代理节点，不改动生效范围。nodeID 为空表示清除。
 // 已启动的节点不会自动重启，需重新启动后生效。
 func (a *MyService) SetPreProxy(nodeID string) error {
+	a.mu.RLock()
+	cfg := models.PreProxyConfig{
+		NodeID:      nodeID,
+		GroupIDs:    append([]string(nil), a.config.PreProxyGroupIDs...),
+		ExcludedIDs: append([]string(nil), a.config.PreProxyExcludedIDs...),
+	}
+	a.mu.RUnlock()
+	return a.SetPreProxyConfig(cfg)
+}
+
+// SetPreProxyConfig 设置前置代理及其生效范围。
+//
+// GroupIDs 为空表示对全部节点生效；非空时只有这些分组内的节点走前置代理。
+// ExcludedIDs 里的节点即使落在范围内也直连，用于个别必须从本机 IP 出去的节点。
+// 已启动的节点不会自动重启，需重新启动后生效。
+func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if nodeID == "" {
-		if a.config.PreProxyNodeID == "" {
+	if cfg.NodeID == "" {
+		if a.config.PreProxyNodeID == "" &&
+			len(a.config.PreProxyGroupIDs) == 0 && len(a.config.PreProxyExcludedIDs) == 0 {
 			return nil
 		}
 		a.config.PreProxyNodeID = ""
+		a.config.PreProxyGroupIDs = nil
+		a.config.PreProxyExcludedIDs = nil
 		a.syncShardPreProxyLocked()
-		a.log("已清除全局前置代理（重新启动节点后生效）")
+		a.log("已清除前置代理（重新启动节点后生效）")
 		return a.saveConfig()
 	}
 
 	var found bool
 	var alias string
 	for _, r := range a.config.Rules {
-		if r.ID == nodeID {
+		if r.ID == cfg.NodeID {
 			found = true
 			alias = r.Alias
 			break
 		}
 	}
 	if !found {
-		return fmt.Errorf("前置代理节点不存在: %s", nodeID)
+		return fmt.Errorf("前置代理节点不存在: %s", cfg.NodeID)
 	}
 
-	a.config.PreProxyNodeID = nodeID
+	// 校验分组存在，避免因分组被删而留下永远匹配不到的范围
+	for _, groupID := range cfg.GroupIDs {
+		if !a.groupExistsLocked(groupID) {
+			return fmt.Errorf("分组不存在: %s", groupID)
+		}
+	}
+
+	a.config.PreProxyNodeID = cfg.NodeID
+	a.config.PreProxyGroupIDs = append([]string(nil), cfg.GroupIDs...)
+	a.config.PreProxyExcludedIDs = append([]string(nil), cfg.ExcludedIDs...)
 	a.syncShardPreProxyLocked()
-	a.log(fmt.Sprintf("全局前置代理已设置为: %s（重新启动节点后生效）", alias))
+
+	scope := "全部节点"
+	if len(cfg.GroupIDs) > 0 {
+		scope = fmt.Sprintf("%d 个分组", len(cfg.GroupIDs))
+	}
+	if len(cfg.ExcludedIDs) > 0 {
+		scope += fmt.Sprintf("（排除 %d 个节点）", len(cfg.ExcludedIDs))
+	}
+	a.log(fmt.Sprintf("前置代理已设置为: %s，生效范围 %s（重新启动节点后生效）", alias, scope))
 	return a.saveConfig()
+}
+
+// groupExistsLocked 判断分组是否存在（需已持有锁）。
+func (a *MyService) groupExistsLocked(groupID string) bool {
+	for i := range a.config.Groups {
+		if a.config.Groups[i].ID == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 // ==================== 应用更新 ====================

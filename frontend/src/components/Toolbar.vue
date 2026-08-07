@@ -238,8 +238,54 @@
             <div v-if="preProxyStale" class="settings-hint" style="color: var(--danger, #e74c3c);">
               当前配置的前置节点已不存在，请重新选择或清除。
             </div>
+
+            <!-- 生效范围：选中分组后只有这些分组内的节点走前置代理 -->
+            <div v-if="preProxyNodeId" class="form-group-block">
+              <label>生效范围：</label>
+              <div v-if="groupsStore.groups.length === 0" class="settings-hint">
+                还没有分组，当前对全部节点生效。
+              </div>
+              <template v-else>
+                <label class="scope-item">
+                  <input type="checkbox" :checked="preProxyGroupIds.length === 0"
+                         @change="preProxyGroupIds = []" />
+                  <span>全部节点</span>
+                </label>
+                <label v-for="g in groupsStore.groups" :key="g.id" class="scope-item">
+                  <input type="checkbox" :value="g.id" v-model="preProxyGroupIds" />
+                  <span>{{ g.name }}</span>
+                </label>
+              </template>
+            </div>
+
+            <!-- 例外节点：即使落在范围内也直连 -->
+            <div v-if="preProxyNodeId" class="form-group-block">
+              <label>例外节点（直连，不走前置）：</label>
+              <input
+                v-model="excludeSearch"
+                type="search"
+                class="full-input pre-proxy-search"
+                placeholder="搜索要排除的节点..."
+              />
+              <div class="scope-list">
+                <label v-for="r in filteredExcludeRules" :key="r.id" class="scope-item">
+                  <input type="checkbox" :value="r.id" v-model="preProxyExcludedIds" />
+                  <span>{{ r.alias }}</span>
+                </label>
+                <div v-if="filteredExcludeRules.length === 0" class="settings-hint">
+                  {{ excludeSearch.trim() ? '无匹配节点' : '用上方搜索框查找要排除的节点' }}
+                </div>
+              </div>
+              <div v-if="preProxyExcludedIds.length > 0" class="settings-hint">
+                已排除 {{ preProxyExcludedIds.length }} 个节点
+                <button class="btn-link" @click="preProxyExcludedIds = []">清空</button>
+              </div>
+            </div>
+
             <ul class="settings-hint hint-list">
               <li>普通节点、故障转移、链式代理将先经该节点出站再连目标，可用于中转加速。</li>
+              <li>生效范围留空（勾「全部节点」）时对所有节点生效；选了分组则只对这些分组生效。</li>
+              <li>例外节点即使落在生效范围内也直连，适合必须从本机 IP 出去的节点。</li>
               <li>前置节点自身启动时不会再次套娃。</li>
               <li>修改后需重新启动已运行的节点才生效。</li>
             </ul>
@@ -302,12 +348,14 @@
 import { computed, ref, watch } from 'vue'
 import { useRulesStore } from '../stores/rules.js'
 import { useAppStore } from '../stores/app.js'
+import { useGroupsStore } from '../stores/groups.js'
 import * as api from '../api.js'
 
 const emit = defineEmits(['batchEdit'])
 
 const rulesStore = useRulesStore()
 const appStore = useAppStore()
+const groupsStore = useGroupsStore()
 const selectedCount = computed(() => rulesStore.selectedRuleIds.length)
 
 function handleBatchEdit() {
@@ -387,6 +435,25 @@ const filteredPreProxyRules = computed(() => {
 const preProxyTruncated = computed(
   () => matchedPreProxyRules.value.length > filteredPreProxyRules.value.length
 )
+
+// 前置代理生效范围：分组为空表示对全部节点生效
+const preProxyGroupIds = ref([])
+const preProxyExcludedIds = ref([])
+const excludeSearch = ref('')
+
+// 例外节点列表同样要限量渲染：上万节点全量渲染会卡死设置面板。
+// 已勾选的始终展示，否则用户看不到自己排除了什么。
+const filteredExcludeRules = computed(() => {
+  const keyword = excludeSearch.value.trim().toLowerCase()
+  const selected = new Set(preProxyExcludedIds.value)
+  const matched = rulesStore.rules.filter(rule => {
+    if (selected.has(rule.id)) return true
+    if (!keyword) return false // 不搜索时只显示已勾选的，避免一次渲染上万行
+    return [rule.alias, rule.protocol, rule.serverAddr, rule.serverPort]
+      .some(value => String(value ?? '').toLowerCase().includes(keyword))
+  })
+  return matched.slice(0, PRE_PROXY_OPTION_LIMIT)
+})
 const requiresAuth = computed(() => !['127.0.0.1', '::1', 'localhost'].includes(httpApiCfg.value.host))
 const httpApiURL = computed(() => {
   const host = httpApiCfg.value.host.includes(':') ? `[${httpApiCfg.value.host}]` : httpApiCfg.value.host
@@ -457,10 +524,15 @@ async function openHealthSettings() {
     const id = (pre && pre.nodeId) || ''
     preProxyNodeId.value = id
     preProxySavedId.value = id
+    preProxyGroupIds.value = (pre && pre.groupIds) || []
+    preProxyExcludedIds.value = (pre && pre.excludedIds) || []
+    excludeSearch.value = ''
   } catch (e) {
     console.error('获取前置代理配置失败:', e)
     preProxyNodeId.value = ''
     preProxySavedId.value = ''
+    preProxyGroupIds.value = []
+    preProxyExcludedIds.value = []
   }
   try {
     appVersion.value = await api.getAppVersion()
@@ -511,7 +583,11 @@ async function saveSettings() {
     })
     await api.setSubscriptionConfig({ userAgent: subCfg.value.userAgent.trim() })
     await api.setHTTPAPIConfig(httpApiCfg.value)
-    await api.setPreProxy(preProxyNodeId.value || '')
+    await api.setPreProxyConfig({
+      nodeId: preProxyNodeId.value || '',
+      groupIds: preProxyGroupIds.value,
+      excludedIds: preProxyExcludedIds.value,
+    })
     preProxySavedId.value = preProxyNodeId.value || ''
     await api.setUpdateConfig({
       configured: true,
@@ -968,6 +1044,26 @@ function handleEnableSysProxy() {
   box-sizing: border-box;
 }
 .pre-proxy-search { margin-bottom: 8px; }
+
+/* 生效范围/例外节点的勾选项 */
+.scope-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 12px 6px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+.scope-item input { margin: 0; }
+
+/* 例外节点可能很多，限高滚动，避免撑破设置面板 */
+.scope-list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
 .headers-textarea {
   width: 100%;
   padding: 8px 10px;

@@ -84,6 +84,7 @@ type httpAPIService interface {
 	StopSessionRelay(string) error
 	GetPreProxy() models.PreProxyConfig
 	SetPreProxy(string) error
+	SetPreProxyConfig(models.PreProxyConfig) error
 }
 
 type httpAPI struct {
@@ -873,13 +874,21 @@ func (a *httpAPI) getPreProxy(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *httpAPI) setPreProxy(w http.ResponseWriter, r *http.Request) {
+	// groupIds 为空表示对全部节点生效；excludedIds 里的节点始终直连
 	var body struct {
-		NodeID string `json:"nodeId"`
+		NodeID      string   `json:"nodeId"`
+		GroupIDs    []string `json:"groupIds"`
+		ExcludedIDs []string `json:"excludedIds"`
 	}
 	if !decodeAPI(w, r, &body) {
 		return
 	}
-	if err := a.service.SetPreProxy(body.NodeID); err != nil {
+	err := a.service.SetPreProxyConfig(models.PreProxyConfig{
+		NodeID:      body.NodeID,
+		GroupIDs:    body.GroupIDs,
+		ExcludedIDs: body.ExcludedIDs,
+	})
+	if err != nil {
 		writeAPI(w, http.StatusBadRequest, nil, err.Error())
 		return
 	}

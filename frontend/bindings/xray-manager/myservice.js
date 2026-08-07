@@ -580,13 +580,26 @@ export function SetHealthCheckConfig(cfg) {
 }
 
 /**
- * SetPreProxy 设置全局前置代理。nodeID 为空表示清除。
+ * SetPreProxy 设置前置代理节点，不改动生效范围。nodeID 为空表示清除。
  * 已启动的节点不会自动重启，需重新启动后生效。
  * @param {string} nodeID
  * @returns {$CancellablePromise<void>}
  */
 export function SetPreProxy(nodeID) {
     return $Call.ByID(2940529630, nodeID);
+}
+
+/**
+ * SetPreProxyConfig 设置前置代理及其生效范围。
+ * 
+ * GroupIDs 为空表示对全部节点生效；非空时只有这些分组内的节点走前置代理。
+ * ExcludedIDs 里的节点即使落在范围内也直连，用于个别必须从本机 IP 出去的节点。
+ * 已启动的节点不会自动重启，需重新启动后生效。
+ * @param {models$0.PreProxyConfig} cfg
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetPreProxyConfig(cfg) {
+    return $Call.ByID(3632245672, cfg);
 }
 
 /**
