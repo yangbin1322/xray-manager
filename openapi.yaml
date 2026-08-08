@@ -419,7 +419,8 @@ paths:
             schema:
               type: object
               properties:
-                nodeId: { type: string, description: 前置节点 ID，空表示清除 }
+                nodeId: { type: string, description: 前置节点 ID（普通节点/链式代理/故障转移），空表示清除 }
+                enabled: { type: boolean, description: 是否启用。关闭时保留所选节点与生效范围 }
                 groupIds:
                   type: array
                   items: { type: string }
@@ -491,8 +492,10 @@ components:
     PreProxyConfig:
       type: object
       properties:
-        nodeId: { type: string, description: 前置节点 ID，空表示未启用 }
+        nodeId: { type: string, description: 前置节点 ID }
+        enabled: { type: boolean, description: 是否启用。关闭时保留所选节点与生效范围 }
         alias: { type: string, description: 节点别名 }
+        type: { type: string, enum: [rule, chain, lb], description: 节点类型 }
         groupIds:
           type: array
           items: { type: string }

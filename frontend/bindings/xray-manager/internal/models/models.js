@@ -926,11 +926,19 @@ export class PreProxyConfig {
     constructor($$source = {}) {
         if (!("nodeId" in $$source)) {
             /**
-             * 前置节点 ID，空表示未启用
+             * 前置节点 ID
              * @member
              * @type {string}
              */
             this["nodeId"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 是否启用（关闭时保留节点与范围配置）
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
         }
         if (!("alias" in $$source)) {
             /**
@@ -939,6 +947,14 @@ export class PreProxyConfig {
              * @type {string}
              */
             this["alias"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Type 节点类型：rule / chain / lb，便于前端区分展示
+             * @member
+             * @type {string | undefined}
+             */
+            this["type"] = undefined;
         }
         if (/** @type {any} */(false)) {
             /**
@@ -966,14 +982,14 @@ export class PreProxyConfig {
      * @returns {PreProxyConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType0;
-        const $$createField3_0 = $$createType0;
+        const $$createField4_0 = $$createType0;
+        const $$createField5_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("groupIds" in $$parsedSource) {
-            $$parsedSource["groupIds"] = $$createField2_0($$parsedSource["groupIds"]);
+            $$parsedSource["groupIds"] = $$createField4_0($$parsedSource["groupIds"]);
         }
         if ("excludedIds" in $$parsedSource) {
-            $$parsedSource["excludedIds"] = $$createField3_0($$parsedSource["excludedIds"]);
+            $$parsedSource["excludedIds"] = $$createField5_0($$parsedSource["excludedIds"]);
         }
         return new PreProxyConfig(/** @type {Partial<PreProxyConfig>} */($$parsedSource));
     }

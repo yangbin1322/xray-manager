@@ -316,7 +316,14 @@ type Config struct {
 	SpeedTest      SpeedTestConfig    `json:"speedTest"`      // 测速配置
 	Subscription   SubscriptionConfig `json:"subscription"`   // 订阅拉取配置
 	HTTPAPI        HTTPAPIConfig      `json:"httpApi"`        // HTTP API 配置
-	PreProxyNodeID string             `json:"preProxyNodeId"` // 前置代理节点 ID（空表示未启用）
+	PreProxyNodeID string             `json:"preProxyNodeId"` // 前置代理节点 ID
+
+	// PreProxyEnabled 前置代理开关。
+	//
+	// 与 PreProxyNodeID 分开：关掉开关时仍保留已选节点与生效范围，
+	// 下次启用不必重新配一遍。
+	// 兼容旧配置：老版本没有这个字段，加载时按「选了节点即启用」补齐。
+	PreProxyEnabled bool `json:"preProxyEnabled"`
 
 	// PreProxyGroupIDs 前置代理的生效范围：只有这些分组内的节点才经前置代理出站。
 	// 为空表示对全部节点生效（兼容旧配置：此前前置代理是全局的，没有范围概念）。
@@ -340,8 +347,11 @@ type SubscriptionConfig struct {
 
 // PreProxyConfig 前置代理配置（用于 API 回显与设置）
 type PreProxyConfig struct {
-	NodeID string `json:"nodeId"` // 前置节点 ID，空表示未启用
-	Alias  string `json:"alias"`  // 节点别名（只读回显）
+	NodeID  string `json:"nodeId"`  // 前置节点 ID
+	Enabled bool   `json:"enabled"` // 是否启用（关闭时保留节点与范围配置）
+	Alias   string `json:"alias"`   // 节点别名（只读回显）
+	// Type 节点类型：rule / chain / lb，便于前端区分展示
+	Type string `json:"type,omitempty"`
 
 	// GroupIDs 生效范围，为空表示对全部节点生效
 	GroupIDs []string `json:"groupIds,omitempty"`

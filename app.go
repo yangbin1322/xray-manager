@@ -199,6 +199,12 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 			a.config.Update.AutoDownload = false
 		}
 
+		// 迁移旧配置：此前没有前置代理开关，「选了节点」就等于启用。
+		// 不补这一步，升级后已配置的前置代理会静默失效。
+		if a.config.PreProxyNodeID != "" && !a.config.PreProxyEnabled {
+			a.config.PreProxyEnabled = true
+		}
+
 		a.groupManager.LoadGroups(a.config.Groups)
 
 		if err := a.syncPortRegistryLocked(false); err != nil {
@@ -4369,12 +4375,52 @@ func (a *MyService) StopChainProxy(id string) error {
 // 未配置、节点不存在时返回 nil。
 func (a *MyService) getPreProxyRuleLocked() *models.ProxyRule {
 	id := a.config.PreProxyNodeID
-	if id == "" {
+	if id == "" || !a.preProxyEnabledLocked() {
 		return nil
 	}
 	for i := range a.config.Rules {
 		if a.config.Rules[i].ID == id {
 			return &a.config.Rules[i]
+		}
+	}
+	// 链式代理/故障转移也可以做前置：它们对外提供本地混合端口，
+	// 用一个指向该端口的 socks 出站即可接入，无需把整条链复制进配置。
+	// 代价是必须先启动它们——本地端口没起来时这一跳不通。
+	if composite := a.compositePreProxyLocked(id); composite != nil {
+		return composite
+	}
+	return nil
+}
+
+// preProxyEnabledLocked 前置代理是否启用。
+// 兼容旧配置：没有 PreProxyEnabled 字段的老配置，选了节点即视为启用。
+func (a *MyService) preProxyEnabledLocked() bool {
+	return a.config.PreProxyEnabled
+}
+
+// compositePreProxyLocked 把链式代理/故障转移包装成指向其本地端口的 socks 节点。
+// 找不到或未启动时返回 nil——未启动的复合代理没有可用端口，接上去只会全链路不通。
+func (a *MyService) compositePreProxyLocked(id string) *models.ProxyRule {
+	makeLocal := func(alias string, port int, enabled bool) *models.ProxyRule {
+		if !enabled || port <= 0 {
+			return nil
+		}
+		return &models.ProxyRule{
+			ID:         id,
+			Alias:      alias,
+			Protocol:   "socks",
+			ServerAddr: "127.0.0.1",
+			ServerPort: port,
+		}
+	}
+	for i := range a.config.ChainProxies {
+		if c := &a.config.ChainProxies[i]; c.ID == id {
+			return makeLocal(c.Alias, c.LocalPort, c.Enabled)
+		}
+	}
+	for i := range a.config.LoadBalancers {
+		if lb := &a.config.LoadBalancers[i]; lb.ID == id {
+			return makeLocal(lb.Alias, lb.LocalPort, lb.Enabled)
 		}
 	}
 	return nil
@@ -4388,7 +4434,7 @@ func (a *MyService) getPreProxyRuleLocked() *models.ProxyRule {
 //  3. 未配置生效范围时对全部节点生效（兼容旧配置，此前前置代理是全局的）
 //  4. 配置了生效范围时，只有落在这些分组里的节点才走前置代理
 func (a *MyService) preProxyAppliesToLocked(rule *models.ProxyRule) bool {
-	if rule == nil || a.config.PreProxyNodeID == "" {
+	if rule == nil || a.config.PreProxyNodeID == "" || !a.preProxyEnabledLocked() {
 		return false
 	}
 	if rule.ID == a.config.PreProxyNodeID {
@@ -4473,6 +4519,7 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 
 	cfg := models.PreProxyConfig{
 		NodeID:      a.config.PreProxyNodeID,
+		Enabled:     a.config.PreProxyEnabled,
 		GroupIDs:    append([]string(nil), a.config.PreProxyGroupIDs...),
 		ExcludedIDs: append([]string(nil), a.config.PreProxyExcludedIDs...),
 	}
@@ -4481,7 +4528,19 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 	}
 	for _, r := range a.config.Rules {
 		if r.ID == cfg.NodeID {
-			cfg.Alias = r.Alias
+			cfg.Alias, cfg.Type = r.Alias, "rule"
+			return cfg
+		}
+	}
+	for _, c := range a.config.ChainProxies {
+		if c.ID == cfg.NodeID {
+			cfg.Alias, cfg.Type = c.Alias, "chain"
+			return cfg
+		}
+	}
+	for _, lb := range a.config.LoadBalancers {
+		if lb.ID == cfg.NodeID {
+			cfg.Alias, cfg.Type = lb.Alias, "lb"
 			return cfg
 		}
 	}
@@ -4494,7 +4553,9 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 func (a *MyService) SetPreProxy(nodeID string) error {
 	a.mu.RLock()
 	cfg := models.PreProxyConfig{
-		NodeID:      nodeID,
+		NodeID: nodeID,
+		// 旧接口没有开关概念：选了节点即启用，清空即停用
+		Enabled:     nodeID != "",
 		GroupIDs:    append([]string(nil), a.config.PreProxyGroupIDs...),
 		ExcludedIDs: append([]string(nil), a.config.PreProxyExcludedIDs...),
 	}
@@ -4517,6 +4578,7 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 			return nil
 		}
 		a.config.PreProxyNodeID = ""
+		a.config.PreProxyEnabled = false
 		a.config.PreProxyGroupIDs = nil
 		a.config.PreProxyExcludedIDs = nil
 		a.syncShardPreProxyLocked()
@@ -4524,15 +4586,8 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 		return a.saveConfig()
 	}
 
-	var found bool
-	var alias string
-	for _, r := range a.config.Rules {
-		if r.ID == cfg.NodeID {
-			found = true
-			alias = r.Alias
-			break
-		}
-	}
+	// 普通节点、链式代理、故障转移都可以做前置代理
+	alias, found := a.preProxyCandidateAliasLocked(cfg.NodeID)
 	if !found {
 		return fmt.Errorf("前置代理节点不存在: %s", cfg.NodeID)
 	}
@@ -4545,9 +4600,16 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 	}
 
 	a.config.PreProxyNodeID = cfg.NodeID
+	a.config.PreProxyEnabled = cfg.Enabled
 	a.config.PreProxyGroupIDs = append([]string(nil), cfg.GroupIDs...)
 	a.config.PreProxyExcludedIDs = append([]string(nil), cfg.ExcludedIDs...)
 	a.syncShardPreProxyLocked()
+
+	if !cfg.Enabled {
+		// 保留节点与范围配置，下次启用不必重新配一遍
+		a.log(fmt.Sprintf("前置代理已停用（仍保留所选节点 %s 与生效范围）", alias))
+		return a.saveConfig()
+	}
 
 	scope := "全部节点"
 	if len(cfg.GroupIDs) > 0 {
@@ -4558,6 +4620,26 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 	}
 	a.log(fmt.Sprintf("前置代理已设置为: %s，生效范围 %s（重新启动节点后生效）", alias, scope))
 	return a.saveConfig()
+}
+
+// preProxyCandidateAliasLocked 在普通节点、链式代理、故障转移里查找候选前置节点。
+func (a *MyService) preProxyCandidateAliasLocked(id string) (string, bool) {
+	for _, r := range a.config.Rules {
+		if r.ID == id {
+			return r.Alias, true
+		}
+	}
+	for _, c := range a.config.ChainProxies {
+		if c.ID == id {
+			return c.Alias, true
+		}
+	}
+	for _, lb := range a.config.LoadBalancers {
+		if lb.ID == id {
+			return lb.Alias, true
+		}
+	}
+	return "", false
 }
 
 // groupExistsLocked 判断分组是否存在（需已持有锁）。

@@ -213,6 +213,15 @@
 
           <!-- 全局前置代理 -->
           <div v-show="activeTab === 'preProxy'">
+            <!-- 开关与节点选择分开：停用时保留已选节点和生效范围，
+                 下次启用不必重新配一遍 -->
+            <div class="form-group-line">
+              <label>
+                <input type="checkbox" v-model="preProxyEnabled" />
+                启用前置代理
+              </label>
+            </div>
+
             <div class="form-group-block">
               <label>前置代理节点：</label>
               <input
@@ -222,9 +231,9 @@
                 placeholder="搜索节点（别名/协议/地址/端口）..."
               />
               <select v-model="preProxyNodeId" class="full-input">
-                <option value="">不使用（直连出站）</option>
+                <option value="">未选择</option>
                 <option v-for="r in filteredPreProxyRules" :key="r.id" :value="r.id">
-                  {{ r.alias }} ({{ r.protocol }} {{ r.serverAddr }}:{{ r.serverPort }})
+                  {{ preProxyOptionLabel(r) }}
                 </option>
                 <option v-if="preProxySearch.trim() && filteredPreProxyRules.length === 0" disabled>
                   无匹配节点
@@ -270,7 +279,7 @@
               <div class="scope-list">
                 <label v-for="r in filteredExcludeRules" :key="r.id" class="scope-item">
                   <input type="checkbox" :value="r.id" v-model="preProxyExcludedIds" />
-                  <span>{{ r.alias }}</span>
+                  <span>{{ (KIND_LABEL[r._kind] || '') + r.alias }}</span>
                 </label>
                 <div v-if="filteredExcludeRules.length === 0" class="settings-hint">
                   {{ excludeSearch.trim() ? '无匹配节点' : '用上方搜索框查找要排除的节点' }}
@@ -287,6 +296,9 @@
               <li>生效范围留空（勾「全部节点」）时对所有节点生效；选了分组则只对这些分组生效。</li>
               <li>例外节点即使落在生效范围内也直连，适合必须从本机 IP 出去的节点。</li>
               <li>前置节点自身启动时不会再次套娃。</li>
+              <li><strong>关闭开关会保留所选节点与生效范围</strong>，下次启用不必重新配置。</li>
+              <li>选用链式代理 / 故障转移作前置时，<strong>需先启动它</strong>——
+                它们通过本地端口接入，端口没起来这一跳就不通。</li>
               <li>修改后需重新启动已运行的节点才生效。</li>
             </ul>
             <ul class="settings-hint hint-list">
@@ -393,6 +405,7 @@ const speedHeadersText = ref('')
 const httpApiCfg = ref({ configured: true, enabled: true, host: '127.0.0.1', port: 9090, authEnabled: false, token: '' })
 const preProxyNodeId = ref('')
 const preProxySavedId = ref('')
+const preProxyEnabled = ref(false)
 const preProxySearch = ref('')
 const updateCfg = ref({ configured: true, autoCheck: true, autoDownload: false })
 const appVersion = ref('')
@@ -403,18 +416,39 @@ const showApiToken = ref(false)
 const preProxyStale = computed(() => {
   const id = preProxyNodeId.value
   if (!id) return false
-  return !rulesStore.rules.some(r => r.id === id)
+  return !preProxyCandidates.value.some(node => node.id === id)
 })
 // 下拉最多渲染这么多项：订阅可能有上万节点，全量渲染 <option> 会让设置面板卡死。
 // 超出部分靠上面的搜索框缩小范围。
 const PRE_PROXY_OPTION_LIMIT = 200
 
+// 前置代理候选：普通节点、链式代理、故障转移都可以做前置。
+// 复合代理对外提供本地混合端口，接一个指向该端口的出站即可，
+// 但必须先启动它们——本地端口没起来时这一跳不通。
+const preProxyCandidates = computed(() => [
+  ...rulesStore.rules.map(r => ({ ...r, _kind: 'rule' })),
+  ...rulesStore.chainProxies.map(c => ({ ...c, _kind: 'chain' })),
+  ...rulesStore.loadBalancers.map(lb => ({ ...lb, _kind: 'lb' })),
+])
+
+const KIND_LABEL = { rule: '', chain: '[链式] ', lb: '[故障转移] ' }
+
+function preProxyOptionLabel(node) {
+  const prefix = KIND_LABEL[node._kind] || ''
+  if (node._kind === 'rule') {
+    return `${prefix}${node.alias} (${node.protocol} ${node.serverAddr}:${node.serverPort})`
+  }
+  // 复合代理没有单一服务器地址，展示本地端口并提示需先启动
+  return `${prefix}${node.alias} (本地 ${node.localPort}${node.enabled ? '' : '，未启动'})`
+}
+
 const matchedPreProxyRules = computed(() => {
   const keyword = preProxySearch.value.trim().toLowerCase()
-  if (!keyword) return rulesStore.rules
-  return rulesStore.rules.filter(rule => {
-    if (rule.id === preProxyNodeId.value) return true
-    return [rule.alias, rule.protocol, rule.serverAddr, rule.serverPort]
+  const all = preProxyCandidates.value
+  if (!keyword) return all
+  return all.filter(node => {
+    if (node.id === preProxyNodeId.value) return true
+    return [node.alias, node.protocol, node.serverAddr, node.serverPort, node.localPort]
       .some(value => String(value ?? '').toLowerCase().includes(keyword))
   })
 })
@@ -446,10 +480,11 @@ const excludeSearch = ref('')
 const filteredExcludeRules = computed(() => {
   const keyword = excludeSearch.value.trim().toLowerCase()
   const selected = new Set(preProxyExcludedIds.value)
-  const matched = rulesStore.rules.filter(rule => {
-    if (selected.has(rule.id)) return true
+  // 例外名单同样覆盖全部节点类型：链式代理和故障转移也可能需要直连
+  const matched = preProxyCandidates.value.filter(node => {
+    if (selected.has(node.id)) return true
     if (!keyword) return false // 不搜索时只显示已勾选的，避免一次渲染上万行
-    return [rule.alias, rule.protocol, rule.serverAddr, rule.serverPort]
+    return [node.alias, node.protocol, node.serverAddr, node.serverPort, node.localPort]
       .some(value => String(value ?? '').toLowerCase().includes(keyword))
   })
   return matched.slice(0, PRE_PROXY_OPTION_LIMIT)
@@ -524,6 +559,7 @@ async function openHealthSettings() {
     const id = (pre && pre.nodeId) || ''
     preProxyNodeId.value = id
     preProxySavedId.value = id
+    preProxyEnabled.value = !!(pre && pre.enabled)
     preProxyGroupIds.value = (pre && pre.groupIds) || []
     preProxyExcludedIds.value = (pre && pre.excludedIds) || []
     excludeSearch.value = ''
@@ -531,6 +567,7 @@ async function openHealthSettings() {
     console.error('获取前置代理配置失败:', e)
     preProxyNodeId.value = ''
     preProxySavedId.value = ''
+    preProxyEnabled.value = false
     preProxyGroupIds.value = []
     preProxyExcludedIds.value = []
   }
@@ -585,6 +622,8 @@ async function saveSettings() {
     await api.setHTTPAPIConfig(httpApiCfg.value)
     await api.setPreProxyConfig({
       nodeId: preProxyNodeId.value || '',
+      // 没选节点时不可能启用；选了节点则按开关状态
+      enabled: !!preProxyNodeId.value && preProxyEnabled.value,
       groupIds: preProxyGroupIds.value,
       excludedIds: preProxyExcludedIds.value,
     })

@@ -874,17 +874,25 @@ func (a *httpAPI) getPreProxy(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *httpAPI) setPreProxy(w http.ResponseWriter, r *http.Request) {
-	// groupIds 为空表示对全部节点生效；excludedIds 里的节点始终直连
+	// groupIds 为空表示对全部节点生效；excludedIds 里的节点始终直连。
+	// enabled 用指针区分「未传」与「显式传 false」：未传时按选了节点即启用，
+	// 兼容只发 nodeId 的旧调用方。
 	var body struct {
 		NodeID      string   `json:"nodeId"`
+		Enabled     *bool    `json:"enabled"`
 		GroupIDs    []string `json:"groupIds"`
 		ExcludedIDs []string `json:"excludedIds"`
 	}
 	if !decodeAPI(w, r, &body) {
 		return
 	}
+	enabled := body.NodeID != ""
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
 	err := a.service.SetPreProxyConfig(models.PreProxyConfig{
 		NodeID:      body.NodeID,
+		Enabled:     enabled,
 		GroupIDs:    body.GroupIDs,
 		ExcludedIDs: body.ExcludedIDs,
 	})

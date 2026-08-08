@@ -16,6 +16,7 @@ func scopeService(pre string, groups, excluded []string) *MyService {
 		},
 		Groups:              []models.Group{{ID: "g1"}, {ID: "g2"}},
 		PreProxyNodeID:      pre,
+		PreProxyEnabled:     pre != "",
 		PreProxyGroupIDs:    groups,
 		PreProxyExcludedIDs: excluded,
 	}}
@@ -118,5 +119,67 @@ func TestDropDeletedFromPreProxyScope(t *testing.T) {
 	}
 	if len(s.config.PreProxyGroupIDs) != 1 || s.config.PreProxyGroupIDs[0] != "g1" {
 		t.Errorf("groups = %v, want only g1", s.config.PreProxyGroupIDs)
+	}
+}
+
+// 关闭开关时前置代理不生效，但配置要保留下来
+func TestPreProxyDisabledByToggle(t *testing.T) {
+	s := scopeService("pre", []string{"g1"}, []string{"x"})
+	s.config.PreProxyEnabled = false
+
+	if s.preProxyAppliesToLocked(ruleByID(s, "a")) {
+		t.Error("no node should use the pre-proxy while the toggle is off")
+	}
+	if s.getPreProxyRuleLocked() != nil {
+		t.Error("getPreProxyRuleLocked should return nil while disabled")
+	}
+	// 关键：配置不能被清掉，否则重新启用还要再配一遍
+	if s.config.PreProxyNodeID != "pre" {
+		t.Error("the selected node must be kept when disabled")
+	}
+	if len(s.config.PreProxyGroupIDs) != 1 || len(s.config.PreProxyExcludedIDs) != 1 {
+		t.Error("the scope must be kept when disabled")
+	}
+}
+
+// 链式代理可以作为前置代理：它对外提供本地端口，包装成 socks 出站接入
+func TestPreProxyAcceptsChainProxy(t *testing.T) {
+	s := scopeService("chain1", nil, nil)
+	s.config.ChainProxies = []models.ChainProxy{
+		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: true},
+	}
+
+	pre := s.getPreProxyRuleLocked()
+	if pre == nil {
+		t.Fatal("a running chain proxy should be usable as the pre-proxy")
+	}
+	if pre.Protocol != "socks" || pre.ServerAddr != "127.0.0.1" || pre.ServerPort != 12345 {
+		t.Errorf("chain pre-proxy = %s %s:%d, want socks 127.0.0.1:12345",
+			pre.Protocol, pre.ServerAddr, pre.ServerPort)
+	}
+}
+
+// 未启动的复合代理没有可用端口，接上去只会全链路不通
+func TestPreProxyRejectsStoppedComposite(t *testing.T) {
+	s := scopeService("chain1", nil, nil)
+	s.config.ChainProxies = []models.ChainProxy{
+		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: false},
+	}
+
+	if s.getPreProxyRuleLocked() != nil {
+		t.Error("a stopped chain proxy must not be used as the pre-proxy")
+	}
+}
+
+// 故障转移同样可以作为前置代理
+func TestPreProxyAcceptsLoadBalancer(t *testing.T) {
+	s := scopeService("lb1", nil, nil)
+	s.config.LoadBalancers = []models.LoadBalanceNode{
+		{ID: "lb1", Alias: "故障转移A", LocalPort: 23456, Enabled: true},
+	}
+
+	pre := s.getPreProxyRuleLocked()
+	if pre == nil || pre.ServerPort != 23456 {
+		t.Fatalf("a running load balancer should be usable as the pre-proxy, got %v", pre)
 	}
 }
