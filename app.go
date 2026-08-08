@@ -509,9 +509,6 @@ func (a *MyService) autoStartEnabledNodes() {
 	// 反复重启，几百个节点就是几百次重建配置 + 重启进程。
 	sharded := a.processManager != nil && a.processManager.ShardingEnabled()
 	if sharded {
-		// 前置代理若是链式/故障转移，要先把它拉起来占住本地端口，
-		// 否则受影响的节点全都连不上（且报错看起来像是它们自己的问题）
-		a.ensurePreProxyRunningLocked()
 		a.syncShardPreProxyLocked()
 	}
 	var shardBatch []*models.ProxyRule
@@ -542,6 +539,12 @@ func (a *MyService) autoStartEnabledNodes() {
 	}
 
 	if len(shardBatch) > 0 {
+		// 确实有节点要经前置代理出站时才拉起它——没有节点要启动就不该
+		// 顺带把前置代理也开了
+		if a.preProxyNeededByLocked(shardBatch) {
+			a.ensurePreProxyRunningLocked()
+			a.syncShardPreProxyLocked()
+		}
 		a.log(fmt.Sprintf("自动启动 %d 个节点（分片模式）", len(shardBatch)))
 		failures, err := a.processManager.StartNodesInShard(shardBatch)
 		if err != nil {
@@ -1290,9 +1293,7 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 		return handled
 	}
 	// 前置代理在分片配置里是一份共享出站，各节点用 detour 指向它，
-	// 因此设置了前置代理也能共享进程。
-	// 前置是链式/故障转移时先确保它已启动，否则这批节点全都连不上。
-	a.ensurePreProxyRunningLocked()
+	// 因此设置了前置代理也能共享进程
 	a.syncShardPreProxyLocked()
 
 	wanted := make(map[string]bool, len(refs))
@@ -1320,6 +1321,13 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 	}
 	if len(batch) == 0 {
 		return handled
+	}
+
+	// 确实有节点要经前置代理出站时，先确保它已启动——
+	// 前置是链式/故障转移且没跑起来的话，这批节点全都会连不上
+	if a.preProxyNeededByLocked(batch) {
+		a.ensurePreProxyRunningLocked()
+		a.syncShardPreProxyLocked()
 	}
 
 	failures, err := a.processManager.StartNodesInShard(batch)
@@ -4412,6 +4420,17 @@ func (a *MyService) preProxyEnabledLocked() bool {
 	return a.config.PreProxyEnabled
 }
 
+// preProxyNeededByLocked 这批节点里是否有需要经前置代理出站的。
+// 用于避免「没有节点用得上前置代理时仍把它拉起来」。需已持有 a.mu 锁。
+func (a *MyService) preProxyNeededByLocked(rules []*models.ProxyRule) bool {
+	for _, rule := range rules {
+		if a.preProxyAppliesToLocked(rule) {
+			return true
+		}
+	}
+	return false
+}
+
 // ensurePreProxyRunningLocked 确保前置代理已启动。
 //
 // 前置代理若是链式代理/故障转移，它要先跑起来、占住本地端口，其他节点才能
@@ -4434,11 +4453,18 @@ func (a *MyService) ensurePreProxyRunningLocked() {
 			return // 已经在跑
 		}
 		a.log(fmt.Sprintf("[前置代理] 链式代理 %s 尚未启动，正在自动启动", chain.Alias))
-		if err := a.startChainProxyInternal(chain); err != nil {
+		// 必须经 runWithReleasedPortLocked：未启动节点的端口被本实例记账占着，
+		// 不先释放的话进程管理器会认为端口已被占用而拒绝启动
+		err := a.runWithReleasedPortLocked(chain.LocalPort, func() error {
+			return a.startChainProxyInternal(chain)
+		})
+		if err != nil {
 			a.logError(fmt.Sprintf("自动启动前置代理 %s 失败", chain.Alias), err)
 			return
 		}
 		chain.Enabled = true
+		_ = a.saveConfig()
+		a.emitEvent("loadRules", nil)
 		return
 	}
 
@@ -4451,11 +4477,17 @@ func (a *MyService) ensurePreProxyRunningLocked() {
 			return
 		}
 		a.log(fmt.Sprintf("[前置代理] 故障转移 %s 尚未启动，正在自动启动", lb.Alias))
-		if err := a.startLoadBalancerInternal(lb); err != nil {
+		// 同上：先释放端口记账，否则会被判为端口已占用
+		err := a.runWithReleasedPortLocked(lb.LocalPort, func() error {
+			return a.startLoadBalancerInternal(lb)
+		})
+		if err != nil {
 			a.logError(fmt.Sprintf("自动启动前置代理 %s 失败", lb.Alias), err)
 			return
 		}
 		lb.Enabled = true
+		_ = a.saveConfig()
+		a.emitEvent("loadRules", nil)
 		return
 	}
 }

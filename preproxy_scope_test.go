@@ -239,3 +239,37 @@ func TestEnsurePreProxyRunningIgnoresPlainNode(t *testing.T) {
 	s := scopeService("pre", nil, nil)
 	s.ensurePreProxyRunningLocked() // 不应 panic
 }
+
+// 没有节点需要前置代理时，不该顺带把它启动。
+//
+// 曾有的 bug：自动启动流程无条件调用 ensurePreProxyRunningLocked，
+// 结果开机后即使一个节点都没启动，前置用的链式代理也被拉起来了，
+// 用户手动点启用时反而报「端口已被占用」。
+func TestPreProxyNotNeededByEmptyOrOutOfScopeBatch(t *testing.T) {
+	s := scopeService("pre", []string{"g1"}, nil)
+
+	if s.preProxyNeededByLocked(nil) {
+		t.Error("an empty batch needs no pre-proxy")
+	}
+
+	// b 属于 g2，不在生效范围内
+	outOfScope := []*models.ProxyRule{ruleByID(s, "b")}
+	if s.preProxyNeededByLocked(outOfScope) {
+		t.Error("a batch outside the scope needs no pre-proxy")
+	}
+
+	inScope := []*models.ProxyRule{ruleByID(s, "a")}
+	if !s.preProxyNeededByLocked(inScope) {
+		t.Error("a batch inside the scope does need the pre-proxy")
+	}
+}
+
+// 前置代理停用时，即使节点在范围内也不需要拉起它
+func TestPreProxyNotNeededWhenDisabled(t *testing.T) {
+	s := scopeService("pre", nil, nil)
+	s.config.PreProxyEnabled = false
+
+	if s.preProxyNeededByLocked([]*models.ProxyRule{ruleByID(s, "a")}) {
+		t.Error("a disabled pre-proxy is never needed")
+	}
+}
