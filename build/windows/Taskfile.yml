@@ -23,7 +23,7 @@ tasks:
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
-      APP_VERSION: '{{.APP_VERSION | default "2.6.1"}}'
+      APP_VERSION: '{{.APP_VERSION | default "2.7.0"}}'
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X main.AppVersion={{.APP_VERSION}}"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
     env:
       GOOS: windows
