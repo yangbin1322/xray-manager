@@ -509,6 +509,9 @@ func (a *MyService) autoStartEnabledNodes() {
 	// 反复重启，几百个节点就是几百次重建配置 + 重启进程。
 	sharded := a.processManager != nil && a.processManager.ShardingEnabled()
 	if sharded {
+		// 前置代理若是链式/故障转移，要先把它拉起来占住本地端口，
+		// 否则受影响的节点全都连不上（且报错看起来像是它们自己的问题）
+		a.ensurePreProxyRunningLocked()
 		a.syncShardPreProxyLocked()
 	}
 	var shardBatch []*models.ProxyRule
@@ -1287,7 +1290,9 @@ func (a *MyService) startPlainNodesInShardLocked(refs []nodeRef) map[string]bool
 		return handled
 	}
 	// 前置代理在分片配置里是一份共享出站，各节点用 detour 指向它，
-	// 因此设置了前置代理也能共享进程
+	// 因此设置了前置代理也能共享进程。
+	// 前置是链式/故障转移时先确保它已启动，否则这批节点全都连不上。
+	a.ensurePreProxyRunningLocked()
 	a.syncShardPreProxyLocked()
 
 	wanted := make(map[string]bool, len(refs))
@@ -4043,9 +4048,14 @@ func (a *MyService) startLoadBalancerInternal(lb *models.LoadBalanceNode) error 
 		return fmt.Errorf("未找到有效的子节点")
 	}
 
-	// 构建故障转移配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核），附加流量统计 API
+	// 构建故障转移配置（含 Hysteria2/TUIC 子节点时自动切换 sing-box 内核），附加流量统计 API。
+	// 该故障转移自身就是前置代理时不套自己——否则会生成指向本节点尚未监听端口的出站。
+	var preProxy *models.ProxyRule
+	if a.config.PreProxyNodeID != lb.ID {
+		preProxy = a.getPreProxyRuleLocked()
+	}
 	apiPort := process.FindApiPort(lb.LocalPort)
-	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes, apiPort, a.getPreProxyRuleLocked())
+	configJSON, coreType, err := buildLoadBalanceConfigJSON(lb, lb.LocalPort, nodes, apiPort, preProxy)
 	if err != nil {
 		return err
 	}
@@ -4279,8 +4289,12 @@ func (a *MyService) startChainProxyInternal(chain *models.ChainProxy) error {
 		return err
 	}
 
-	// 全局前置代理：插到链最前端（已在链中则不重复添加）
-	chainRules = a.prependPreProxyLocked(chainRules)
+	// 全局前置代理：插到链最前端（已在链中则不重复添加）。
+	// 该链自身就是前置代理时不能再套自己——那会生成一个指向本链尚未监听的
+	// 端口的出站，整条链直接不通。
+	if a.config.PreProxyNodeID != chain.ID {
+		chainRules = a.prependPreProxyLocked(chainRules)
+	}
 
 	// 构建链式代理配置（含 Hysteria2/TUIC 节点时自动切换 sing-box 内核），附加流量统计 API
 	apiPort := process.FindApiPort(chain.LocalPort)
@@ -4398,6 +4412,54 @@ func (a *MyService) preProxyEnabledLocked() bool {
 	return a.config.PreProxyEnabled
 }
 
+// ensurePreProxyRunningLocked 确保前置代理已启动。
+//
+// 前置代理若是链式代理/故障转移，它要先跑起来、占住本地端口，其他节点才能
+// 经它出站。忘记先启动会让所有受影响的节点报「代理连接失败」，而问题其实
+// 不在这些节点身上——这种错法很难自己排查，所以这里代为拉起。
+// 已在运行、未启用前置代理、或前置是普通节点（随分片一起启动）时都无需处理。
+// 需已持有 a.mu 锁。
+func (a *MyService) ensurePreProxyRunningLocked() {
+	id := a.config.PreProxyNodeID
+	if id == "" || !a.preProxyEnabledLocked() {
+		return
+	}
+
+	for i := range a.config.ChainProxies {
+		chain := &a.config.ChainProxies[i]
+		if chain.ID != id {
+			continue
+		}
+		if chain.Enabled {
+			return // 已经在跑
+		}
+		a.log(fmt.Sprintf("[前置代理] 链式代理 %s 尚未启动，正在自动启动", chain.Alias))
+		if err := a.startChainProxyInternal(chain); err != nil {
+			a.logError(fmt.Sprintf("自动启动前置代理 %s 失败", chain.Alias), err)
+			return
+		}
+		chain.Enabled = true
+		return
+	}
+
+	for i := range a.config.LoadBalancers {
+		lb := &a.config.LoadBalancers[i]
+		if lb.ID != id {
+			continue
+		}
+		if lb.Enabled {
+			return
+		}
+		a.log(fmt.Sprintf("[前置代理] 故障转移 %s 尚未启动，正在自动启动", lb.Alias))
+		if err := a.startLoadBalancerInternal(lb); err != nil {
+			a.logError(fmt.Sprintf("自动启动前置代理 %s 失败", lb.Alias), err)
+			return
+		}
+		lb.Enabled = true
+		return
+	}
+}
+
 // compositePreProxyLocked 把链式代理/故障转移包装成指向其本地端口的 socks 节点。
 // 找不到或未启动时返回 nil——未启动的复合代理没有可用端口，接上去只会全链路不通。
 func (a *MyService) compositePreProxyLocked(id string) *models.ProxyRule {
@@ -4489,6 +4551,10 @@ func (a *MyService) startRuleInternal(rule *models.ProxyRule) error {
 	// 分片模式下前置代理是配置里的一份共享出站，节点用 detour 指向它，
 	// 因此设置了前置代理也不必退化成一节点一进程。
 	if a.processManager != nil && a.processManager.ShardingEnabled() {
+		// 前置是链式/故障转移时先拉起它，否则本节点连不上
+		if a.preProxyAppliesToLocked(rule) {
+			a.ensurePreProxyRunningLocked()
+		}
 		a.syncShardPreProxyLocked()
 		return a.processManager.Start(rule)
 	}

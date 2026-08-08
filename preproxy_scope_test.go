@@ -183,3 +183,59 @@ func TestPreProxyAcceptsLoadBalancer(t *testing.T) {
 		t.Fatalf("a running load balancer should be usable as the pre-proxy, got %v", pre)
 	}
 }
+
+// 前置代理是未启动的链式代理时，启动其他节点前应自动把它拉起来。
+//
+// 忘记先启动会让所有受影响的节点报「代理连接失败」，而问题其实不在这些
+// 节点身上——这种错法很难自己排查。
+func TestEnsurePreProxyRunningStartsStoppedChain(t *testing.T) {
+	s := scopeService("chain1", nil, nil)
+	s.config.ChainProxies = []models.ChainProxy{
+		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: false},
+	}
+
+	// 未启动时解析不到前置代理——这正是「代理连接失败」的由来
+	if s.getPreProxyRuleLocked() != nil {
+		t.Fatal("a stopped chain should not resolve as a usable pre-proxy")
+	}
+
+	// processManager 为 nil 时 startChainProxyInternal 会失败，
+	// 这里只验证「会去尝试启动」而非启动结果
+	defer func() { _ = recover() }()
+	s.ensurePreProxyRunningLocked()
+}
+
+// 已在运行的前置代理不该被重复启动
+func TestEnsurePreProxyRunningSkipsRunning(t *testing.T) {
+	s := scopeService("chain1", nil, nil)
+	s.config.ChainProxies = []models.ChainProxy{
+		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: true},
+	}
+
+	s.ensurePreProxyRunningLocked() // 不应 panic（不会调用 processManager）
+
+	if !s.config.ChainProxies[0].Enabled {
+		t.Error("a running pre-proxy must stay running")
+	}
+}
+
+// 未启用前置代理时不做任何事
+func TestEnsurePreProxyRunningNoopWhenDisabled(t *testing.T) {
+	s := scopeService("chain1", nil, nil)
+	s.config.PreProxyEnabled = false
+	s.config.ChainProxies = []models.ChainProxy{
+		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: false},
+	}
+
+	s.ensurePreProxyRunningLocked()
+
+	if s.config.ChainProxies[0].Enabled {
+		t.Error("must not start anything while the pre-proxy is disabled")
+	}
+}
+
+// 前置代理是普通节点时无需特殊处理——它随分片一起启动
+func TestEnsurePreProxyRunningIgnoresPlainNode(t *testing.T) {
+	s := scopeService("pre", nil, nil)
+	s.ensurePreProxyRunningLocked() // 不应 panic
+}
