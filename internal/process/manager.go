@@ -216,11 +216,14 @@ func (m *Manager) startInShard(shards *ShardManager, rule *models.ProxyRule) err
 	}
 	shards.AddDesired(rule)
 	result, err := shards.Reconcile()
-	if err != nil {
+	// 该节点自身的跳过原因优先于调谐错误：本节点端口绑不上时，
+	// 整片可能因此没有可用节点，Reconcile 返回的「分片内没有可用节点」
+	// 只是汇总结论，说不清是哪个端口出了问题。
+	if skipErr := shardSkipError(result, rule.ID); skipErr != nil {
 		shards.RemoveDesired(rule.ID)
-		return err
+		return skipErr
 	}
-	if err := shardSkipError(result, rule.ID); err != nil {
+	if err != nil {
 		shards.RemoveDesired(rule.ID)
 		return err
 	}
@@ -328,14 +331,20 @@ func (m *Manager) StartNodesInShard(rules []*models.ProxyRule) (map[string]error
 
 	shards.AddDesired(accepted...)
 	result, err := shards.Reconcile()
-	if err != nil {
-		return failures, err
-	}
+	// 即使调谐整体失败也要先归因到具体节点：某些节点端口绑不上时，
+	// 整片可能因此起不来，直接返回汇总错误会丢掉「哪个节点、哪个端口」
+	// 这些真正有用的信息。没有专属原因的节点才落到调谐错误上。
+	failedShardWide := err != nil
 
 	var started []*models.ProxyRule
 	for _, rule := range accepted {
 		if skipErr := shardSkipError(result, rule.ID); skipErr != nil {
 			failures[rule.ID] = skipErr
+			shards.RemoveDesired(rule.ID)
+			continue
+		}
+		if failedShardWide {
+			failures[rule.ID] = err
 			shards.RemoveDesired(rule.ID)
 			continue
 		}

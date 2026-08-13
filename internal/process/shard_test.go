@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 
 	"xray-manager/internal/models"
@@ -200,5 +201,40 @@ func TestFilterBindablePortsRejectsBadPorts(t *testing.T) {
 	}
 	if portErr.NodeID != "bad" {
 		t.Errorf("rejected node = %s, want bad", portErr.NodeID)
+	}
+}
+
+// 整片节点都被剔除时，日志必须带上每个节点的具体原因。
+//
+// 曾经只打「分片内没有可用节点」这句汇总结论，看不出是哪个节点、
+// 哪个端口、为什么，导致端口被别的程序占用时无从排查。
+func TestFormatSkipReasonsListsCauses(t *testing.T) {
+	if got := formatSkipReasons(nil); got != "" {
+		t.Errorf("no skips should produce no suffix, got %q", got)
+	}
+
+	reasons := formatSkipReasons([]error{
+		&PortUnavailableError{NodeID: "n1", Alias: "东京-01", Port: 11201},
+	})
+	if !strings.Contains(reasons, "东京-01") || !strings.Contains(reasons, "11201") {
+		t.Errorf("reason must name the node and its port, got %q", reasons)
+	}
+}
+
+// 原因过多时只列前几条，避免几百个节点把日志刷爆
+func TestFormatSkipReasonsTruncates(t *testing.T) {
+	var skipped []error
+	for i := 0; i < maxLoggedSkipReasons+3; i++ {
+		skipped = append(skipped, &PortUnavailableError{
+			NodeID: fmt.Sprintf("n%d", i), Alias: fmt.Sprintf("节点%d", i), Port: 11000 + i,
+		})
+	}
+	got := formatSkipReasons(skipped)
+
+	if strings.Contains(got, fmt.Sprintf("节点%d", maxLoggedSkipReasons+2)) {
+		t.Errorf("reasons beyond the cap must be omitted, got %q", got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("共 %d 个节点被跳过", len(skipped))) {
+		t.Errorf("truncated output must report the total, got %q", got)
 	}
 }

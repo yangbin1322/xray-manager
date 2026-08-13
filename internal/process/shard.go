@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,6 +118,33 @@ func filterBindablePorts(nodes []*models.ProxyRule) (usable []*models.ProxyRule,
 		})
 	}
 	return usable, rejected
+}
+
+// maxLoggedSkipReasons 单条日志里最多列出的跳过原因条数。
+// 一片可达几百个节点，全列会把日志刷爆；超出的部分只报总数。
+const maxLoggedSkipReasons = 5
+
+// formatSkipReasons 把节点被剔除的原因拼成日志后缀，无原因时返回空串。
+//
+// 分片启动失败时，错误本身往往只是「没有可用节点」这类汇总结论，
+// 真正能定位问题的是每个节点各自的原因（端口被占、配置非法等）。
+func formatSkipReasons(skipped []error) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("；原因：")
+	for i, err := range skipped {
+		if i >= maxLoggedSkipReasons {
+			b.WriteString(fmt.Sprintf(" 等共 %d 个节点被跳过", len(skipped)))
+			break
+		}
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(err.Error())
+	}
+	return b.String()
 }
 
 // ShardManager 以分片方式运行节点：多个节点共享一个 sing-box 进程。
@@ -311,7 +339,10 @@ func (m *ShardManager) Reconcile() (ReconcileResult, error) {
 			if firstErr == nil {
 				firstErr = err
 			}
-			m.log(fmt.Sprintf("[分片] %s 启动失败: %v", shardID, err))
+			// 附上每个节点被剔除的具体原因：整片节点都被剔除时，
+			// err 只是「没有可用节点」这类汇总结论，不说明是哪个节点、
+			// 哪个端口、为什么——排查时全靠这些明细。
+			m.log(fmt.Sprintf("[分片] %s 启动失败: %v%s", shardID, err, formatSkipReasons(skipped)))
 			continue
 		}
 		if existing != nil {
