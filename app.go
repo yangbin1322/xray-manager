@@ -256,6 +256,11 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 为所有未启动节点保留本地端口，避免多个客户端实例分配到同一端口。
 		a.reserveStoppedPorts()
 
+		// 节点端口若落在系统动态端口范围内，会被其他程序随机借走，
+		// 表现为节点时好时坏。这种占用是 Bound 而非 Listen 状态，
+		// netstat 查不到，用户几乎无法自行定位，因此在启动时主动提示。
+		a.warnDynamicPortConflict()
+
 		// 自动启动放到后台执行。
 		//
 		// Wails 要等 ServiceStartup 返回才创建窗口，而拉起 N 个内核进程是慢操作
@@ -1700,6 +1705,25 @@ func (a *MyService) saveConfig() error {
 		return a.configManager.Save(a.config)
 	}
 	return nil
+}
+
+// warnDynamicPortConflict 检测节点端口与系统动态端口范围是否重叠，重叠时告警。
+//
+// 只提示不阻断：范围是系统级设置，改动需要管理员权限并重启，
+// 应用无权也不该替用户决定；节点在重叠状态下多数时候仍能正常工作。
+func (a *MyService) warnDynamicPortConflict() {
+	if a.config == nil {
+		return
+	}
+	ports := make([]int, 0, len(a.config.Rules))
+	for _, rule := range a.config.Rules {
+		if rule.LocalPort > 0 {
+			ports = append(ports, rule.LocalPort)
+		}
+	}
+	if conflict := utils.CheckDynamicPortConflict(ports); conflict != nil {
+		a.log("[端口警告] " + conflict.Message())
+	}
 }
 
 func (a *MyService) portEntriesLocked() []portregistry.Entry {
