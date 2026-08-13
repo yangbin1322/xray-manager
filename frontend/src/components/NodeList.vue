@@ -136,7 +136,15 @@
             <template v-if="rule._nodeType === 'rule'">{{ rule.serverPort || '-' }}</template>
             <template v-else>-</template>
           </td>
-          <td v-if="cols.isVisible('lport')" class="col-lport">{{ rule.localPort || '-' }}</td>
+          <td v-if="cols.isVisible('lport')" class="col-lport">
+            <span
+              v-if="rule.localPort > 0"
+              class="lport-copy"
+              title="点击复制本地 HTTP 代理地址"
+              @click.stop="copyLocalProxy(rule)"
+            >{{ rule.localPort }}</span>
+            <template v-else>-</template>
+          </td>
           <td v-if="cols.isVisible('health')" class="col-health">
             <span
               :class="['health-badge', `health-${rule.healthStatus || 'unknown'}`]"
@@ -540,6 +548,20 @@ function formatSpeed(bytesPerSec) {
   return `${formatBytes(bytesPerSec)}/s`
 }
 
+// 点击本地端口，复制该节点的本地 HTTP 代理地址。
+//
+// 与工具栏的批量复制格式保持一致，便于直接粘进爬虫等程序。
+// 未启动的节点也允许复制：地址本身是确定的，用户可能先取地址再启动。
+async function copyLocalProxy(rule) {
+  const address = `http://127.0.0.1:${rule.localPort}`
+  try {
+    await navigator.clipboard.writeText(address)
+    appStore.showToast(`已复制 ${address}`, 'success')
+  } catch (e) {
+    appStore.showToast(`复制失败: ${e}`, 'error')
+  }
+}
+
 async function handleHealthCheck(rule) {
   // 故障转移/链式代理经本地代理端口检测，需先启动
   if (rule._nodeType !== 'rule' && !rule.enabled) {
@@ -759,6 +781,12 @@ async function handleDelete(rule) {
 .group-cell { color: var(--text-secondary); }
 .col-sport { width: 58px; }
 .col-lport { width: 58px; }
+/* 本地端口可点击复制：默认不加色，避免整列变花；悬停时才提示可点 */
+.lport-copy { cursor: pointer; }
+.lport-copy:hover {
+  color: var(--primary-color);
+  text-decoration: underline;
+}
 .col-health { width: 70px; }
 .col-latency { width: 62px; }
 .col-speed { width: 74px; }
