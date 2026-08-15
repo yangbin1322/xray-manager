@@ -201,6 +201,92 @@ func buildTransport(rule *models.ProxyRule) map[string]interface{} {
 	return nil
 }
 
+// applySSPlugin 把 Shadowsocks 节点的传输层配置映射到 SIP003 插件。
+//
+// sing-box 的 shadowsocks 出站没有 tls / transport 字段（配置里写了会被
+// "json: unknown field" 直接拒绝），传输层只能经由 v2ray-plugin 表达。
+// 这与 Xray 不同：Xray 的 streamSettings 是协议无关的，对所有出站统一生效，
+// 所以 SS+ws+tls 在旧版（v2.5.0，Xray 内核）能直接跑通。
+//
+// 早前这里什么都不做，network/security 被静默丢弃、退化成裸 TCP，
+// 服务端等不到 TLS ClientHello 就断开，外部只看到 "EOF" —— 与 REALITY
+// 那次静默丢弃是同一类问题，因此宁可在启动前明确报错也不要再降级。
+func applySSPlugin(rule *models.ProxyRule, outbound map[string]interface{}) error {
+	network := rule.Settings.Network
+	security := rule.Settings.Security
+	useTLS := security == "tls"
+
+	// tcp/空 + 无 TLS 就是裸 SS，无需插件
+	if (network == "" || network == "tcp") && !useTLS {
+		return nil
+	}
+
+	// sing-box 内置的 v2ray-plugin 只实现了 websocket / quic 两种 mode，
+	// grpc、h2 无法表达；REALITY 更是完全没有对应项。
+	if network != "ws" {
+		return fmt.Errorf("sing-box 内核不支持 shadowsocks + %s 传输，请改用 v2.5.0 双内核版本运行", displayNetwork(network))
+	}
+	if security == "reality" {
+		return fmt.Errorf("sing-box 内核不支持 shadowsocks + REALITY，请改用 v2.5.0 双内核版本运行")
+	}
+
+	// v2ray-plugin 没有跳过证书校验的选项：sing-box v1.13 的
+	// transport/sip003/v2ray.go 只认 tls/cert/certRaw/mode/host/path/mux，
+	// tlsOptions.Insecure 从头到尾没有被赋值过。自签证书节点这里必须拦下，
+	// 否则会在运行时报 "certificate signed by unknown authority"。
+	if useTLS && rule.Settings.TLS != nil && rule.Settings.TLS.AllowInsecure {
+		return fmt.Errorf("sing-box 内核不支持 shadowsocks 节点跳过证书校验（allowInsecure），该节点使用自签证书，请改用 v2.5.0 双内核版本运行")
+	}
+
+	opts := []string{"mode=websocket"}
+	if useTLS {
+		opts = append(opts, "tls")
+	}
+
+	// host 同时决定 WS 的 Host 头和 TLS SNI（v2ray.go 里是同一个变量），
+	// 两者无法分开设置。不传的话插件会用默认值 "cloudfront.com"，SNI 就错了，
+	// 所以这里始终显式给出：优先 SNI / Host 头，最后回落到服务器地址。
+	host := ""
+	if rule.Settings.TLS != nil {
+		host = rule.Settings.TLS.ServerName
+	}
+	if rule.Settings.WS != nil {
+		if host == "" {
+			host = rule.Settings.WS.Headers["Host"]
+		}
+	}
+	if host == "" {
+		host = rule.ServerAddr
+	}
+	opts = append(opts, "host="+escapePluginOpt(host))
+
+	path := "/"
+	if rule.Settings.WS != nil && rule.Settings.WS.Path != "" {
+		path = rule.Settings.WS.Path
+	}
+	opts = append(opts, "path="+escapePluginOpt(path))
+
+	outbound["plugin"] = "v2ray-plugin"
+	outbound["plugin_opts"] = strings.Join(opts, ";")
+	return nil
+}
+
+// escapePluginOpt 转义 SIP003 选项值里的分隔符。
+// plugin_opts 以 ; 分隔、= 赋值，值里出现这些字符时必须用反斜杠转义，
+// 否则会被 sing-box 的 ParsePluginOptions 拆成别的键值对。
+func escapePluginOpt(v string) string {
+	r := strings.NewReplacer(`\`, `\\`, `;`, `\;`, `=`, `\=`)
+	return r.Replace(v)
+}
+
+// displayNetwork 让报错里的传输类型可读（空值意味着配置没写 network）
+func displayNetwork(network string) string {
+	if network == "" {
+		return "该"
+	}
+	return network
+}
+
 // BuildOutbound 将节点转换为 sing-box 出站配置
 func BuildOutbound(rule *models.ProxyRule, tag string) (map[string]interface{}, error) {
 	outbound := map[string]interface{}{
@@ -261,6 +347,9 @@ func BuildOutbound(rule *models.ProxyRule, tag string) (map[string]interface{}, 
 		outbound["type"] = "shadowsocks"
 		outbound["method"] = rule.Settings.SSMethod
 		outbound["password"] = rule.Settings.SSPassword
+		if err := applySSPlugin(rule, outbound); err != nil {
+			return nil, err
+		}
 
 	case "vmess":
 		outbound["type"] = "vmess"
