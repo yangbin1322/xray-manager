@@ -189,10 +189,18 @@
             <span v-else-if="rule._nodeType === 'relay'">{{ relaySummary(rule) }}</span>
             <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
-          <td v-if="cols.isVisible('boundIp')" class="col-bound-ip" :title="boundIpTitle(rule)">
-            <span v-if="rule._nodeType !== 'rule' || !rule.bindExitIP" class="no-data">-</span>
-            <span v-else-if="!rule.boundExitIP" class="bound-pending">待绑定</span>
-            <span v-else class="bound-ip">{{ rule.boundExitIP }}</span>
+          <!-- 绑定/解绑做成单元格点击：操作列已经排了五个按钮，再加会溢出，
+               而绑定是低频的单节点配置操作，放在它自己的列里更顺手 -->
+          <td v-if="cols.isVisible('boundIp')" class="col-bound-ip" :title="boundIpTitle(rule)" @click.stop>
+            <span v-if="rule._nodeType !== 'rule'" class="no-data">-</span>
+            <span
+              v-else-if="!rule.bindExitIP"
+              class="bound-action"
+              :class="{ 'is-disabled': !rule.realIp }"
+              @click="rule.realIp && handleBindIP(rule)"
+            >绑定</span>
+            <span v-else-if="!rule.boundExitIP" class="bound-pending" @click="handleBindIP(rule)">待绑定</span>
+            <span v-else class="bound-ip" @click="handleBindIP(rule)">{{ rule.boundExitIP }}</span>
           </td>
           <td v-if="cols.isVisible('status')" class="col-status">
             <span :class="['status-dot', statusClass(rule)]" :title="statusTitle(rule)"></span>
@@ -218,14 +226,6 @@
               <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
               <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
             </template>
-            <!-- 绑定出口 IP：只对普通节点有意义。未绑定时需要先有真实 IP 才能固定 -->
-            <button
-              v-if="rule._nodeType === 'rule'"
-              class="btn-action-sm btn-bind"
-              :disabled="!rule.bindExitIP && !rule.realIp"
-              :title="rule.bindExitIP ? '解除出口 IP 绑定' : '把当前真实出口 IP 固定下来'"
-              @click="handleBindIP(rule)"
-            >{{ rule.bindExitIP ? '解绑' : '绑定' }}</button>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -532,9 +532,13 @@ function relayTitle(rule) {
 // ===== 出口 IP 绑定 =====
 function boundIpTitle(rule) {
   if (rule._nodeType !== 'rule') return ''
-  if (!rule.bindExitIP) return '未绑定出口 IP'
-  if (!rule.boundExitIP) return '已启用绑定，将以首次获取到的真实 IP 为准'
-  return `已绑定出口 IP ${rule.boundExitIP}\n启动时实际出口 IP 与此不符会自动停用`
+  if (!rule.bindExitIP) {
+    return rule.realIp
+      ? `点击把当前出口 IP ${rule.realIp} 固定下来`
+      : '需要先启动节点并拿到真实出口 IP 才能绑定'
+  }
+  if (!rule.boundExitIP) return '已启用绑定，将以首次获取到的真实 IP 为准\n点击解除绑定'
+  return `已绑定出口 IP ${rule.boundExitIP}\n启动时实际出口 IP 与此不符会自动停用\n点击解除绑定`
 }
 
 async function handleBindIP(rule) {
@@ -843,9 +847,10 @@ async function handleDelete(rule) {
 .col-traffic-total { width: 86px; }
 .ip-error { color: #e74c3c; font-size: 11px; }
 .col-status { width: 36px; text-align: center; }
-/* 操作列按钮较多（启动/编辑/测速/检测/删除），压不下去 */
 /* 五个按钮（启停/编辑/测速/检测/删除）各约 47px，合计约 235px。
-   宽度给不够时最后的「删除」会被挤成省略号，因此按实际内容留足。 */
+   宽度给不够时最后的「删除」会被挤成省略号，因此按实际内容留足。
+   这里放不下第六个按钮：新增的单节点操作请放到它自己的列里做成可点击单元格
+   （参考本地端口列的复制、绑定 IP 列的绑定/解绑），不要再往操作列里塞。 */
 .col-actions { width: 246px; }
 
 /* 操作列放的是按钮不是文本：td 上的 text-overflow 会把最后一个按钮
@@ -884,9 +889,19 @@ async function handleDelete(rule) {
 .btn-health { color: #16a085; border-color: #16a085; }
 /* 绑定 IP 列：内容是定长的 IPv4，给固定宽度即可 */
 .col-bound-ip { width: 120px; }
+/* 绑定列的三种状态都可点击，交互与本地端口列一致 */
+.bound-ip,
+.bound-pending,
+.bound-action { cursor: pointer; }
+.bound-ip:hover,
+.bound-pending:hover,
+.bound-action:hover { text-decoration: underline; }
 .bound-ip { color: #2980b9; font-size: 12px; }
 .bound-pending { color: var(--text-secondary); font-size: 11px; }
-.btn-bind { color: #2980b9; border-color: #2980b9; }
+.bound-action { color: var(--text-secondary); font-size: 11px; }
+/* 还没拿到真实出口 IP 时无从绑定，置灰且不响应点击 */
+.bound-action.is-disabled { cursor: not-allowed; opacity: 0.5; }
+.bound-action.is-disabled:hover { text-decoration: none; }
 
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--primary-color); }
