@@ -198,3 +198,176 @@ func TestSubscriptionUpdateAddsAndRemovesNodes(t *testing.T) {
 		t.Fatalf("应保留 A、新增 C、移除 B，实际 %v", aliases)
 	}
 }
+
+// 机场改名（附上剩余流量/到期日、重排序号）后，节点必须被认出是同一个：
+// ID、本地端口、备注、出口 IP 绑定都要留住，而不是删掉重加。
+// 这是"订阅更新后备注不变、本地端口不变"的核心保证。
+func TestSubscriptionUpdatePreservesRemarkAndPortOnRename(t *testing.T) {
+	old := vlessNode("🇺🇸美国1", "/kbjc/us1", "us1.aiopen.sbs")
+	old.ID = "rule_keep"
+	old.LocalPort = 11001
+	old.GroupID = "g1"
+	old.SubscriptionID = "sub_1"
+	old.Remark = "公司专线"
+	old.BindExitIP = true
+	old.BoundExitIP = "1.2.3.4"
+
+	svc := newTestService(&models.Config{
+		Subscriptions: []models.Subscription{{ID: "sub_1", GroupID: "g1"}},
+		Groups:        []models.Group{{ID: "g1", Name: "机场"}},
+		Rules:         []models.ProxyRule{old},
+	})
+
+	// 同一个节点，只有别名变了
+	renamed := vlessNode("🇺🇸美国1 | 剩余 80GB", "/kbjc/us1", "us1.aiopen.sbs")
+	if err := svc.handleSubscriptionUpdate("sub_1", []models.ProxyRule{renamed}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(svc.config.Rules); got != 1 {
+		t.Fatalf("改名不应产生新节点，期望 1 个，实际 %d 个", got)
+	}
+	got := svc.config.Rules[0]
+	if got.ID != "rule_keep" {
+		t.Errorf("节点 ID 应保持不变，期望 rule_keep，实际 %s", got.ID)
+	}
+	if got.LocalPort != 11001 {
+		t.Errorf("本地端口应保持不变，期望 11001，实际 %d", got.LocalPort)
+	}
+	if got.Remark != "公司专线" {
+		t.Errorf("备注应保持不变，期望「公司专线」，实际「%s」", got.Remark)
+	}
+	if !got.BindExitIP || got.BoundExitIP != "1.2.3.4" {
+		t.Errorf("出口 IP 绑定应保持不变，实际 bind=%v ip=%s", got.BindExitIP, got.BoundExitIP)
+	}
+	if got.Alias != "🇺🇸美国1 | 剩余 80GB" {
+		t.Errorf("别名应同步为订阅的新名，实际「%s」", got.Alias)
+	}
+}
+
+// 无法区分时不能猜：两个旧节点连 path/SNI/凭证都相同、只靠别名区分，
+// 双双改名后宁可退回删除+新增，也不能把 A 的备注挪到 B 上。
+func TestSubscriptionUpdateDoesNotCarryOverAmbiguousRenames(t *testing.T) {
+	// 两个节点各方面都一样，只有别名不同
+	a := vlessNode("节点A", "/same", "same.com")
+	a.ID = "rule_a"
+	a.GroupID = "g1"
+	a.SubscriptionID = "sub_1"
+	a.Remark = "A 的备注"
+	b := vlessNode("节点B", "/same", "same.com")
+	b.ID = "rule_b"
+	b.GroupID = "g1"
+	b.SubscriptionID = "sub_1"
+	b.Remark = "B 的备注"
+
+	svc := newTestService(&models.Config{
+		Subscriptions: []models.Subscription{{ID: "sub_1", GroupID: "g1"}},
+		Groups:        []models.Group{{ID: "g1", Name: "机场"}},
+		Rules:         []models.ProxyRule{a, b},
+	})
+
+	// 两个都改名，此时无从判断谁是谁
+	if err := svc.handleSubscriptionUpdate("sub_1", []models.ProxyRule{
+		vlessNode("节点A-新", "/same", "same.com"),
+		vlessNode("节点B-新", "/same", "same.com"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 关键断言：不能出现张冠李戴——带着旧备注却顶着另一个节点的新名字
+	for _, r := range svc.config.Rules {
+		if r.Alias == "节点A-新" && r.Remark == "B 的备注" {
+			t.Fatal("把 B 的备注错配到了 A 上")
+		}
+		if r.Alias == "节点B-新" && r.Remark == "A 的备注" {
+			t.Fatal("把 A 的备注错配到了 B 上")
+		}
+	}
+}
+
+// 改名与真正的新增/下线混在一次更新里，也要各归各位
+func TestSubscriptionUpdateHandlesRenameAlongsideAddRemove(t *testing.T) {
+	keep := vlessNode("保留", "/keep", "keep.com")
+	keep.ID = "rule_keep"
+	keep.LocalPort = 11001
+	keep.GroupID = "g1"
+	keep.SubscriptionID = "sub_1"
+	keep.Remark = "要留住"
+
+	gone := vlessNode("下线", "/gone", "gone.com")
+	gone.ID = "rule_gone"
+	gone.GroupID = "g1"
+	gone.SubscriptionID = "sub_1"
+
+	svc := newTestService(&models.Config{
+		Subscriptions: []models.Subscription{{ID: "sub_1", GroupID: "g1"}},
+		Groups:        []models.Group{{ID: "g1", Name: "机场"}},
+		Rules:         []models.ProxyRule{keep, gone},
+	})
+
+	// 保留的改了名、下线的消失、另有一个全新节点
+	if err := svc.handleSubscriptionUpdate("sub_1", []models.ProxyRule{
+		vlessNode("保留 | 剩余 10GB", "/keep", "keep.com"),
+		vlessNode("新增", "/new", "new.com"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(svc.config.Rules); got != 2 {
+		t.Fatalf("期望 2 个节点（改名保留 + 新增），实际 %d 个", got)
+	}
+	var renamed *models.ProxyRule
+	aliases := map[string]bool{}
+	for i := range svc.config.Rules {
+		r := &svc.config.Rules[i]
+		aliases[r.Alias] = true
+		if r.ID == "rule_keep" {
+			renamed = r
+		}
+	}
+	if renamed == nil {
+		t.Fatal("改名的节点应被认领回原记录，而不是删掉重建")
+	}
+	if renamed.LocalPort != 11001 || renamed.Remark != "要留住" {
+		t.Errorf("改名节点的端口/备注应保留，实际 port=%d remark=%s", renamed.LocalPort, renamed.Remark)
+	}
+	if !aliases["新增"] {
+		t.Error("全新节点应被加入")
+	}
+	if aliases["下线"] {
+		t.Error("下线节点应被移除")
+	}
+}
+
+// 无别名标识仍要能区分同 CDN 下的不同节点，否则二次匹配会把它们互相认错
+func TestSubscriptionIdentityWithoutAliasDistinguishesCDNNodes(t *testing.T) {
+	us1 := vlessNode("🇺🇸美国1", "/kbjc/us1", "us1-us1.aiopen.sbs")
+	us2 := vlessNode("🇺🇸美国2", "/kbjc/us2", "us2-us2.aiopen.sbs")
+	jp1 := vlessNode("🇯🇵日本", "/kbjc/jp1", "jp1-jp1.aiopen.sbs")
+
+	ids := map[string]string{}
+	for _, n := range []models.ProxyRule{us1, us2, jp1} {
+		key := n.SubscriptionIdentityWithoutAlias()
+		if prev, dup := ids[key]; dup {
+			t.Fatalf("「%s」与「%s」去别名标识相同，二次匹配时会互相认错", n.Alias, prev)
+		}
+		ids[key] = n.Alias
+	}
+}
+
+// 用户自己填的字段不能进身份标识：一改备注就认不出节点，
+// 下次更新会把它当成新节点重建，备注和端口反而丢得更彻底
+func TestSubscriptionIdentityIgnoresUserFields(t *testing.T) {
+	base := vlessNode("🇺🇸美国1", "/kbjc/us1", "us1.aiopen.sbs")
+	changed := base
+	changed.Remark = "我的备注"
+	changed.BindExitIP = true
+	changed.BoundExitIP = "1.2.3.4"
+
+	if base.SubscriptionIdentity() != changed.SubscriptionIdentity() {
+		t.Error("备注/出口 IP 绑定不应影响 SubscriptionIdentity")
+	}
+	if base.SubscriptionIdentityWithoutAlias() != changed.SubscriptionIdentityWithoutAlias() {
+		t.Error("备注/出口 IP 绑定不应影响 SubscriptionIdentityWithoutAlias")
+	}
+}

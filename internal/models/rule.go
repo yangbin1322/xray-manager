@@ -22,6 +22,29 @@ type ProxyRule struct {
 	ProcessID  int           `json:"processId"`  // 进程ID
 	LastError  string        `json:"lastError"`  // 最近一次启动失败/不通的原因（成功后清空）
 
+	// Remark 用户备注，与订阅下发的 Alias 相互独立。
+	//
+	// Alias 每次订阅更新都会被机场覆盖，用户写在上面的东西留不住；
+	// 备注只由用户填写，订阅更新永不触碰。
+	Remark string `json:"remark,omitempty"`
+
+	// BindExitIP 为 true 时启用出口 IP 绑定：
+	// 启动后探测到的真实出口 IP 与 BoundExitIP 不一致就自动停用该节点。
+	//
+	// 用于只放行固定来源 IP 的服务：机场换了落地 IP 后节点仍然连得通，
+	// 但对端会拒绝——此时"能连上"反而是最坏的情况，外部程序还在往这个
+	// 本地端口发流量，请求却已从另一个 IP 出去，用户完全无感。
+	// 未启用绑定的节点完全不受影响，保持原有行为。
+	BindExitIP bool `json:"bindExitIP,omitempty"`
+
+	// BoundExitIP 绑定的固定出口 IP（IPv4）。
+	//
+	// 为空且 BindExitIP 为 true 时，首次成功探测到的真实 IP 会被自动写入，
+	// 之后再变化就停用。用户无法在启动前预知机场分配的 IP，
+	// 强制手填会让这个功能在首次启动前根本没法用。也支持手工填写与
+	// 「以当前IP为准」按钮。
+	BoundExitIP string `json:"boundExitIP,omitempty"`
+
 	// BypassPreProxy 为 true 时该节点直连出站，不经全局前置代理。
 	//
 	// 用于前置代理本身不可达、或该节点必须从本机 IP 出去的场景
@@ -70,6 +93,27 @@ type ProxyRule struct {
 // 这里补上真正区分节点的字段：别名、协议，以及各协议的用户凭证和传输层参数
 // （ws path / SNI / gRPC serviceName 等）。
 func (r *ProxyRule) SubscriptionIdentity() string {
+	return r.subscriptionIdentity(true)
+}
+
+// SubscriptionIdentityWithoutAlias 是去掉别名的身份标识，
+// 用于订阅更新时识别"机场改了名、但其实是同一个节点"。
+//
+// 机场普遍在节点名里塞剩余流量/到期时间/重新编号，别名一变，完整身份就对不上，
+// 旧节点会被当作已失效删除、以新 ID 和新端口重新插入——用户的备注、绑定的出口 IP、
+// 以及交给外部程序的本地端口全部丢失。
+//
+// 这个标识区分度弱于完整身份（同 CDN 同凭证同路径的两个节点只靠别名区分时会撞键），
+// 因此只能用作完整身份匹配后的兜底，且必须在两侧都唯一时才可采信。
+func (r *ProxyRule) SubscriptionIdentityWithoutAlias() string {
+	return r.subscriptionIdentity(false)
+}
+
+// subscriptionIdentity 是上面两个标识的共同实现，withAlias 决定是否计入别名。
+//
+// 注意：用户自己填的字段（备注、绑定 IP 等）绝不能进这个标识——
+// 一改备注就认不出节点，下次更新会把它当新节点重建。
+func (r *ProxyRule) subscriptionIdentity(withAlias bool) string {
 	s := &r.Settings
 
 	// 各协议的用户标识（UUID/密码），同一 CDN 下不同节点通常凭证不同
@@ -109,10 +153,15 @@ func (r *ProxyRule) SubscriptionIdentity() string {
 		sni = s.TLS.ServerName
 	}
 
-	return strings.Join([]string{
-		r.Alias, r.Protocol, r.ServerAddr, strconv.Itoa(r.ServerPort),
+	parts := []string{
+		r.Protocol, r.ServerAddr, strconv.Itoa(r.ServerPort),
 		credential, s.Network, s.Security, path, host, sni,
-	}, "\x1f")
+	}
+	if withAlias {
+		// 别名放在最前，保持与历史实现完全一致的字段顺序
+		parts = append([]string{r.Alias}, parts...)
+	}
+	return strings.Join(parts, "\x1f")
 }
 
 // ValidateForXray 校验该节点能否生成可被 Xray 接受的出站配置。
@@ -200,6 +249,16 @@ func (r *ProxyRule) Validate() error {
 	}
 	if r.Alias == "" {
 		r.Alias = fmt.Sprintf("%s-%s:%d", r.Protocol, r.ServerAddr, r.ServerPort)
+	}
+
+	// 校验绑定的出口 IP：必须是 IPv4。
+	// 探测出口 IP 时优先取 IPv4（见 internal/process 的探测逻辑），
+	// 绑定值若是 IPv6 就永远比不中，等于一启动就被停用。
+	if r.BoundExitIP != "" {
+		ip := net.ParseIP(strings.TrimSpace(r.BoundExitIP))
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("绑定的出口 IP「%s」不是合法的 IPv4 地址", r.BoundExitIP)
+		}
 	}
 
 	return nil

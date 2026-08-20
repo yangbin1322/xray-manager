@@ -11,6 +11,7 @@ export const MIN_COLUMN_WIDTH = 40
 // 勾选框和操作列不在此列表里——它们是交互入口，隐藏后表格就没法用了。
 export const NODE_COLUMNS = [
   { key: 'alias', label: '别名' },
+  { key: 'remark', label: '备注' },
   { key: 'group', label: '所属分组' },
   { key: 'protocol', label: '协议' },
   { key: 'server', label: '服务器地址' },
@@ -22,6 +23,7 @@ export const NODE_COLUMNS = [
   { key: 'traffic', label: '实时流量' },
   { key: 'trafficTotal', label: '今日/累计' },
   { key: 'ip', label: '真实IP' },
+  { key: 'boundIp', label: '绑定IP' },
   { key: 'status', label: '状态' },
 ]
 

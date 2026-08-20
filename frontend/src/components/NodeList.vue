@@ -32,6 +32,11 @@
             别名<span v-if="rulesStore.sortColumn === 'alias'" class="sort-arrow">{{ sortArrow }}</span>
             <span class="col-resizer" @mousedown.stop.prevent="startResize('alias', $event)"></span>
           </th>
+          <th v-if="cols.isVisible('remark')" class="col-remark sortable" :style="cols.styleOf('remark')"
+              @click="rulesStore.setSort('remark')">
+            备注<span v-if="rulesStore.sortColumn === 'remark'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('remark', $event)"></span>
+          </th>
           <th v-if="cols.isVisible('group')" class="col-group" :style="cols.styleOf('group')">
             所属分组
             <span class="col-resizer" @mousedown.stop.prevent="startResize('group', $event)"></span>
@@ -84,6 +89,11 @@
             真实IP<span v-if="rulesStore.sortColumn === 'realIp'" class="sort-arrow">{{ sortArrow }}</span>
             <span class="col-resizer" @mousedown.stop.prevent="startResize('ip', $event)"></span>
           </th>
+          <th v-if="cols.isVisible('boundIp')" class="col-bound-ip sortable" :style="cols.styleOf('boundIp')"
+              @click="rulesStore.setSort('boundExitIP')">
+            绑定IP<span v-if="rulesStore.sortColumn === 'boundExitIP'" class="sort-arrow">{{ sortArrow }}</span>
+            <span class="col-resizer" @mousedown.stop.prevent="startResize('boundIp', $event)"></span>
+          </th>
           <th v-if="cols.isVisible('status')" class="col-status" :style="cols.styleOf('status')">状态</th>
           <th class="col-actions">
             操作
@@ -117,6 +127,9 @@
             <span v-if="rule._nodeType === 'chain'" class="type-badge badge-chain" title="链式代理">链</span>
             <span v-if="rule._nodeType === 'relay'" class="type-badge badge-relay" title="动态会话代理">会</span>
             {{ rule.alias || '-' }}
+          </td>
+          <td v-if="cols.isVisible('remark')" class="col-remark" :title="rule.remark">
+            {{ rule.remark || '-' }}
           </td>
           <td v-if="cols.isVisible('group')" class="col-group" :title="groupTitle(rule)">
             <span v-if="rule.groupName" class="group-cell">{{ rule.groupName }}</span>
@@ -176,6 +189,11 @@
             <span v-else-if="rule._nodeType === 'relay'">{{ relaySummary(rule) }}</span>
             <span v-else>{{ rule.realIp || '-' }}</span>
           </td>
+          <td v-if="cols.isVisible('boundIp')" class="col-bound-ip" :title="boundIpTitle(rule)">
+            <span v-if="rule._nodeType !== 'rule' || !rule.bindExitIP" class="no-data">-</span>
+            <span v-else-if="!rule.boundExitIP" class="bound-pending">待绑定</span>
+            <span v-else class="bound-ip">{{ rule.boundExitIP }}</span>
+          </td>
           <td v-if="cols.isVisible('status')" class="col-status">
             <span :class="['status-dot', statusClass(rule)]" :title="statusTitle(rule)"></span>
           </td>
@@ -200,6 +218,14 @@
               <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
               <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
             </template>
+            <!-- 绑定出口 IP：只对普通节点有意义。未绑定时需要先有真实 IP 才能固定 -->
+            <button
+              v-if="rule._nodeType === 'rule'"
+              class="btn-action-sm btn-bind"
+              :disabled="!rule.bindExitIP && !rule.realIp"
+              :title="rule.bindExitIP ? '解除出口 IP 绑定' : '把当前真实出口 IP 固定下来'"
+              @click="handleBindIP(rule)"
+            >{{ rule.bindExitIP ? '解绑' : '绑定' }}</button>
             <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
           </td>
         </tr>
@@ -501,6 +527,29 @@ function relayTitle(rule) {
     rule.preProxyNodeId ? '经前置节点加速' : '直连上游',
     `累计连接: ${rule.totalConns || 0}`,
   ].join('\n')
+}
+
+// ===== 出口 IP 绑定 =====
+function boundIpTitle(rule) {
+  if (rule._nodeType !== 'rule') return ''
+  if (!rule.bindExitIP) return '未绑定出口 IP'
+  if (!rule.boundExitIP) return '已启用绑定，将以首次获取到的真实 IP 为准'
+  return `已绑定出口 IP ${rule.boundExitIP}\n启动时实际出口 IP 与此不符会自动停用`
+}
+
+async function handleBindIP(rule) {
+  try {
+    if (rule.bindExitIP) {
+      await api.unbindIP(rule.id)
+      appStore.showToast(`「${rule.alias}」已解除出口 IP 绑定`, 'success')
+    } else {
+      await api.bindCurrentIP(rule.id)
+      appStore.showToast(`「${rule.alias}」已绑定出口 IP ${rule.realIp}`, 'success')
+    }
+    await rulesStore.loadRules()
+  } catch (e) {
+    appStore.showToast(`操作失败: ${e}`, 'error')
+  }
 }
 
 // ===== 流量展示 =====
@@ -807,6 +856,7 @@ async function handleDelete(rule) {
 }
 /* 以下列不设 width，自动瓜分剩余宽度 */
 .col-alias,
+.col-remark,
 .col-group,
 .col-server,
 .col-ip { width: auto; }
@@ -832,6 +882,11 @@ async function handleDelete(rule) {
 .traffic-speed { font-size: 11px; color: var(--text-primary); }
 .traffic-total { font-size: 11px; color: var(--text-secondary); }
 .btn-health { color: #16a085; border-color: #16a085; }
+/* 绑定 IP 列：内容是定长的 IPv4，给固定宽度即可 */
+.col-bound-ip { width: 120px; }
+.bound-ip { color: #2980b9; font-size: 12px; }
+.bound-pending { color: var(--text-secondary); font-size: 11px; }
+.btn-bind { color: #2980b9; border-color: #2980b9; }
 
 .sortable { cursor: pointer; user-select: none; }
 .sortable:hover { color: var(--primary-color); }

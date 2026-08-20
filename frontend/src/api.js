@@ -39,6 +39,16 @@ export async function saveRuleOrder(orderedIDs) {
   return await MyService.SaveRuleOrder(orderedIDs)
 }
 
+// 把节点当前的真实出口 IP 固定为绑定 IP
+export async function bindCurrentIP(id) {
+  return await MyService.BindCurrentIP(id)
+}
+
+// 解除节点的出口 IP 绑定
+export async function unbindIP(id) {
+  return await MyService.UnbindIP(id)
+}
+
 // 批量启动/停止节点（后端并发处理，只保存一次配置）
 export async function startNodes(ids) {
   return await MyService.StartNodes(ids)

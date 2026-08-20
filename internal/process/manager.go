@@ -887,14 +887,48 @@ var headerIPServices = map[string]string{
 //
 // 排在最前的走 HEAD + 响应头，最快也最不容易被限流；
 // 其余是常规的「返回纯文本 IP」服务，作为兜底。
+//
+// 兜底优先选只有 A 记录的域名（ipv4.* / api-ipv4.*）：双栈出口的节点走双栈
+// 探测点时会随机返回 IPv4 或 IPv6，同一个节点两次探测拿到不同家族的地址，
+// 绑定出口 IP 的比对就会把没变的节点误判成"IP 变了"并停用。
+// 拿不到 IPv4 时（纯 IPv6 出口）再退回双栈服务，见 getRealIP 的兜底逻辑。
 var baseIPServices = []string{
 	"https://ti.volccdn.com/obj/net-fe/fe/net-probe/favicon.png",
+	"https://ipv4.icanhazip.com",
+	"https://api-ipv4.ip.sb/ip",
 	"https://checkip.amazonaws.com",
 	"https://api.ipify.org",
 	"https://ipinfo.io/ip",
-	"https://api.ip.sb/ip",
 	"https://ifconfig.me/ip",
-	"https://icanhazip.com",
+}
+
+// isIPv4 判断探测结果是不是 IPv4 地址。
+//
+// 绑定出口 IP、给对端加白名单这类用途都只认 IPv4；双栈节点若随机拿到 IPv6，
+// 「出口 IP 有没有变」的判断就失去意义。
+func isIPv4(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	return ip != nil && ip.To4() != nil
+}
+
+// acceptExitIP 采用一次探测结果：回填到 rule、清除失败原因并通知上层。
+// note 为附加说明（如未取到 IPv4），为空则不加。
+func (m *Manager) acceptExitIP(rule *models.ProxyRule, realIP, note string) {
+	rule.RealIP = realIP
+	rule.LastError = "" // 成功，清除失败原因
+	m.log(fmt.Sprintf("[IP] %s 真实IP: %s%s", rule.Alias, realIP, note))
+
+	// 回填到对应节点（普通节点直接命中；故障转移/链式代理经回调按端口回填）
+	m.mu.RLock()
+	ipcb := m.onRealIP
+	m.mu.RUnlock()
+	// 回调内部已通知前端刷新，这里不再重复发事件——
+	// 上千节点各发两次会把事件通道压满
+	if ipcb != nil {
+		ipcb(rule.LocalPort, realIP)
+	} else {
+		m.notifyLoadRules()
+	}
 }
 
 // probeExitIP 经代理请求探测点，返回出口 IP。
@@ -1026,6 +1060,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	ipServices := rotatedIPServices(rule.LocalPort)
 
 	var lastErr string
+	var fallbackIP string // 只探到 IPv6 时的兜底值，见循环内的说明
 	for attempt, service := range ipServices {
 		// 可用节点第一次就能成功；试满 realIPMaxAttempts 仍失败的基本是真不通，
 		// 继续把剩余服务试完只会拖慢整批
@@ -1051,21 +1086,25 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 			lastErr = "响应中没有 IP"
 			continue
 		}
-
-		rule.RealIP = realIP
-		rule.LastError = "" // 成功，清除失败原因
-		m.log(fmt.Sprintf("[IP] %s 真实IP: %s", rule.Alias, realIP))
-		// 回填到对应节点（普通节点直接命中；故障转移/链式代理经回调按端口回填）
-		m.mu.RLock()
-		ipcb := m.onRealIP
-		m.mu.RUnlock()
-		// 回调内部已通知前端刷新，这里不再重复发事件——
-		// 上千节点各发两次会把事件通道压满
-		if ipcb != nil {
-			ipcb(rule.LocalPort, realIP)
-		} else {
-			m.notifyLoadRules()
+		// 拿到 IPv6 时先记下、继续试下一个服务：多数双栈节点换个探测点
+		// 就能给出 IPv4，而绑定出口 IP、对端加白名单这类用途只认 IPv4。
+		// 全部试完仍只有 IPv6，说明这是纯 IPv6 出口，见循环之后的兜底。
+		if !isIPv4(realIP) {
+			if fallbackIP == "" {
+				fallbackIP = realIP
+			}
+			continue
 		}
+
+		m.acceptExitIP(rule, realIP, "")
+		return
+	}
+
+	// 只探到 IPv6：接受它而不是把节点判成不通——能用的节点不该因为
+	// 拿不到 IPv4 就被停掉。绑定了出口 IP 的节点会在上层比对时因为
+	// 绑定值是 IPv4 而判定不一致并停用，那是预期行为。
+	if fallbackIP != "" {
+		m.acceptExitIP(rule, fallbackIP, "（未取到 IPv4，该节点可能是纯 IPv6 出口）")
 		return
 	}
 

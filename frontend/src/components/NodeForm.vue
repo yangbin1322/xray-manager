@@ -14,6 +14,10 @@
           <input v-model="form.alias" type="text" placeholder="例如：香港节点" />
         </div>
         <div class="form-group">
+          <label>备注：</label>
+          <input v-model="form.remark" type="text" placeholder="仅本地可见，订阅更新不会覆盖" />
+        </div>
+        <div class="form-group">
           <label>所属分组：</label>
           <select v-model="form.groupId">
             <option value="">无分组</option>
@@ -55,6 +59,27 @@
           <label>服务器端口：</label>
           <input v-model.number="form.serverPort" type="number" placeholder="443" min="1" max="65535" />
         </div>
+      </div>
+    </div>
+
+    <!-- 出口 IP 绑定 -->
+    <div class="form-section">
+      <h4>出口 IP 绑定</h4>
+      <div class="form-row">
+        <div class="form-group form-group-checkbox">
+          <label><input type="checkbox" v-model="form.bindExitIP" /> 绑定固定出口 IP</label>
+        </div>
+        <div v-if="form.bindExitIP" class="form-group">
+          <label>绑定的出口 IP（IPv4）：</label>
+          <div class="port-row">
+            <input v-model="form.boundExitIP" type="text" placeholder="留空则以首次获取到的 IP 为准" />
+            <button class="btn-small" :disabled="!form.realIp" @click="useCurrentIP">当前IP</button>
+          </div>
+        </div>
+      </div>
+      <div v-if="form.bindExitIP" class="session-hint">
+        <div>启动后会获取真实出口 IP（优先 IPv4）并与绑定值比对，不一致时自动停用该节点。</div>
+        <div>用于对端按 IP 做白名单的场景：机场换了落地 IP 后节点仍连得通，但请求会被对端拒绝。</div>
       </div>
     </div>
 
@@ -421,6 +446,12 @@ async function handleRecommendPort() {
     appStore.showToast('获取推荐端口失败', 'error')
   }
 }
+
+// 把节点当前的真实出口 IP 填进绑定框。
+// 用户无法在启动前预知机场分配的 IP，先启动看到 IP 再固定是主要用法。
+function useCurrentIP() {
+  form.value.boundExitIP = form.value.realIp || ''
+}
 </script>
 
 <script>
@@ -428,6 +459,9 @@ async function handleRecommendPort() {
 export function defaultNodeForm() {
   return {
     alias: '',
+    remark: '',
+    bindExitIP: false,
+    boundExitIP: '',
     localType: 'mixed',
     localPort: 0,
     protocol: 'shadowsocks',
@@ -490,6 +524,11 @@ export function normalizeTransport(f) {
   if (s.network === 'ws') { if (!s.ws) s.ws = {} } else { s.ws = null }
   if (s.network === 'grpc') { if (!s.grpc) s.grpc = {} } else { s.grpc = null }
   if (s.network === 'h2') { if (!s.h2) s.h2 = {} } else { s.h2 = null }
+
+  // 出口 IP 绑定：关掉绑定时一并清空绑定值，
+  // 否则下次再勾选会沿用一个早已过期的旧 IP，一启动就被判为不一致
+  f.boundExitIP = (f.boundExitIP || '').trim()
+  if (!f.bindExitIP) f.boundExitIP = ''
 }
 </script>
 

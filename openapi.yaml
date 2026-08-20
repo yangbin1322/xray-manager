@@ -539,6 +539,19 @@ components:
       required: [protocol, serverAddr, serverPort, settings]
       properties:
         alias: { type: string }
+        remark: { type: string, description: 用户备注。与 alias 不同，订阅更新不会覆盖它 }
+        bindExitIP:
+          type: boolean
+          description: |
+            是否绑定固定出口 IP。启用后每次启动都会探测真实出口 IP 并与
+            boundExitIP 比对，不一致就自动停用该节点。
+            用于对端按 IP 做白名单的场景：机场换了落地 IP 后节点仍连得通，
+            但请求会被对端拒绝，而用户无从察觉。
+        boundExitIP:
+          type: string
+          description: |
+            绑定的出口 IP，必须是 IPv4。留空且 bindExitIP 为 true 时，
+            以首次成功探测到的真实 IP 为准（用户无法在启动前预知机场分配的 IP）。
         localType: { type: string, default: mixed }
         localPort: { type: integer, minimum: 0, maximum: 65535, description: 0 表示自动分配 }
         protocol: { type: string, enum: [shadowsocks, vmess, vless, trojan, http, socks, hysteria2, tuic] }

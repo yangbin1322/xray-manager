@@ -90,6 +90,7 @@ export const useRulesStore = defineStore('rules', () => {
       const kw = searchKeyword.value.toLowerCase()
       result = result.filter(r =>
         (r.alias && r.alias.toLowerCase().includes(kw)) ||
+        (r.remark && r.remark.toLowerCase().includes(kw)) ||
         (r.serverAddr && r.serverAddr.toLowerCase().includes(kw)) ||
         (r.protocol && r.protocol.toLowerCase().includes(kw)) ||
         (r.groupName && r.groupName.toLowerCase().includes(kw)) ||

@@ -1102,6 +1102,44 @@ export class ProxyRule {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Remark 用户备注，与订阅下发的 Alias 相互独立。
+             * 
+             * Alias 每次订阅更新都会被机场覆盖，用户写在上面的东西留不住；
+             * 备注只由用户填写，订阅更新永不触碰。
+             * @member
+             * @type {string | undefined}
+             */
+            this["remark"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * BindExitIP 为 true 时启用出口 IP 绑定：
+             * 启动后探测到的真实出口 IP 与 BoundExitIP 不一致就自动停用该节点。
+             * 
+             * 用于只放行固定来源 IP 的服务：机场换了落地 IP 后节点仍然连得通，
+             * 但对端会拒绝——此时"能连上"反而是最坏的情况，外部程序还在往这个
+             * 本地端口发流量，请求却已从另一个 IP 出去，用户完全无感。
+             * 未启用绑定的节点完全不受影响，保持原有行为。
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["bindExitIP"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * BoundExitIP 绑定的固定出口 IP（IPv4）。
+             * 
+             * 为空且 BindExitIP 为 true 时，首次成功探测到的真实 IP 会被自动写入，
+             * 之后再变化就停用。用户无法在启动前预知机场分配的 IP，
+             * 强制手填会让这个功能在首次启动前根本没法用。也支持手工填写与
+             * 「以当前IP为准」按钮。
+             * @member
+             * @type {string | undefined}
+             */
+            this["boundExitIP"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * BypassPreProxy 为 true 时该节点直连出站，不经全局前置代理。
              * 
              * 用于前置代理本身不可达、或该节点必须从本机 IP 出去的场景
@@ -1260,13 +1298,13 @@ export class ProxyRule {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType2;
-        const $$createField21_0 = $$createType1;
+        const $$createField24_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField7_0($$parsedSource["settings"]);
         }
         if ("traffic" in $$parsedSource) {
-            $$parsedSource["traffic"] = $$createField21_0($$parsedSource["traffic"]);
+            $$parsedSource["traffic"] = $$createField24_0($$parsedSource["traffic"]);
         }
         return new ProxyRule(/** @type {Partial<ProxyRule>} */($$parsedSource));
     }

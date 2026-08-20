@@ -73,6 +73,18 @@ export function AddSubscription(name, url, autoUpdate, updateInterval, updateMod
 }
 
 /**
+ * BindCurrentIP 把节点当前的真实出口 IP 固定为绑定 IP。
+ * 
+ * 用户无法在启动前预知机场分配的 IP，因此主要用法是：先启动、看到真实 IP、
+ * 确认可用后再一键固定下来。之后出口 IP 再变就会自动停用该节点。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function BindCurrentIP(id) {
+    return $Call.ByID(85201568, id);
+}
+
+/**
  * CheckAllNodesHealth 检测全部节点健康状态
  * @returns {$CancellablePromise<void>}
  */
@@ -791,6 +803,15 @@ export function TestRuleSpeed(ruleID) {
  */
 export function TestSelectedRulesSpeed(ruleIDs) {
     return $Call.ByID(2689257396, ruleIDs);
+}
+
+/**
+ * UnbindIP 解除节点的出口 IP 绑定，该节点不再参与 IP 变化检查。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function UnbindIP(id) {
+    return $Call.ByID(2086912226, id);
 }
 
 /**

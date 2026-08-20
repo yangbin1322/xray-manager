@@ -545,3 +545,26 @@ func TestHTTPAPIDeleteNodesRejectsEmpty(t *testing.T) {
 		t.Fatalf("不应触发删除，实际 %v", service.deletedNodeIDs)
 	}
 }
+
+// 新增的节点字段必须写进 OpenAPI，否则 REST 调用方无从得知它们的存在
+func TestOpenAPIDocumentsNodeUserFields(t *testing.T) {
+	var document struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]any `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(openAPISpec, &document); err != nil {
+		t.Fatalf("invalid OpenAPI YAML: %v", err)
+	}
+	props := document.Components.Schemas["NodeInput"].Properties
+	if props == nil {
+		t.Fatal("NodeInput schema 缺失或没有 properties")
+	}
+	for _, field := range []string{"remark", "bindExitIP", "boundExitIP"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("NodeInput 未文档化字段 %s", field)
+		}
+	}
+}

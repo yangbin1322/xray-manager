@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -938,6 +939,10 @@ func (a *MyService) applyRuleUpdateLocked(index int, updatedRule models.ProxyRul
 	updatedRule.DownloadSpeed = orig.DownloadSpeed
 	updatedRule.LastTestTime = orig.LastTestTime
 	updatedRule.TestStatus = orig.TestStatus
+
+	// Remark / BindExitIP / BoundExitIP 刻意不在此保留：它们是用户可编辑字段，
+	// 应以本次提交的值为准。订阅更新走 handleSubscriptionUpdate，不经过这里，
+	// 那条路径上它们是被保留的。
 
 	// 保留订阅相关字段（如果是订阅节点）
 	if orig.Source == "subscription" {
@@ -3157,6 +3162,10 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 		}
 	}
 
+	// 第二轮匹配：把"只改了别名"的节点认领回原有记录，
+	// 否则它们会被当成"旧的失效 + 新的加入"，备注与本地端口随之丢失
+	a.carryOverRenamedRulesLocked(subID, newRules, &added, oldRules)
+
 	ids := generateUniqueRuleIDs(a.config.Rules, len(added))
 	ports := a.allocateLocalPorts(len(added))
 	if len(ports) < len(added) {
@@ -3210,6 +3219,90 @@ func (a *MyService) handleSubscriptionUpdate(subID string, newRules []models.Pro
 	}
 
 	return a.saveConfig()
+}
+
+// carryOverRenamedRulesLocked 认领"只是被机场改了名"的订阅节点。
+//
+// 机场常在两次拉取之间改名（附上剩余流量/到期日、重排序号）。别名是
+// SubscriptionIdentity 的第一个字段，名字一变完整标识就对不上：旧记录被当成
+// 失效节点删掉，同一个节点又以新 ID、新分配的本地端口重新插入——用户的备注、
+// 绑定的出口 IP、以及交给外部程序的本地端口全部丢失。
+//
+// 这里对第一轮没配上的两侧再按"去掉别名的标识"配一次，但只在两侧都唯一时才认：
+// 同一 CDN IP 下若有多个连 path/SNI 都相同、仅靠别名区分的节点，按地址贸然配对
+// 会把 A 的备注挪到 B 上。宁可退回原有的删除+新增，也不能错配。
+//
+// 就地收窄 added 与 oldRules，调用方后续的新增分配与失效清理会自动跳过被认领的项。
+// 需已持有 a.mu。
+func (a *MyService) carryOverRenamedRulesLocked(subID string, newRules []models.ProxyRule, added *[]int, oldRules map[string][]int) {
+	if len(*added) == 0 || len(oldRules) == 0 {
+		return
+	}
+
+	// 旧记录侧：按无别名标识归桶，同时记下每条记录原来的完整标识，
+	// 便于认领后从 oldRules 里精确摘除（认领会改写 Alias，之后就算不出原标识了）
+	type oldEntry struct {
+		idx      int
+		identity string
+	}
+	oldByEndpoint := make(map[string][]oldEntry, len(oldRules))
+	for identity, idxs := range oldRules {
+		for _, idx := range idxs {
+			endpoint := a.config.Rules[idx].SubscriptionIdentityWithoutAlias()
+			oldByEndpoint[endpoint] = append(oldByEndpoint[endpoint], oldEntry{idx: idx, identity: identity})
+		}
+	}
+
+	// 新条目侧同理：本次订阅内出现两条同标识的，同样无法确定对应关系
+	newByEndpoint := make(map[string][]int, len(*added))
+	for _, i := range *added {
+		endpoint := newRules[i].SubscriptionIdentityWithoutAlias()
+		newByEndpoint[endpoint] = append(newByEndpoint[endpoint], i)
+	}
+
+	claimed := make(map[int]bool, len(*added))
+	for endpoint, newIdxs := range newByEndpoint {
+		oldEntries := oldByEndpoint[endpoint]
+		if len(newIdxs) != 1 || len(oldEntries) != 1 {
+			continue // 任一侧不唯一：无法确定对应关系，退回删除+新增
+		}
+		idx, i := oldEntries[0].idx, newIdxs[0]
+
+		// 与第一轮命中时做同样的事：只更新机场可控的字段。
+		// ID / LocalPort / Enabled / 流量 / 健康 / 备注 / 出口 IP 绑定全部原样保留。
+		a.config.Rules[idx].Alias = newRules[i].Alias
+		a.config.Rules[idx].Settings = newRules[i].Settings
+		a.config.Rules[idx].SubscriptionID = subID
+
+		claimed[i] = true
+
+		// 从 oldRules 里摘掉，避免被后面的清理逻辑当作失效节点删除
+		identity := oldEntries[0].identity
+		rest := oldRules[identity][:0]
+		for _, old := range oldRules[identity] {
+			if old != idx {
+				rest = append(rest, old)
+			}
+		}
+		if len(rest) == 0 {
+			delete(oldRules, identity)
+		} else {
+			oldRules[identity] = rest
+		}
+	}
+
+	if len(claimed) == 0 {
+		return
+	}
+
+	kept := (*added)[:0]
+	for _, i := range *added {
+		if !claimed[i] {
+			kept = append(kept, i)
+		}
+	}
+	*added = kept
+	a.log(fmt.Sprintf("[订阅] %d 个节点仅别名变化，已保留原有本地端口与备注", len(claimed)))
 }
 
 // ==================== 分组相关 API ====================
@@ -5251,18 +5344,126 @@ func accumulateTraffic(t *models.TrafficStats, deltaUp, deltaDown int64, today s
 	t.TotalDown += deltaDown
 }
 
+// BindCurrentIP 把节点当前的真实出口 IP 固定为绑定 IP。
+//
+// 用户无法在启动前预知机场分配的 IP，因此主要用法是：先启动、看到真实 IP、
+// 确认可用后再一键固定下来。之后出口 IP 再变就会自动停用该节点。
+func (a *MyService) BindCurrentIP(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if rule.ID != id {
+			continue
+		}
+		ip := strings.TrimSpace(rule.RealIP)
+		if ip == "" {
+			return fmt.Errorf("节点「%s」尚未获取到真实出口 IP，请先启动并等待探测完成", rule.Alias)
+		}
+		if !isIPv4Addr(ip) {
+			return fmt.Errorf("节点「%s」当前出口 IP「%s」不是 IPv4，无法绑定", rule.Alias, ip)
+		}
+		rule.BindExitIP = true
+		rule.BoundExitIP = ip
+		if err := a.saveConfig(); err != nil {
+			return err
+		}
+		a.log(fmt.Sprintf("[绑定] 节点 %s 已绑定出口 IP %s", rule.Alias, ip))
+		a.emitEvent("loadRules", nil)
+		return nil
+	}
+	return fmt.Errorf("规则 %s 不存在", id)
+}
+
+// UnbindIP 解除节点的出口 IP 绑定，该节点不再参与 IP 变化检查。
+func (a *MyService) UnbindIP(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for i := range a.config.Rules {
+		rule := &a.config.Rules[i]
+		if rule.ID != id {
+			continue
+		}
+		rule.BindExitIP = false
+		rule.BoundExitIP = ""
+		if err := a.saveConfig(); err != nil {
+			return err
+		}
+		a.log(fmt.Sprintf("[绑定] 节点 %s 已解除出口 IP 绑定", rule.Alias))
+		a.emitEvent("loadRules", nil)
+		return nil
+	}
+	return fmt.Errorf("规则 %s 不存在", id)
+}
+
+// isIPv4Addr 判断字符串是不是 IPv4 地址。
+// 与 internal/process 里的同名判断保持一致：绑定只认 IPv4。
+func isIPv4Addr(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	return ip != nil && ip.To4() != nil
+}
+
+// sameExitIP 比较两个出口 IP 是否等价。
+//
+// 用 net.ParseIP 而不是直接比字符串：探测服务返回的写法可能不同
+// （前后空格、IPv4-mapped 的 ::ffff:1.2.3.4），字面量比较会把同一个 IP
+// 误判成"变了"，进而把好端端的节点停掉。
+func sameExitIP(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	ipA, ipB := net.ParseIP(a), net.ParseIP(b)
+	if ipA == nil || ipB == nil {
+		return a == b
+	}
+	return ipA.Equal(ipB)
+}
+
 // handleRealIP 处理成功获取真实IP的回调：按 localPort 回填到对应节点
 // （普通节点/故障转移/链式代理），并清除失败原因。
 func (a *MyService) handleRealIP(localPort int, ip string) {
 	a.mu.Lock()
 	for i := range a.config.Rules {
 		if a.config.Rules[i].LocalPort == localPort {
-			a.config.Rules[i].RealIP = ip
-			a.config.Rules[i].LastError = ""
+			rule := &a.config.Rules[i]
+
+			// 出口 IP 绑定：只有显式开启的节点参与，其余节点行为完全不变
+			if rule.BindExitIP {
+				if rule.BoundExitIP == "" {
+					// 首次学习：把这次探到的 IP 记为基准，之后再变就停用。
+					// 用户无法在启动前预知机场分配的 IP，只能以首次为准。
+					rule.BoundExitIP = ip
+					alias := rule.Alias
+					rule.RealIP = ip
+					rule.LastError = ""
+					// 基准要落盘，否则重启后又变成"首次"，绑定形同虚设。
+					// 常规的 IP 刷新不存盘（上千节点每次探测都写整份配置太重），
+					// 只有这一次学习需要。
+					_ = a.saveConfig()
+					a.mu.Unlock()
+					a.log(fmt.Sprintf("[绑定] 节点 %s 已绑定出口 IP %s", alias, ip))
+					a.emitEvent("loadRules", nil)
+					return
+				}
+				if !sameExitIP(rule.BoundExitIP, ip) {
+					// 交给与"启动后不通"相同的停用路径处理。
+					// 实际探到的 IP 写进原因文案里：handleNodeFailed 会清空 RealIP，
+					// 不写在文案里用户就无从知道漂到了哪个 IP。
+					reason := fmt.Sprintf("出口 IP 变更（绑定 %s，实际 %s）", rule.BoundExitIP, ip)
+					// 必须先放锁：handleNodeFailed 自己会加锁，
+					// 且会先在锁外停进程
+					a.mu.Unlock()
+					a.handleNodeFailed(localPort, reason)
+					return
+				}
+			}
+
+			rule.RealIP = ip
+			rule.LastError = ""
 			a.mu.Unlock()
 			// 与故障转移/链式分支一致地通知前端刷新，
 			// 否则真实 IP 已经拿到却不会显示在界面上
-			a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+			a.emitEvent("loadRules", nil)
 			return
 		}
 	}
@@ -5343,9 +5544,9 @@ func (a *MyService) handleNodeFailed(localPort int, reason string) {
 
 	if matched {
 		a.log(fmt.Sprintf("[系统] 节点 %s 启动后不通（%s），已自动停用", alias, reason))
-		a.app.Event.EmitEvent(&application.CustomEvent{Name: "nodeFailed", Data: map[string]string{"alias": alias, "reason": reason}})
+		a.emitEvent("nodeFailed", map[string]string{"alias": alias, "reason": reason})
 	}
-	a.app.Event.EmitEvent(&application.CustomEvent{Name: "loadRules"})
+	a.emitEvent("loadRules", nil)
 }
 
 // handleTraffic 处理进程管理器上报的流量增量。
