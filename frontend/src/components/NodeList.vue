@@ -645,20 +645,69 @@ async function handleStart(rule) {
   if (startingIds.value.has(rule.id)) return
   markStarting(rule.id, true)
   try {
-    if (rule._nodeType === 'lb') {
-      await api.startLoadBalancer(rule.id)
-    } else if (rule._nodeType === 'chain') {
-      await api.startChainProxy(rule.id)
-    } else if (rule._nodeType === 'relay') {
-      await api.startSessionRelay(rule.id)
-    } else {
-      await rulesStore.startRule(rule.id)
-    }
+    await startNode(rule)
     await rulesStore.loadRules()
   } catch (e) {
+    // 端口被别的程序占着时，光报「启动失败」用户无从下手：
+    // 查出占用者，问一句要不要结束它，愿意就结束并自动重试
+    if (await offerKillPortOccupants(rule, e)) {
+      try {
+        await startNode(rule)
+        await rulesStore.loadRules()
+        appStore.showToast(`「${rule.alias}」已启动`, 'success')
+        return
+      } catch (retryErr) {
+        appStore.showToast(`启动失败: ${retryErr}`, 'error')
+        return
+      }
+    }
     appStore.showToast(`启动失败: ${e}`, 'error')
   } finally {
     markStarting(rule.id, false)
+  }
+}
+
+function startNode(rule) {
+  if (rule._nodeType === 'lb') return api.startLoadBalancer(rule.id)
+  if (rule._nodeType === 'chain') return api.startChainProxy(rule.id)
+  if (rule._nodeType === 'relay') return api.startSessionRelay(rule.id)
+  return rulesStore.startRule(rule.id)
+}
+
+// 启动失败疑似端口被占用时，询问用户是否结束占用进程。
+// 返回 true 表示已结束、调用方可以重试启动。
+async function offerKillPortOccupants(rule, err) {
+  if (!/端口|port/i.test(String(err))) return false
+
+  let info
+  try {
+    info = await api.inspectNodePort(rule.id)
+  } catch {
+    return false // 查不到占用信息就按普通失败处理
+  }
+  const killable = (info?.occupants || []).filter(o => o.killable)
+  if (killable.length === 0) {
+    // 端口空着（失败另有原因），或占用者不能安全终止（系统进程/权限不足）
+    const blocked = (info?.occupants || []).find(o => o.reason)
+    if (blocked) {
+      appStore.showToast(`端口 ${info.port} 被 ${blocked.name || '未知进程'} 占用：${blocked.reason}`, 'warning')
+    }
+    return false
+  }
+
+  const list = killable.map(o => `  · ${o.name || '未知进程'} (PID: ${o.pid})${o.self ? '（本客户端遗留的内核进程）' : ''}`).join('\n')
+  const ok = await appStore.confirmDialog(
+    `节点「${rule.alias}」的本地端口 ${info.port} 已被以下进程占用：\n\n${list}\n\n结束这些进程后重新启动该节点？`,
+    { title: '端口被占用', confirmText: '结束并启动', cancelText: '取消' },
+  )
+  if (!ok) return false
+
+  try {
+    await api.killPortOccupants(Number(info.port), killable.map(o => o.pid))
+    return true
+  } catch (killErr) {
+    appStore.showToast(`结束进程失败: ${killErr}`, 'error')
+    return false
   }
 }
 

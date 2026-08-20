@@ -18,6 +18,10 @@ import * as logger$0 from "./internal/logger/models.js";
 // @ts-ignore: Unused imports
 import * as models$0 from "./internal/models/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
 /**
  * AddChainProxy 添加链式代理
  * @param {models$0.ChainProxy} chain
@@ -508,6 +512,45 @@ export function ImportShareLinks(text, groupID, newGroupName) {
 }
 
 /**
+ * InspectNodePort 查看某个节点的本地端口被谁占用。
+ * 
+ * 启动失败时界面调用它来判断能否给出「结束占用进程」的选项：
+ * 端口空闲返回空列表（多半是启动失败于别的原因）。
+ * @param {string} id
+ * @returns {$CancellablePromise<$models.PortOccupantInfo>}
+ */
+export function InspectNodePort(id) {
+    return $Call.ByID(2514630342, id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType27($result);
+    }));
+}
+
+/**
+ * InspectPort 查看指定端口被谁占用。
+ * @param {number} port
+ * @returns {$CancellablePromise<$models.PortOccupantInfo>}
+ */
+export function InspectPort(port) {
+    return $Call.ByID(1062223054, port).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType27($result);
+    }));
+}
+
+/**
+ * KillPortOccupants 结束占用指定端口的进程，随后等待端口释放。
+ * 
+ * pids 必须由调用方显式给出（来自 InspectNodePort 的返回），
+ * 不接受「结束占用这个端口的一切」这种模糊指令：探测与终止之间端口可能易主，
+ * 照着旧快照杀会误伤无关进程。
+ * @param {number} port
+ * @param {number[]} pids
+ * @returns {$CancellablePromise<void>}
+ */
+export function KillPortOccupants(port, pids) {
+    return $Call.ByID(4000052320, port, pids);
+}
+
+/**
  * OpenReleasePage 打开最新 Release 页面
  * @returns {$CancellablePromise<void>}
  */
@@ -909,3 +952,4 @@ const $$createType23 = models$0.ImportResult.createFrom;
 const $$createType24 = $Create.Nullable($$createType23);
 const $$createType25 = models$0.ImportShareResult.createFrom;
 const $$createType26 = $Create.Nullable($$createType25);
+const $$createType27 = $models.PortOccupantInfo.createFrom;

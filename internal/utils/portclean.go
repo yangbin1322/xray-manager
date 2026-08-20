@@ -7,6 +7,7 @@ import (
 
 // EnsurePortFree 确保端口未被占用。
 // 无法证明占用进程属于当前实例时绝不终止进程，避免多客户端之间互相误杀。
+// 界面拿到这个错误后可再调 InspectPortOccupants 询问用户是否结束占用进程。
 // logFunc 可为 nil。
 func EnsurePortFree(port int, logFunc func(string)) error {
 	// 快速路径：端口本就空闲（绝大多数情况），无需 fork netstat 查 PID
@@ -19,12 +20,12 @@ func EnsurePortFree(port int, logFunc func(string)) error {
 		return nil
 	}
 
-	if len(pids) > 0 {
-		pid := pids[0]
-		name := GetProcessName(pid)
-		return fmt.Errorf("端口 %d 已被占用 (PID:%d, 进程:%s)，可能属于其他客户端，请更换端口", port, pid, name)
+	pid := pids[0]
+	name := GetProcessName(pid)
+	if name == "" {
+		name = "未知进程"
 	}
-	return fmt.Errorf("端口 %d 已被占用，请更换端口", port)
+	return fmt.Errorf("端口 %d 已被 %s (PID:%d) 占用", port, name, pid)
 }
 
 // WaitPortReleased 等待端口释放，超时后强制终止残留的内核进程并再次确认。

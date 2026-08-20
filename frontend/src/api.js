@@ -49,6 +49,16 @@ export async function unbindIP(id) {
   return await MyService.UnbindIP(id)
 }
 
+// 查看节点本地端口被哪些进程占用
+export async function inspectNodePort(id) {
+  return await MyService.InspectNodePort(id)
+}
+
+// 结束占用指定端口的进程（pids 必须来自 inspectNodePort 的返回）
+export async function killPortOccupants(port, pids) {
+  return await MyService.KillPortOccupants(port, pids)
+}
+
 // 批量启动/停止节点（后端并发处理，只保存一次配置）
 export async function startNodes(ids) {
   return await MyService.StartNodes(ids)

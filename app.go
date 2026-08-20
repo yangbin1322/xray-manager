@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2501,6 +2502,99 @@ func (a *MyService) CheckPortAvailable(port int) bool {
 		return true
 	}
 	return utils.CheckPortAvailable(port)
+}
+
+// PortOccupantInfo 端口占用情况，供界面询问用户是否结束占用进程。
+type PortOccupantInfo struct {
+	Port      string               `json:"port"`      // 字符串以避免前端大整数精度问题，实际是端口号
+	Occupants []utils.PortOccupant `json:"occupants"` // 占用该端口的进程
+	Killable  bool                 `json:"killable"`  // 是否有可终止的进程
+}
+
+// InspectNodePort 查看某个节点的本地端口被谁占用。
+//
+// 启动失败时界面调用它来判断能否给出「结束占用进程」的选项：
+// 端口空闲返回空列表（多半是启动失败于别的原因）。
+func (a *MyService) InspectNodePort(id string) (PortOccupantInfo, error) {
+	a.mu.RLock()
+	port := 0
+	for i := range a.config.Rules {
+		if a.config.Rules[i].ID == id {
+			port = a.config.Rules[i].LocalPort
+			break
+		}
+	}
+	if port == 0 {
+		for i := range a.config.LoadBalancers {
+			if a.config.LoadBalancers[i].ID == id {
+				port = a.config.LoadBalancers[i].LocalPort
+				break
+			}
+		}
+	}
+	if port == 0 {
+		for i := range a.config.ChainProxies {
+			if a.config.ChainProxies[i].ID == id {
+				port = a.config.ChainProxies[i].LocalPort
+				break
+			}
+		}
+	}
+	a.mu.RUnlock()
+
+	if port <= 0 {
+		return PortOccupantInfo{}, fmt.Errorf("节点 %s 不存在或未分配本地端口", id)
+	}
+	return a.inspectPort(port), nil
+}
+
+// InspectPort 查看指定端口被谁占用。
+func (a *MyService) InspectPort(port int) PortOccupantInfo {
+	return a.inspectPort(port)
+}
+
+func (a *MyService) inspectPort(port int) PortOccupantInfo {
+	occupants := utils.InspectPortOccupants(port)
+	info := PortOccupantInfo{
+		Port:      strconv.Itoa(port),
+		Occupants: occupants,
+	}
+	for _, occ := range occupants {
+		if occ.Killable {
+			info.Killable = true
+			break
+		}
+	}
+	return info
+}
+
+// KillPortOccupants 结束占用指定端口的进程，随后等待端口释放。
+//
+// pids 必须由调用方显式给出（来自 InspectNodePort 的返回），
+// 不接受「结束占用这个端口的一切」这种模糊指令：探测与终止之间端口可能易主，
+// 照着旧快照杀会误伤无关进程。
+func (a *MyService) KillPortOccupants(port int, pids []int) error {
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("端口 %d 无效", port)
+	}
+	killed, err := utils.KillPortOccupants(port, pids, a.log)
+	if len(killed) == 0 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("没有可结束的进程（可能已经退出，或需要管理员权限）")
+	}
+
+	// 进程退出到端口真正释放之间有延迟，直接返回会让用户马上重试又失败
+	utils.WaitPortReleased(port, 3*time.Second, a.log)
+
+	names := make([]string, 0, len(killed))
+	for _, occ := range killed {
+		names = append(names, fmt.Sprintf("%s(PID:%d)", occ.Name, occ.PID))
+	}
+	a.log(fmt.Sprintf("[端口清理] 端口 %d 已释放，结束了 %s", port, strings.Join(names, "、")))
+	a.emitEvent("loadRules", nil)
+	return err
 }
 
 // RecommendPort 推荐可用端口（默认从 11000 起）

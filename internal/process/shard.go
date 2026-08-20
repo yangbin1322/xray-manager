@@ -92,9 +92,16 @@ type PortUnavailableError struct {
 	NodeID string
 	Alias  string
 	Port   int
+
+	// Occupant 占用该端口的进程描述（如 "Chrome (PID:1234)"），取不到时为空。
+	// 界面据此提示用户是否结束该进程——只说「无法绑定」用户无从下手。
+	Occupant string
 }
 
 func (e *PortUnavailableError) Error() string {
+	if e.Occupant != "" {
+		return fmt.Sprintf("节点「%s」的本地端口 %d 已被 %s 占用，已跳过", e.Alias, e.Port, e.Occupant)
+	}
 	return fmt.Sprintf("节点「%s」的本地端口 %d 无法绑定（可能被其他程序占用，"+
 		"或落在系统保留端口范围内），已跳过", e.Alias, e.Port)
 }
@@ -115,9 +122,26 @@ func filterBindablePorts(nodes []*models.ProxyRule) (usable []*models.ProxyRule,
 		}
 		rejected = append(rejected, &PortUnavailableError{
 			NodeID: node.ID, Alias: node.Alias, Port: node.LocalPort,
+			// 只对绑不上的节点查占用者：GetPortPIDs 走的是带缓存的全表，
+			// 一批里查多少个都只付一次 netstat 的代价
+			Occupant: describePortOccupant(node.LocalPort),
 		})
 	}
 	return usable, rejected
+}
+
+// describePortOccupant 返回占用该端口的进程描述，如 "Chrome (PID:1234)"。
+// 查不到（端口是被系统保留而非被进程监听、或权限不足）时返回空串。
+func describePortOccupant(port int) string {
+	pids := utils.GetPortPIDs(port)
+	if len(pids) == 0 {
+		return ""
+	}
+	name := utils.GetProcessName(pids[0])
+	if name == "" {
+		name = "未知进程"
+	}
+	return fmt.Sprintf("%s (PID:%d)", name, pids[0])
 }
 
 // maxLoggedSkipReasons 单条日志里最多列出的跳过原因条数。
