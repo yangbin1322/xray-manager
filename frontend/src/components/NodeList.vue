@@ -221,12 +221,12 @@
             <button v-if="rule._nodeType === 'lb'" class="btn-action-sm" @click="$emit('editLB', rule)">编辑</button>
             <button v-if="rule._nodeType === 'chain'" class="btn-action-sm" @click="$emit('editChain', rule)">编辑</button>
             <button v-if="rule._nodeType === 'relay'" class="btn-action-sm" @click="$emit('editRelay', rule)">编辑</button>
-            <!-- 会话代理的出口 IP 由客户端用户名决定，统一测速/检测没有意义 -->
-            <template v-if="rule._nodeType !== 'relay'">
-              <button class="btn-action-sm btn-test" @click="handleTest(rule)">测速</button>
-              <button class="btn-action-sm btn-health" @click="handleHealthCheck(rule)">检测</button>
-            </template>
-            <button class="btn-action-sm btn-del" @click="handleDelete(rule)">删除</button>
+            <!-- 会话代理的出口 IP 由客户端用户名决定，统一测速没有意义 -->
+            <button
+              v-if="rule._nodeType !== 'relay'"
+              class="btn-action-sm btn-test"
+              @click="handleTest(rule)"
+            >测速</button>
           </td>
         </tr>
         <tr v-if="bottomPadding > 0" class="v-spacer" :style="{ height: bottomPadding + 'px' }"></tr>
@@ -615,20 +615,6 @@ async function copyLocalProxy(rule) {
   }
 }
 
-async function handleHealthCheck(rule) {
-  // 故障转移/链式代理经本地代理端口检测，需先启动
-  if (rule._nodeType !== 'rule' && !rule.enabled) {
-    appStore.showToast(`请先启动「${rule.alias}」再检测`, 'warning')
-    return
-  }
-  try {
-    await api.checkNodeHealth(rule.id)
-    appStore.showToast(`正在检测: ${rule.alias}`, 'info')
-  } catch (e) {
-    appStore.showToast(`检测失败: ${e}`, 'error')
-  }
-}
-
 function statusClass(rule) {
   // 已启动但连通性还没验证完：不能显示成「运行中」，
   // 否则用户会以为节点已经可用，而它可能几秒后就被判定不通并自动停用
@@ -710,31 +696,6 @@ async function handleTest(rule) {
     appStore.showToast(`正在测速: ${rule.alias}`, 'info')
   } catch (e) {
     appStore.showToast(`测速失败: ${e}`, 'error')
-  }
-}
-
-const typeLabels = { lb: '故障转移', chain: '链式代理', relay: '动态会话代理' }
-
-async function handleDelete(rule) {
-  const typeLabel = typeLabels[rule._nodeType] || '规则'
-  const ok = await appStore.confirmDialog(`确定要删除${typeLabel}「${rule.alias}」吗？`, {
-    title: `删除${typeLabel}`, confirmText: '删除',
-  })
-  if (!ok) return
-  try {
-    if (rule._nodeType === 'lb') {
-      await api.deleteLoadBalancer(rule.id)
-    } else if (rule._nodeType === 'chain') {
-      await api.deleteChainProxy(rule.id)
-    } else if (rule._nodeType === 'relay') {
-      await api.deleteSessionRelay(rule.id)
-    } else {
-      await api.deleteRule(rule.id)
-    }
-    rulesStore.deselect(rule.id)
-    await rulesStore.loadRules()
-  } catch (e) {
-    appStore.showToast(`删除失败: ${e}`, 'error')
   }
 }
 </script>
@@ -847,11 +808,12 @@ async function handleDelete(rule) {
 .col-traffic-total { width: 86px; }
 .ip-error { color: #e74c3c; font-size: 11px; }
 .col-status { width: 36px; text-align: center; }
-/* 五个按钮（启停/编辑/测速/检测/删除）各约 47px，合计约 235px。
-   宽度给不够时最后的「删除」会被挤成省略号，因此按实际内容留足。
-   这里放不下第六个按钮：新增的单节点操作请放到它自己的列里做成可点击单元格
-   （参考本地端口列的复制、绑定 IP 列的绑定/解绑），不要再往操作列里塞。 */
-.col-actions { width: 246px; }
+/* 三个按钮（启停/编辑/测速）各约 47px，合计约 141px，留点余量。
+   检测与删除已移除——两者在工具栏都有批量入口（勾选后「健康检测」「删除」），
+   逐行放一份既挤又容易误删。
+   这列宽度是按按钮个数算死的，新增的单节点操作请放到它自己的列里做成
+   可点击单元格（参考本地端口列的复制、绑定 IP 列的绑定/解绑），不要往这里塞。 */
+.col-actions { width: 152px; }
 
 /* 操作列放的是按钮不是文本：td 上的 text-overflow 会把最后一个按钮
    截成省略号。这里取消截断，让按钮完整显示。 */
@@ -886,7 +848,6 @@ async function handleDelete(rule) {
 
 .traffic-speed { font-size: 11px; color: var(--text-primary); }
 .traffic-total { font-size: 11px; color: var(--text-secondary); }
-.btn-health { color: #16a085; border-color: #16a085; }
 /* 绑定 IP 列：内容是定长的 IPv4，给固定宽度即可 */
 .col-bound-ip { width: 120px; }
 /* 绑定列的三种状态都可点击，交互与本地端口列一致 */
@@ -1010,9 +971,6 @@ async function handleDelete(rule) {
 .btn-stop { color: #e74c3c; border-color: #e74c3c; }
 .btn-stop:hover { background: #e74c3c; color: #fff; }
 .btn-test { color: #3498db; border-color: #3498db; }
-/* 删除按钮直接用警示色：原来是灰色、只在 hover 时变红，看起来像被禁用了 */
-.btn-del { color: #e74c3c; border-color: rgba(231, 76, 60, 0.5); }
-.btn-del:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
 
 /* ===== 列显示设置 ===== */
 .col-config-btn {
