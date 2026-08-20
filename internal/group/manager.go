@@ -22,14 +22,20 @@ func NewManager(logFunc func(string)) *Manager {
 	}
 }
 
-// LoadGroups 加载分组
+// LoadGroups 加载分组。
+//
+// 存副本而不是 &groups[i]：调用方传进来的是 config.Groups 本身，
+// 上层删除分组时用 append 就地前移剩余元素，指向旧下标的指针会串到
+// 另一个分组头上——之后按 ID 改名就改到无关分组身上，
+// 界面表现为删完分组后左侧列表出现两个同名分组。
 func (m *Manager) LoadGroups(groups []models.Group) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.groups = make(map[string]*models.Group)
+	m.groups = make(map[string]*models.Group, len(groups))
 	for i := range groups {
-		m.groups[groups[i].ID] = &groups[i]
+		g := groups[i]
+		m.groups[g.ID] = &g
 	}
 
 	m.log(fmt.Sprintf("[分组] 加载了 %d 个分组", len(groups)))

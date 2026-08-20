@@ -208,6 +208,12 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 		a.groupManager.LoadGroups(a.config.Groups)
 
+		// 修复历史损坏：分组管理器曾持有 config.Groups 的内部指针，删除分组时
+		// 切片就地前移会让旧指针串到别的分组上，导致改名改错对象、
+		// 左侧列表出现两个同名分组。指针问题已在 LoadGroups 修掉，
+		// 但已经写进配置的错误名字不会自愈，这里按订阅名回正一次。
+		a.repairSubscriptionGroupNamesLocked()
+
 		if err := a.syncPortRegistryLocked(false); err != nil {
 			a.logError("同步全局端口注册表失败", err)
 			return err
@@ -3322,6 +3328,53 @@ func (a *MyService) CreateGroup(name, description string) error {
 }
 
 // GetGroups 获取所有分组
+
+// repairSubscriptionGroupNamesLocked 把订阅独占分组的名字回正为订阅名。
+//
+// 分组管理器此前持有 config.Groups 的内部指针，而删除分组时切片就地前移，
+// 旧指针会串到相邻分组上；之后按 ID 改名就改到了无关分组头上，并被写进配置
+// （界面表现为左侧列表出现两个同名分组）。指针问题已修，但存量配置里的
+// 错误名字不会自愈，启动时按订阅名回正一次。
+//
+// 只处理"被单个订阅独占"的分组：多订阅共用的分组名是用户自己起的，
+// 手动创建的分组同理，都不能拿订阅名去覆盖。需已持有 a.mu。
+func (a *MyService) repairSubscriptionGroupNamesLocked() {
+	if a.config == nil {
+		return
+	}
+	fixed := 0
+	for i := range a.config.Groups {
+		g := &a.config.Groups[i]
+		if g.Source != "subscription" {
+			continue
+		}
+		// 找出归属该分组的订阅；必须恰好一个，否则名字不由订阅决定
+		var owner *models.Subscription
+		count := 0
+		for j := range a.config.Subscriptions {
+			if a.config.Subscriptions[j].GroupID == g.ID {
+				owner = &a.config.Subscriptions[j]
+				count++
+			}
+		}
+		if count != 1 || owner.Name == "" || g.Name == owner.Name {
+			continue
+		}
+		a.log(fmt.Sprintf("[分组] 修正分组名：「%s」→「%s」", g.Name, owner.Name))
+		g.Name = owner.Name
+		for k := range a.config.Rules {
+			if a.config.Rules[k].GroupID == g.ID {
+				a.config.Rules[k].GroupName = owner.Name
+			}
+		}
+		fixed++
+	}
+	if fixed > 0 {
+		// 重新灌一次缓存，避免继续用着旧名字
+		a.groupManager.LoadGroups(a.config.Groups)
+	}
+}
+
 // findGroupLocked 按 ID 查找配置中的分组，找不到返回 nil。需已持有 a.mu。
 func (a *MyService) findGroupLocked(groupID string) *models.Group {
 	for i := range a.config.Groups {
@@ -3470,12 +3523,15 @@ func (a *MyService) DeleteGroup(groupID string) error {
 	if err := a.groupManager.DeleteGroup(groupID); err != nil {
 		return err
 	}
-	for i := range a.config.Groups {
-		if a.config.Groups[i].ID == groupID {
-			a.config.Groups = append(a.config.Groups[:i], a.config.Groups[i+1:]...)
-			break
+	// 重建切片而不是 append 就地前移：后者会让剩余元素在同一块底层数组里
+	// 整体挪位，任何还指向旧下标的引用都会串到别的分组上
+	newGroups := make([]models.Group, 0, len(a.config.Groups))
+	for _, group := range a.config.Groups {
+		if group.ID != groupID {
+			newGroups = append(newGroups, group)
 		}
 	}
+	a.config.Groups = newGroups
 	// 分组已删除，从前置代理的生效范围里摘掉，避免留下匹配不到的残留 ID
 	a.dropDeletedFromPreProxyScopeLocked(nil, map[string]bool{groupID: true})
 	a.syncShardPreProxyLocked()
