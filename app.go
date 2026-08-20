@@ -200,11 +200,7 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 			a.config.Update.AutoDownload = false
 		}
 
-		// 迁移旧配置：此前没有前置代理开关，「选了节点」就等于启用。
-		// 不补这一步，升级后已配置的前置代理会静默失效。
-		if a.config.PreProxyNodeID != "" && !a.config.PreProxyEnabled {
-			a.config.PreProxyEnabled = true
-		}
+		a.migrateLegacyPreProxyLocked()
 
 		a.groupManager.LoadGroups(a.config.Groups)
 
@@ -4587,10 +4583,30 @@ func (a *MyService) getPreProxyRuleLocked() *models.ProxyRule {
 	return nil
 }
 
+// migrateLegacyPreProxyLocked 兼容旧配置：老版本没有前置代理开关，
+// 「选了节点」就等于启用；不补这一步，升级后已配置的前置代理会静默失效。
+//
+// 只在字段缺失（nil）时补，不能看它是不是 false：用户明确取消勾选存下来的
+// 就是 false，若按 false 判断，每次重启都会把用户取消的勾选又打回去。
+// 需已持有 a.mu。
+func (a *MyService) migrateLegacyPreProxyLocked() {
+	if a.config == nil {
+		return
+	}
+	if a.config.PreProxyNodeID != "" && a.config.PreProxyEnabled == nil {
+		a.config.PreProxyEnabled = models.BoolPtr(true)
+	}
+}
+
 // preProxyEnabledLocked 前置代理是否启用。
-// 兼容旧配置：没有 PreProxyEnabled 字段的老配置，选了节点即视为启用。
+//
+// 兼容旧配置：没有 PreProxyEnabled 字段的老配置（nil），选了节点即视为启用。
+// 字段存在时一律以它为准——用户明确关掉的开关不能被"选了节点"这条规则盖过去。
 func (a *MyService) preProxyEnabledLocked() bool {
-	return a.config.PreProxyEnabled
+	if a.config.PreProxyEnabled == nil {
+		return a.config.PreProxyNodeID != ""
+	}
+	return *a.config.PreProxyEnabled
 }
 
 // preProxyNeededByLocked 这批节点里是否有需要经前置代理出站的。
@@ -4790,7 +4806,7 @@ func (a *MyService) GetPreProxy() models.PreProxyConfig {
 
 	cfg := models.PreProxyConfig{
 		NodeID:      a.config.PreProxyNodeID,
-		Enabled:     a.config.PreProxyEnabled,
+		Enabled:     a.preProxyEnabledLocked(),
 		GroupIDs:    append([]string(nil), a.config.PreProxyGroupIDs...),
 		ExcludedIDs: append([]string(nil), a.config.PreProxyExcludedIDs...),
 	}
@@ -4849,7 +4865,7 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 			return nil
 		}
 		a.config.PreProxyNodeID = ""
-		a.config.PreProxyEnabled = false
+		a.config.PreProxyEnabled = nil
 		a.config.PreProxyGroupIDs = nil
 		a.config.PreProxyExcludedIDs = nil
 		a.syncShardPreProxyLocked()
@@ -4871,7 +4887,10 @@ func (a *MyService) SetPreProxyConfig(cfg models.PreProxyConfig) error {
 	}
 
 	a.config.PreProxyNodeID = cfg.NodeID
-	a.config.PreProxyEnabled = cfg.Enabled
+	// 用户的选择要明确落盘（含 false），否则下次启动会被"选了节点即启用"的
+	// 旧配置迁移逻辑当成缺省值，把取消的勾选又打回去
+	enabled := cfg.Enabled
+	a.config.PreProxyEnabled = &enabled
 	a.config.PreProxyGroupIDs = append([]string(nil), cfg.GroupIDs...)
 	a.config.PreProxyExcludedIDs = append([]string(nil), cfg.ExcludedIDs...)
 	a.syncShardPreProxyLocked()

@@ -16,7 +16,7 @@ func scopeService(pre string, groups, excluded []string) *MyService {
 		},
 		Groups:              []models.Group{{ID: "g1"}, {ID: "g2"}},
 		PreProxyNodeID:      pre,
-		PreProxyEnabled:     pre != "",
+		PreProxyEnabled:     models.BoolPtr(pre != ""),
 		PreProxyGroupIDs:    groups,
 		PreProxyExcludedIDs: excluded,
 	}}
@@ -125,7 +125,7 @@ func TestDropDeletedFromPreProxyScope(t *testing.T) {
 // 关闭开关时前置代理不生效，但配置要保留下来
 func TestPreProxyDisabledByToggle(t *testing.T) {
 	s := scopeService("pre", []string{"g1"}, []string{"x"})
-	s.config.PreProxyEnabled = false
+	s.config.PreProxyEnabled = models.BoolPtr(false)
 
 	if s.preProxyAppliesToLocked(ruleByID(s, "a")) {
 		t.Error("no node should use the pre-proxy while the toggle is off")
@@ -222,7 +222,7 @@ func TestEnsurePreProxyRunningSkipsRunning(t *testing.T) {
 // 未启用前置代理时不做任何事
 func TestEnsurePreProxyRunningNoopWhenDisabled(t *testing.T) {
 	s := scopeService("chain1", nil, nil)
-	s.config.PreProxyEnabled = false
+	s.config.PreProxyEnabled = models.BoolPtr(false)
 	s.config.ChainProxies = []models.ChainProxy{
 		{ID: "chain1", Alias: "链式A", LocalPort: 12345, Enabled: false},
 	}
@@ -267,7 +267,7 @@ func TestPreProxyNotNeededByEmptyOrOutOfScopeBatch(t *testing.T) {
 // 前置代理停用时，即使节点在范围内也不需要拉起它
 func TestPreProxyNotNeededWhenDisabled(t *testing.T) {
 	s := scopeService("pre", nil, nil)
-	s.config.PreProxyEnabled = false
+	s.config.PreProxyEnabled = models.BoolPtr(false)
 
 	if s.preProxyNeededByLocked([]*models.ProxyRule{ruleByID(s, "a")}) {
 		t.Error("a disabled pre-proxy is never needed")

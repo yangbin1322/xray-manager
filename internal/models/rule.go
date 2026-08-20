@@ -178,6 +178,10 @@ func (r *ProxyRule) ValidateForXray() error {
 	return nil
 }
 
+// BoolPtr 返回指向该布尔值的指针。
+// 用于 PreProxyEnabled 这类需要区分「未设置」与「明确为 false」的字段。
+func BoolPtr(b bool) *bool { return &b }
+
 // TrafficStats 节点流量统计（字节）
 type TrafficStats struct {
 	TodayUp   int64  `json:"todayUp"`   // 今日上传
@@ -381,8 +385,12 @@ type Config struct {
 	//
 	// 与 PreProxyNodeID 分开：关掉开关时仍保留已选节点与生效范围，
 	// 下次启用不必重新配一遍。
-	// 兼容旧配置：老版本没有这个字段，加载时按「选了节点即启用」补齐。
-	PreProxyEnabled bool `json:"preProxyEnabled"`
+	//
+	// 用指针而不是 bool：老版本没有这个字段，需要按「选了节点即启用」补齐，
+	// 而普通 bool 无法区分「字段不存在」和「用户明确关掉了」——
+	// 两者都反序列化成 false，迁移逻辑会把用户取消的勾选又打回去。
+	// 读取一律走 preProxyEnabledLocked()，不要直接取这个字段。
+	PreProxyEnabled *bool `json:"preProxyEnabled,omitempty"`
 
 	// PreProxyGroupIDs 前置代理的生效范围：只有这些分组内的节点才经前置代理出站。
 	// 为空表示对全部节点生效（兼容旧配置：此前前置代理是全局的，没有范围概念）。
