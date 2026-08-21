@@ -1,11 +1,13 @@
 package portregistry
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -226,18 +228,39 @@ func (r *Registry) withLock(action func(*fileData) error) error {
 }
 
 func (r *Registry) load() (*fileData, error) {
-	data := &fileData{Version: 1, Entries: []Entry{}}
+	empty := func() *fileData { return &fileData{Version: 1, Entries: []Entry{}} }
+
 	raw, err := os.ReadFile(r.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return data, nil
+		return empty(), nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	// 空文件（写入未落盘就断电）视为没有注册表，不必报错
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return empty(), nil
+	}
+
+	data := empty()
 	if err := json.Unmarshal(raw, data); err != nil {
-		return nil, fmt.Errorf("读取全局端口注册表失败: %w", err)
+		// 注册表损坏就地重建，绝不能让它阻断启动。
+		//
+		// 这个文件只是多实例之间协调端口用的缓存，内容随时由各实例重新登记，
+		// 丢了最多是短时间内可能与其他实例撞端口，而撞端口本来就有兜底处理。
+		// 反观报错的代价：ServiceStartup 会直接 return err，窗口根本不出现，
+		// 用户只在控制台看到一句 JSON 解析错误，除了手工删文件毫无办法
+		// （实际发生过：断电后 registry.json 变成一片 NUL，程序再也打不开）。
+		r.backupCorrupted(raw)
+		return empty(), nil
 	}
 	return data, nil
+}
+
+// backupCorrupted 把损坏的注册表另存一份再重建，便于事后排查成因。
+// 备份失败不影响主流程——重建本身才是要紧的。
+func (r *Registry) backupCorrupted(raw []byte) {
+	_ = os.WriteFile(r.path+".corrupted", raw, 0600)
 }
 
 func (r *Registry) save(data *fileData) error {
@@ -245,12 +268,44 @@ func (r *Registry) save(data *fileData) error {
 	if err != nil {
 		return err
 	}
+
+	// 先写临时文件并 fsync，再原子替换。
+	//
+	// 原来是 WriteFile → Remove → Rename：Remove 与 Rename 之间断电会丢掉整个
+	// 注册表；更糟的是 WriteFile 只保证数据进了页缓存，此时断电会留下一个
+	// 长度正确但内容全是 NUL 的文件——正是用户遇到的
+	// "invalid character '\x00'"。fsync 后再 rename 才能保证要么是旧内容、
+	// 要么是完整的新内容。
 	temporaryPath := r.path + ".tmp"
-	if err := os.WriteFile(temporaryPath, raw, 0600); err != nil {
+	file, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
 		return err
 	}
-	_ = os.Remove(r.path)
-	return os.Rename(temporaryPath, r.path)
+	if _, err := file.Write(raw); err != nil {
+		file.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+
+	// Windows 上 rename 覆盖已存在的文件会失败，需要先删掉；
+	// 这一步失败不致命，交给下面的 Rename 报错
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(r.path)
+	}
+	if err := os.Rename(temporaryPath, r.path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	return nil
 }
 
 func cleanup(data *fileData) {

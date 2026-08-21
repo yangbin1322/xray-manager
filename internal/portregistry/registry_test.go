@@ -1,6 +1,7 @@
 package portregistry
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,5 +175,50 @@ func TestReserveTemporaryBatchIsIdempotentForSameOwner(t *testing.T) {
 	}
 	if len(reserved) != 2 {
 		t.Fatalf("expected same owner to keep both reservations, got %d", len(reserved))
+	}
+}
+
+// 注册表文件损坏时不能让整个程序起不来。
+//
+// 回归：用户机器上出现过 NUL 填充的 registry.json（断电/写入未落盘所致），
+// load 直接返回解析错误，ServiceStartup 据此 return err，窗口根本不出现，
+// 只在控制台留下 "invalid character '\x00'"。注册表只是多实例协调用的缓存，
+// 内容随时可由各实例重新登记，损坏了重建即可，绝不该阻断启动。
+func TestCorruptedRegistryIsRebuiltInsteadOfFailing(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "registry.json")
+	executable, config := testOwner(t, root, "client-a")
+
+	corrupt := map[string][]byte{
+		"NUL 填充（断电后常见）": bytes.Repeat([]byte{0}, 512),
+		"截断的 JSON":      []byte(`{"version":1,"entries":[{"port":1080`),
+		"完全不是 JSON":     []byte("\xff\xfe garbage"),
+		"空文件":           {},
+	}
+
+	for name, data := range corrupt {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			registry := NewAt(path)
+
+			// 损坏的注册表必须能照常认领端口，而不是报错
+			if err := registry.Claim(Entry{
+				ExecutablePath: executable, ConfigPath: config,
+				ResourceID: "a", ResourceType: "rule", Alias: "节点", Port: 10808,
+			}); err != nil {
+				t.Fatalf("注册表损坏时应重建而不是失败: %v", err)
+			}
+
+			// 重建后应是可正常读写的合法文件
+			entries, err := registry.Entries()
+			if err != nil {
+				t.Fatalf("重建后仍读不出: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Errorf("重建后应只剩刚认领的这一条，实际 %d 条", len(entries))
+			}
+		})
 	}
 }

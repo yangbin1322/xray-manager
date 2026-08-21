@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"xray-manager/internal/models"
 )
 
@@ -75,8 +76,45 @@ func (m *Manager) Save(config *models.Config) error {
 		return err
 	}
 
-	// 写入配置文件
-	return os.WriteFile(m.configPath, data, 0644)
+	return writeFileAtomic(m.configPath, data)
+}
+
+// writeFileAtomic 先写临时文件并 fsync，再原子替换目标文件。
+//
+// 直接 os.WriteFile 只保证数据进了页缓存：此时断电会留下一个长度正确、
+// 内容却全是 NUL 的文件，下次启动解析失败。配置每次改动都要全量重写，
+// 节点多时文件可达数 MB，写入窗口不算短，遇上断电并非小概率事件。
+// 而这份文件丢了就是用户的全部节点、订阅、分组都没了。
+func writeFileAtomic(path string, data []byte) error {
+	temporaryPath := path + ".tmp"
+	file, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+
+	// Windows 上 rename 无法覆盖已存在的文件，需先删除
+	if runtime.GOOS == "windows" {
+		_ = os.Remove(path)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		_ = os.Remove(temporaryPath)
+		return err
+	}
+	return nil
 }
 
 // SaveTo 保存配置到指定文件
@@ -88,7 +126,7 @@ func (m *Manager) SaveTo(config *models.Config, filePath string) error {
 	}
 
 	// 写入配置文件
-	return os.WriteFile(filePath, data, 0644)
+	return writeFileAtomic(filePath, data)
 }
 
 // LoadFrom 从指定文件加载配置

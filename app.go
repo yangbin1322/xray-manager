@@ -211,9 +211,12 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// 但已经写进配置的错误名字不会自愈，这里按订阅名回正一次。
 		a.repairSubscriptionGroupNamesLocked()
 
+		// 端口注册表只是多实例之间协调端口用的缓存，同步失败不该拦住启动：
+		// 这里 return err 会让整个服务起不来、窗口根本不出现，而用户能看到的
+		// 只有控制台一行报错。最坏情况不过是与其他实例撞端口，
+		// 而撞端口本来就有冲突提示与重新分配的兜底。
 		if err := a.syncPortRegistryLocked(false); err != nil {
-			a.logError("同步全局端口注册表失败", err)
-			return err
+			a.logError("同步全局端口注册表失败（不影响启动，可能与其他实例撞端口）", err)
 		}
 
 		// 初始化订阅数据
@@ -1706,8 +1709,11 @@ func (a *MyService) GetAutoStart() bool {
 
 // saveConfig 保存配置（内部方法，不加锁）
 func (a *MyService) saveConfig() error {
+	// 注册表同步失败只记日志，不能挡住配置落盘：注册表是可重建的协调缓存，
+	// 而用户的配置才是真正丢不起的数据。此前这里 return err，
+	// 注册表一坏就连节点都保存不了。
 	if err := a.syncPortRegistryLocked(false); err != nil {
-		return err
+		a.logError("同步全局端口注册表失败（配置仍会保存）", err)
 	}
 	if a.configManager != nil {
 		return a.configManager.Save(a.config)
