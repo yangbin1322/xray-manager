@@ -404,6 +404,75 @@ export const useRulesStore = defineStore('rules', () => {
     return matched
   }
 
+  // 重复节点里保留哪一个：优先运行中的，其次带出口 IP 绑定的，再次有备注的，
+  // 最后按当前显示顺序取第一个。
+  //
+  // 每一档保护的都是用户重建不回来的东西——运行中的节点后面挂着外部程序，
+  // 绑定的出口 IP 可能是首次启动时学来的，备注则是订阅永远不会下发的用户输入。
+  // 挑错保留项，等于让用户亲手删掉自己的配置。
+  function dedupKeeperRank(node) {
+    if (node.enabled) return 0
+    if (node.bindExitIP || node.boundExitIP) return 1
+    if (node.remark) return 2
+    return 3
+  }
+
+  // selectDuplicatesBy 按 keyOf 分组，每组保留一个、其余全部选中。
+  //
+  // 只选不删：删除交给用户点现成的「删除」按钮，这样误判时还有确认对话框
+  // 和肉眼复核两道关。keyOf 返回空串表示该节点不参与。
+  function selectDuplicatesBy(keyOf) {
+    const groups = new Map()
+    for (const node of rulesBeforeHealthFilter.value) {
+      // 故障转移/链式/会话代理不参与：它们由普通节点组合而来，
+      // 链式代理的出口按定义就等于最后一跳，与成员节点撞 IP 是正常拓扑；
+      // 一起选中删除会把链和链里的节点一并删掉
+      if (node._nodeType !== 'rule') continue
+      const key = keyOf(node)
+      if (!key) continue
+      const list = groups.get(key)
+      if (list) list.push(node)
+      else groups.set(key, [node])
+    }
+
+    const next = new Set()
+    let matched = 0
+    for (const list of groups.values()) {
+      if (list.length < 2) continue
+      // 同档次按当前显示顺序取先出现的，保证反复执行结果一致
+      let keeper = list[0]
+      for (const node of list) {
+        if (dedupKeeperRank(node) < dedupKeeperRank(keeper)) keeper = node
+      }
+      for (const node of list) {
+        if (node === keeper) continue
+        next.add(node.id)
+        matched++
+      }
+    }
+    selectedIds.value = next
+    return matched
+  }
+
+  // 选中重复节点。判重键由后端随 GetRules 下发（models.ProxyRule.DedupKey），
+  // 不在这里重抄一遍各协议的凭证/传输层参数取值逻辑——那套逻辑会随新协议演进，
+  // 抄一份必然走样，而判错的后果是用户删错节点。
+  function selectDuplicateNodes() {
+    return selectDuplicatesBy(node => node.dedupKey)
+  }
+
+  // 选中出口 IP 重复的节点：只看已经探到真实 IP 的运行中节点。
+  //
+  // realIp 只在节点运行时探测得到、一停止就被清空且不落盘，没有这个值的节点
+  // 无从判断出口，一律不参与。「验证中」的节点连通性还没确认、几秒后可能被判
+  // 不通而自动停用，它的 realIp 是暂定值，据此选中有误删风险。
+  function selectDuplicateExitIPs() {
+    return selectDuplicatesBy(node => {
+      if (!node.enabled || node.verifying) return ''
+      return (node.realIp || '').trim()
+    })
+  }
+
   // 各健康分类在当前可见节点中的数量，用于按钮上显示计数
   // 基于"未应用健康过滤"的列表统计，这样切换分类时其余计数依然可见
   const healthCounts = computed(() => {
@@ -514,7 +583,7 @@ export const useRulesStore = defineStore('rules', () => {
     loadRules, addRule, updateRule, updateNodes, deleteRule,
     startRule, stopRule, deleteSelectedRules,
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
-    updateRuleInList, toggleSelect, selectAll, selectByHealth, deselect, handleRowSelect, setSort,
+    updateRuleInList, toggleSelect, selectAll, selectByHealth, selectDuplicateNodes, selectDuplicateExitIPs, deselect, handleRowSelect, setSort,
     copySelected, copyLocalProxies, pasteNodes,
     applyTrafficUpdate, applyRelayStats, applyHealthCheckResult, applyHealthCheckResults,
     checkSelectedHealth, checkAllHealth, resetTraffic,

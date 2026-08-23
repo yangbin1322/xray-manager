@@ -633,6 +633,77 @@ export class ImportShareResult {
 }
 
 /**
+ * ImportSubscriptionsResult 批量导入订阅链接的结果。
+ * 
+ * 与 ImportShareResult 分开：订阅导入还要报告一共拉到多少节点，
+ * 且失败的单位是整条订阅（某个机场链接挂了）而不是单个节点。
+ */
+export class ImportSubscriptionsResult {
+    /**
+     * Creates a new ImportSubscriptionsResult instance.
+     * @param {Partial<ImportSubscriptionsResult>} [$$source = {}] - The source object to create the ImportSubscriptionsResult.
+     */
+    constructor($$source = {}) {
+        if (!("successCount" in $$source)) {
+            /**
+             * 成功导入的订阅数
+             * @member
+             * @type {number}
+             */
+            this["successCount"] = 0;
+        }
+        if (!("nodeCount" in $$source)) {
+            /**
+             * 累计导入的节点数
+             * @member
+             * @type {number}
+             */
+            this["nodeCount"] = 0;
+        }
+        if (!("failCount" in $$source)) {
+            /**
+             * 失败的订阅数
+             * @member
+             * @type {number}
+             */
+            this["failCount"] = 0;
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 实际汇入的分组名，便于前端提示
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+        if (!("errors" in $$source)) {
+            /**
+             * 每条失败的链接与原因
+             * @member
+             * @type {string[]}
+             */
+            this["errors"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ImportSubscriptionsResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ImportSubscriptionsResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType0;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("errors" in $$parsedSource) {
+            $$parsedSource["errors"] = $$createField4_0($$parsedSource["errors"]);
+        }
+        return new ImportSubscriptionsResult(/** @type {Partial<ImportSubscriptionsResult>} */($$parsedSource));
+    }
+}
+
+/**
  * LoadBalanceNode 故障转移节点
  */
 export class LoadBalanceNode {
@@ -1286,6 +1357,20 @@ export class ProxyRule {
              * @type {string}
              */
             this["source"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * DedupKey 「同一个节点」的判定键（不含别名），只在 GetRules 返回副本时填充，
+             * 从不落盘。
+             * 
+             * 前端的「选中重复节点」要按协议+地址+端口+凭证+传输层参数判重，这套逻辑
+             * subscriptionIdentity 里已经写了一遍，且会随新协议持续演进；在 JS 里再抄
+             * 一份必然逐渐走样，而判错的后果是用户照着选中结果删错节点。所以由后端算好
+             * 随节点一起带下来，前端只做字符串分组。
+             * @member
+             * @type {string | undefined}
+             */
+            this["dedupKey"] = undefined;
         }
 
         Object.assign(this, $$source);

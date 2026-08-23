@@ -11,6 +11,7 @@ export {
     HealthCheckConfig,
     ImportResult,
     ImportShareResult,
+    ImportSubscriptionsResult,
     LoadBalanceNode,
     PortConflict,
     PreProxyConfig,

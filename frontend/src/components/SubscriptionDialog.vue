@@ -156,6 +156,7 @@
               <button v-if="!isEditing" class="btn-primary" @click="handleAdd" :disabled="adding">
                 {{ adding ? '添加中...' : '添加订阅' }}
               </button>
+              <button v-if="!isEditing" class="btn-secondary" @click="showBatch = true">批量导入</button>
               <template v-else>
                 <button class="btn-primary" @click="handleSaveEdit" :disabled="saving">
                   {{ saving ? '保存中...' : '保存修改' }}
@@ -169,6 +170,48 @@
 
       <div class="dialog-footer">
         <button class="btn-secondary" @click="close">关闭</button>
+      </div>
+    </div>
+
+    <!-- 批量导入订阅：一行一个链接，全部汇入同一个分组 -->
+    <div v-if="showBatch" class="dialog-overlay batch-overlay" @click.self="showBatch = false">
+      <div class="dialog batch-dialog">
+        <div class="dialog-header">
+          <h3>批量导入订阅</h3>
+        </div>
+        <div class="dialog-body">
+          <div class="batch-hint">
+            每行一个订阅链接，<code>#</code> 开头的行会被忽略。<br />
+            订阅名按分组名自动编号（如 机场合集-1、机场合集-2），全部汇入下面选中的分组。<br />
+            自动更新、更新间隔与更新方式沿用上方表单的当前设置。
+          </div>
+          <textarea
+            v-model="batchText"
+            class="batch-textarea"
+            rows="10"
+            placeholder="https://example.com/sub1&#10;https://example.com/sub2"
+          ></textarea>
+          <div class="batch-row">
+            <button class="btn-secondary" @click="pasteBatch">从剪贴板粘贴</button>
+            <select v-model="batchGroupSel" class="batch-select">
+              <option value="__new__">+ 新建分组</option>
+              <option v-for="g in groupsStore.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+            </select>
+            <input
+              v-if="batchGroupSel === '__new__'"
+              v-model="batchNewGroupName"
+              class="batch-newgroup"
+              type="text"
+              placeholder="新分组名称"
+            />
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-secondary" @click="showBatch = false" :disabled="batchImporting">取消</button>
+          <button class="btn-primary" @click="handleBatchImport" :disabled="batchImporting">
+            {{ batchImporting ? '导入中...' : '导入订阅' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -190,6 +233,12 @@ const appStore = useAppStore()
 
 const updating = ref(null)
 const adding = ref(false)
+// 批量导入订阅：一行一个链接，全部汇入同一个分组
+const showBatch = ref(false)
+const batchText = ref('')
+const batchImporting = ref(false)
+const batchGroupSel = ref('__new__')
+const batchNewGroupName = ref('')
 const saving = ref(false)
 const editingId = ref(null)   // 正在编辑的订阅 ID，null 表示添加模式
 const editingName = ref('')   // 编辑时的原始名称（用于标题显示）
@@ -293,6 +342,57 @@ async function handleAdd() {
     appStore.showToast(`添加订阅失败: ${e}`, 'error')
   } finally {
     adding.value = false
+  }
+}
+
+async function pasteBatch() {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (text) batchText.value = batchText.value ? `${batchText.value}\n${text}` : text
+  } catch (e) {
+    appStore.showToast('读取剪贴板失败，请手动粘贴', 'warning')
+  }
+}
+
+async function handleBatchImport() {
+  if (!batchText.value.trim()) {
+    appStore.showToast('请粘贴订阅链接', 'warning')
+    return
+  }
+  const isNew = batchGroupSel.value === '__new__'
+  if (isNew && !batchNewGroupName.value.trim()) {
+    appStore.showToast('请填写新分组名称', 'warning')
+    return
+  }
+  if (form.value.updateInterval < 1) {
+    appStore.showToast('更新间隔至少为 1 小时', 'warning')
+    return
+  }
+  if (form.value.updateMode === 'proxy' && !form.value.updateProxyId) {
+    appStore.showToast('请选择用于更新的节点', 'warning')
+    return
+  }
+
+  batchImporting.value = true
+  try {
+    // 自动更新/间隔/更新方式沿用上方表单的当前设置，整批共用
+    const result = await appStore.doImportSubscriptions(
+      batchText.value,
+      isNew ? '' : batchGroupSel.value,
+      isNew ? batchNewGroupName.value.trim() : '',
+      form.value.autoUpdate, form.value.updateInterval,
+      form.value.updateMode, form.value.updateProxyId,
+    )
+    if (result && result.successCount > 0) {
+      showBatch.value = false
+      batchText.value = ''
+      batchNewGroupName.value = ''
+      await groupsStore.loadSubscriptions()
+      await groupsStore.loadGroups()
+      await rulesStore.loadRules()
+    }
+  } finally {
+    batchImporting.value = false
   }
 }
 
@@ -515,4 +615,46 @@ function close() { emit('close') }
    看起来像被禁用了（触摸板/无 hover 环境下尤其明显） */
 .btn-del { color: #e74c3c; border-color: rgba(231, 76, 60, 0.5); }
 .btn-del:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
+
+/* 批量导入订阅对话框：叠在订阅管理之上，所以 z-index 要更高 */
+.batch-overlay { z-index: 1500; }
+.batch-dialog { width: min(680px, calc(100vw - 40px)); }
+.batch-hint {
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.batch-hint code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-secondary);
+}
+.batch-textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+.batch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.batch-select, .batch-newgroup {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.batch-newgroup { flex: 1; min-width: 140px; }
 </style>

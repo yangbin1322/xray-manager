@@ -133,6 +133,11 @@ export async function addSubscription(name, url, autoUpdate, updateInterval, upd
   return await MyService.AddSubscription(name, url, autoUpdate, updateInterval, updateMode, updateProxyId, groupId)
 }
 
+// 批量导入订阅链接，全部汇入同一个分组
+export async function importSubscriptions(text, groupId, newGroupName, autoUpdate, updateInterval, updateMode = 'direct', updateProxyId = '') {
+  return await MyService.ImportSubscriptions(text, groupId, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyId)
+}
+
 export async function setSubscriptionUpdateMode(subID, mode, proxyID) {
   return await MyService.SetSubscriptionUpdateMode(subID, mode, proxyID)
 }

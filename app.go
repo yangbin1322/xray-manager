@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -361,6 +362,9 @@ func (a *MyService) GetRules() []models.ProxyRule {
 		if !rules[i].Enabled {
 			rules[i].Verifying = false
 		}
+		// 判重键只填在返回给前端的副本上，绝不能写回 a.config.Rules——
+		// 那会把这个派生值落盘，并在订阅更新比对时凭空多出一个字段
+		rules[i].DedupKey = rules[i].SubscriptionIdentityWithoutAlias()
 	}
 	return rules
 }
@@ -413,6 +417,88 @@ func generateUniqueRuleIDs(existingRules []models.ProxyRule, n int) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// generateUniqueSubscriptionIDs 批量生成 n 个唯一订阅 ID。
+//
+// 不能在循环里逐个 fmt.Sprintf("sub_%d", time.Now().UnixNano())：Windows 的时钟
+// 粒度是毫秒级，实测紧凑循环里取 50 次得到的是同一个值。一批订阅共用同一个 ID 后，
+// handleSubscriptionUpdate 是按 rule.SubscriptionID == subID 认领节点的，
+// 更新其中一条就会把其他几条的节点全部当成"已失效"删掉再重建。
+func generateUniqueSubscriptionIDs(existing []models.Subscription, n int) []string {
+	used := make(map[string]struct{}, len(existing)+n)
+	for i := range existing {
+		used[existing[i].ID] = struct{}{}
+	}
+
+	ids := make([]string, 0, n)
+	base := time.Now().UnixNano()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("sub_%d", base+int64(i))
+		for seq := 0; ; seq++ {
+			if _, exists := used[id]; !exists {
+				break
+			}
+			id = fmt.Sprintf("sub_%d_%d", base+int64(i), seq)
+		}
+		used[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// parseSubscriptionURLs 从粘贴的文本里提取订阅链接，一行一个。
+//
+// 跳过空行与 # 开头的注释行：用户常从记事本或聊天记录整理，行首注释很常见。
+// 同一个 URL 出现多次只保留第一条——重复添加会让同一份节点进来两遍。
+// 非 http(s) 的行不静默丢弃，而是记进 errs 让用户知道哪一行没被识别。
+func parseSubscriptionURLs(text string) (urls []string, errs []string) {
+	seen := make(map[string]struct{})
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			errs = append(errs, fmt.Sprintf("不是有效的订阅链接: %s", truncateForLog(line, 60)))
+			continue
+		}
+		if _, dup := seen[line]; dup {
+			continue
+		}
+		seen[line] = struct{}{}
+		urls = append(urls, line)
+	}
+	return urls, errs
+}
+
+// truncateForLog 截断过长的文本，避免一行错误把日志面板刷爆
+func truncateForLog(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "..."
+}
+
+// nextSubscriptionSeq 返回分组下一个可用的订阅序号。
+//
+// 批量导入的订阅按「分组名-序号」命名。往已有订阅的分组里再导入时要接着编号，
+// 否则会出现两个「机场合集-1」。按已有名字里的最大序号 +1，而不是按订阅条数——
+// 用户删掉中间某条后，按条数算会撞上还在的那条。
+func nextSubscriptionSeq(subs []models.Subscription, groupName string) int {
+	re := regexp.MustCompile("^" + regexp.QuoteMeta(groupName) + `-(\d+)$`)
+	max := 0
+	for i := range subs {
+		m := re.FindStringSubmatch(subs[i].Name)
+		if m == nil {
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err == nil && n > max {
+			max = n
+		}
+	}
+	return max + 1
 }
 
 // ruleIDPool 预生成一批唯一规则 ID，循环里逐个取用。
@@ -2842,6 +2928,41 @@ func (a *MyService) TestAllRulesSpeed() error {
 // updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
 // groupID: 目标分组；为空表示按订阅名新建分组（保持旧行为）。
 // 多个订阅可以指定同一个 groupID，从而把节点汇入同一分组统一管理。
+
+// attachSubscriptionRulesLocked 把一条订阅拉到的节点写进配置，并追加该订阅。
+//
+// 调用方必须已持有 a.mu，且已在锁外完成网络拉取。
+// ids/ports 由调用方批量分配后切片传入——批量导入时要把所有订阅的节点合起来
+// 只分配一次，否则每条订阅都要全表扫描一遍并写一次全局端口注册表文件。
+//
+// 分组的追加与 saveConfig 留给调用方：批量导入只在最后做一次。
+func (a *MyService) attachSubscriptionRulesLocked(
+	sub *models.Subscription, group *models.Group,
+	rules []models.ProxyRule, url string, ids []string, ports []int,
+) {
+	if cap(a.config.Rules)-len(a.config.Rules) < len(rules) {
+		grown := make([]models.ProxyRule, len(a.config.Rules), len(a.config.Rules)+len(rules))
+		copy(grown, a.config.Rules)
+		a.config.Rules = grown
+	}
+	for i := range rules {
+		rules[i].ID = ids[i]
+		rules[i].Enabled = false
+		rules[i].ProcessID = 0
+		rules[i].GroupID = group.ID
+		rules[i].GroupName = group.Name
+		rules[i].SubscriptionID = sub.ID
+		rules[i].SubscriptionURL = url
+		rules[i].Source = "subscription"
+		if i < len(ports) {
+			rules[i].LocalPort = ports[i]
+		}
+
+		a.config.Rules = append(a.config.Rules, rules[i])
+	}
+
+	a.config.Subscriptions = append(a.config.Subscriptions, *sub)
+}
 func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInterval int, updateMode string, updateProxyID string, groupID string) error {
 	// 创建订阅对象
 	sub := &models.Subscription{
@@ -2895,29 +3016,7 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 		a.log(a.portShortageMessage(len(rules), len(ports)))
 	}
 
-	if cap(a.config.Rules)-len(a.config.Rules) < len(rules) {
-		grown := make([]models.ProxyRule, len(a.config.Rules), len(a.config.Rules)+len(rules))
-		copy(grown, a.config.Rules)
-		a.config.Rules = grown
-	}
-	for i := range rules {
-		rules[i].ID = ids[i]
-		rules[i].Enabled = false
-		rules[i].ProcessID = 0
-		rules[i].GroupID = group.ID
-		rules[i].GroupName = group.Name
-		rules[i].SubscriptionID = sub.ID
-		rules[i].SubscriptionURL = url
-		rules[i].Source = "subscription"
-		if i < len(ports) {
-			rules[i].LocalPort = ports[i]
-		}
-
-		a.config.Rules = append(a.config.Rules, rules[i])
-	}
-
-	// 保存订阅；分组只在新建时追加，复用已有分组不能重复写入
-	a.config.Subscriptions = append(a.config.Subscriptions, *sub)
+	a.attachSubscriptionRulesLocked(sub, group, rules, url, ids, ports)
 	if createdGroup {
 		a.config.Groups = append(a.config.Groups, *group)
 	}
@@ -2928,6 +3027,171 @@ func (a *MyService) AddSubscription(name, url string, autoUpdate bool, updateInt
 
 	a.log(fmt.Sprintf("订阅添加成功: %s，导入 %d 个节点", name, len(rules)))
 	return nil
+}
+
+// ImportSubscriptions 批量导入订阅链接，全部汇入同一个分组。
+//
+// groupID：汇入的现有分组；newGroupName：非空时新建分组并覆盖 groupID。
+// 与 AddSubscription 的约定不同——那里 groupID 为空表示「按订阅名各建一个分组」，
+// 而批量导入的全部意义就是「都进同一个分组」，因此两者都为空时直接报错。
+//
+// 订阅名按「分组名-序号」自动编号，往已有订阅的分组里再导入会接着编号。
+func (a *MyService) ImportSubscriptions(
+	text, groupID, newGroupName string,
+	autoUpdate bool, updateInterval int,
+	updateMode, updateProxyID string,
+) (*models.ImportSubscriptionsResult, error) {
+	urls, parseErrs := parseSubscriptionURLs(text)
+	result := &models.ImportSubscriptionsResult{
+		FailCount: len(parseErrs),
+		Errors:    parseErrs,
+	}
+	for _, msg := range parseErrs {
+		a.log(fmt.Sprintf("[订阅导入] %s", msg))
+	}
+	if len(urls) == 0 {
+		if len(parseErrs) > 0 {
+			return result, fmt.Errorf("未解析到有效的订阅链接")
+		}
+		return result, fmt.Errorf("输入内容为空")
+	}
+
+	newGroupName = strings.TrimSpace(newGroupName)
+	if newGroupName == "" && groupID == "" {
+		return result, fmt.Errorf("请选择要汇入的分组，或填写新分组名称")
+	}
+
+	// 第一阶段（持锁）：确定目标分组、编号起点，并把订阅 ID 一次性生成好。
+	// 这里不做任何网络请求。
+	a.mu.Lock()
+	var group *models.Group
+	createdGroup := false
+	if newGroupName != "" {
+		created, err := a.groupManager.CreateGroup(newGroupName, "批量导入订阅", "subscription")
+		if err != nil {
+			a.mu.Unlock()
+			return result, fmt.Errorf("创建分组失败: %v", err)
+		}
+		group = created
+		createdGroup = true
+	} else {
+		existing, err := a.groupManager.GetGroup(groupID)
+		if err != nil {
+			a.mu.Unlock()
+			return result, fmt.Errorf("指定的分组不存在: %v", err)
+		}
+		group = existing
+	}
+	result.GroupName = group.Name
+
+	// 已存在的订阅链接跳过，避免同一份节点进来两遍
+	existingURLs := make(map[string]struct{}, len(a.config.Subscriptions))
+	for i := range a.config.Subscriptions {
+		existingURLs[a.config.Subscriptions[i].URL] = struct{}{}
+	}
+	seq := nextSubscriptionSeq(a.config.Subscriptions, group.Name)
+	// ID 必须在这里一次性生成：逐条取 time.Now().UnixNano() 会拿到同一个值，
+	// 详见 generateUniqueSubscriptionIDs 的注释
+	subIDs := generateUniqueSubscriptionIDs(a.config.Subscriptions, len(urls))
+	a.mu.Unlock()
+
+	// 第二阶段（不持锁）：逐条拉取。
+	// 必须在锁外——订阅更新的代理解析器可能临时启动节点并回头读配置，持锁会死锁。
+	// 单条失败只记录并继续，一个挂掉的机场链接不该让整批白跑。
+	//
+	// 注意：开了自动更新时，这批订阅会各自注册一个间隔相同的定时器，之后大致会
+	// 同时触发去拉取同一批机场。给 startAutoUpdate 加抖动是所有订阅共用路径上的
+	// 改动，风险独立，留作后续。
+	type fetched struct {
+		sub   *models.Subscription
+		rules []models.ProxyRule
+	}
+	var ok []fetched
+	idx := 0
+	for _, url := range urls {
+		if _, dup := existingURLs[url]; dup {
+			result.FailCount++
+			result.Errors = append(result.Errors, fmt.Sprintf("订阅已存在，跳过: %s", truncateForLog(url, 60)))
+			continue
+		}
+		sub := &models.Subscription{
+			ID:             subIDs[idx],
+			Name:           fmt.Sprintf("%s-%d", group.Name, seq),
+			URL:            url,
+			GroupID:        group.ID,
+			Enabled:        true,
+			AutoUpdate:     autoUpdate,
+			UpdateInterval: updateInterval,
+			UpdateMode:     updateMode,
+			UpdateProxyID:  updateProxyID,
+		}
+		idx++
+
+		rules, err := a.subscriptionManager.AddSubscription(sub)
+		if err != nil {
+			result.FailCount++
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", truncateForLog(url, 60), err))
+			a.log(fmt.Sprintf("[订阅导入] 拉取失败 %s: %v", truncateForLog(url, 60), err))
+			continue
+		}
+		seq++
+		ok = append(ok, fetched{sub: sub, rules: rules})
+		result.SuccessCount++
+		result.NodeCount += len(rules)
+	}
+
+	// 一条都没成功：新建的分组是空的，删掉免得留下垃圾
+	if len(ok) == 0 {
+		if createdGroup {
+			a.mu.Lock()
+			_ = a.groupManager.DeleteGroup(group.ID)
+			a.mu.Unlock()
+		}
+		return result, fmt.Errorf("所有订阅链接都导入失败")
+	}
+
+	// 第三阶段（持锁）：一次性写入。
+	// ID 与端口按所有订阅的节点总数一次分配——逐条分配会把全局端口注册表
+	// 写上 N 遍，订阅多时界面会卡住。
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	total := 0
+	for _, f := range ok {
+		total += len(f.rules)
+	}
+	ids := generateUniqueRuleIDs(a.config.Rules, total)
+	ports := a.allocateLocalPorts(total)
+	if len(ports) < total {
+		a.log(a.portShortageMessage(total, len(ports)))
+	}
+
+	offset := 0
+	for _, f := range ok {
+		n := len(f.rules)
+		subPorts := []int{}
+		if offset < len(ports) {
+			end := offset + n
+			if end > len(ports) {
+				end = len(ports)
+			}
+			subPorts = ports[offset:end]
+		}
+		a.attachSubscriptionRulesLocked(f.sub, group, f.rules, f.sub.URL, ids[offset:offset+n], subPorts)
+		offset += n
+	}
+
+	if createdGroup {
+		a.config.Groups = append(a.config.Groups, *group)
+	}
+
+	if err := a.saveConfig(); err != nil {
+		return result, err
+	}
+
+	a.log(fmt.Sprintf("[订阅导入] 汇入分组「%s」：成功 %d 条、失败 %d 条，共导入 %d 个节点",
+		group.Name, result.SuccessCount, result.FailCount, result.NodeCount))
+	return result, nil
 }
 
 // UpdateSubscriptionByID 更新指定订阅

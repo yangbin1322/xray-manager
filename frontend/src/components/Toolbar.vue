@@ -64,6 +64,10 @@
             <div class="more-sep"></div>
             <button class="more-item" @click="runMore(() => selectHealth('healthy'))">选中健康节点</button>
             <button class="more-item" @click="runMore(() => selectHealth('failed'))">选中失败节点</button>
+            <div class="more-sep"></div>
+            <!-- 只选中不删除：选完由用户核对后点「删除」 -->
+            <button class="more-item" @click="runMore(selectDuplicateNodes)">选中重复节点</button>
+            <button class="more-item" @click="runMore(selectDuplicateExitIPs)">选中重复出口 IP</button>
           </div>
         </template>
       </div>
@@ -802,6 +806,27 @@ function selectHealth(kind, event) {
     appStore.showToast(`当前没有${label}的节点`, 'warning')
   } else {
     appStore.showToast(`已选中 ${matched} 个${label}节点`, 'success')
+  }
+}
+
+// 两个「选中重复」只选不删：选完由用户核对后自行点「删除」，
+// 与选中健康/失败节点保持同一套交互。
+function selectDuplicateNodes() {
+  const matched = rulesStore.selectDuplicateNodes()
+  if (matched === 0) {
+    appStore.showToast('当前没有重复的节点', 'warning')
+  } else {
+    appStore.showToast(`已选中 ${matched} 个重复节点（每组保留一个）`, 'success')
+  }
+}
+
+function selectDuplicateExitIPs() {
+  const matched = rulesStore.selectDuplicateExitIPs()
+  if (matched === 0) {
+    // 说清原因：这个功能依赖运行时探测到的真实 IP，没启动就无从比对
+    appStore.showToast('没有出口 IP 重复的节点（需先启动节点并等待获取真实 IP）', 'warning')
+  } else {
+    appStore.showToast(`已选中 ${matched} 个出口 IP 重复的节点（每个 IP 保留一个）`, 'success')
   }
 }
 

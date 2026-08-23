@@ -82,6 +82,15 @@ type ProxyRule struct {
 	SubscriptionID  string `json:"subscriptionId,omitempty"`  // 来源订阅ID（一个分组可含多个订阅的节点）
 	SubscriptionURL string `json:"subscriptionUrl,omitempty"` // 订阅链接（如果来自订阅）
 	Source          string `json:"source"`                    // 来源: manual（手动添加）, subscription（订阅导入）
+
+	// DedupKey 「同一个节点」的判定键（不含别名），只在 GetRules 返回副本时填充，
+	// 从不落盘。
+	//
+	// 前端的「选中重复节点」要按协议+地址+端口+凭证+传输层参数判重，这套逻辑
+	// subscriptionIdentity 里已经写了一遍，且会随新协议持续演进；在 JS 里再抄
+	// 一份必然逐渐走样，而判错的后果是用户照着选中结果删错节点。所以由后端算好
+	// 随节点一起带下来，前端只做字符串分组。
+	DedupKey string `json:"dedupKey,omitempty"`
 }
 
 // SubscriptionIdentity 返回用于订阅更新时匹配"同一个节点"的标识。
@@ -508,6 +517,18 @@ type ImportShareResult struct {
 	SuccessCount int      `json:"successCount"` // 成功数
 	FailCount    int      `json:"failCount"`    // 失败数
 	Errors       []string `json:"errors"`       // 每条失败的详细信息
+}
+
+// ImportSubscriptionsResult 批量导入订阅链接的结果。
+//
+// 与 ImportShareResult 分开：订阅导入还要报告一共拉到多少节点，
+// 且失败的单位是整条订阅（某个机场链接挂了）而不是单个节点。
+type ImportSubscriptionsResult struct {
+	SuccessCount int      `json:"successCount"` // 成功导入的订阅数
+	NodeCount    int      `json:"nodeCount"`    // 累计导入的节点数
+	FailCount    int      `json:"failCount"`    // 失败的订阅数
+	GroupName    string   `json:"groupName"`    // 实际汇入的分组名，便于前端提示
+	Errors       []string `json:"errors"`       // 每条失败的链接与原因
 }
 
 // Group 节点分组。

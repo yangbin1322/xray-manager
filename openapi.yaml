@@ -580,6 +580,13 @@ components:
             latency: { type: integer }
             downloadSpeed: { type: number }
             healthStatus: { type: string }
+            dedupKey:
+              type: string
+              readOnly: true
+              description: |
+                「同一个节点」的判定键（协议+地址+端口+凭证+传输层参数，不含别名），
+                每次读取时现算、不落盘。供客户端做重复节点分组用；
+                请求体里携带会被忽略。
     NodeResponse:
       allOf:
         - $ref: '#/components/schemas/Response'

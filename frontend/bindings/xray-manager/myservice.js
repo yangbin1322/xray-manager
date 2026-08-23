@@ -59,10 +59,6 @@ export function AddSessionRelay(sr) {
 }
 
 /**
- * AddSubscription 添加订阅
- * updateMode: 更新方式 direct/system/proxy；updateProxyID: 更新方式为 proxy 时使用的节点 ID
- * groupID: 目标分组；为空表示按订阅名新建分组（保持旧行为）。
- * 多个订阅可以指定同一个 groupID，从而把节点汇入同一分组统一管理。
  * @param {string} name
  * @param {string} url
  * @param {boolean} autoUpdate
@@ -512,6 +508,29 @@ export function ImportShareLinks(text, groupID, newGroupName) {
 }
 
 /**
+ * ImportSubscriptions 批量导入订阅链接，全部汇入同一个分组。
+ * 
+ * groupID：汇入的现有分组；newGroupName：非空时新建分组并覆盖 groupID。
+ * 与 AddSubscription 的约定不同——那里 groupID 为空表示「按订阅名各建一个分组」，
+ * 而批量导入的全部意义就是「都进同一个分组」，因此两者都为空时直接报错。
+ * 
+ * 订阅名按「分组名-序号」自动编号，往已有订阅的分组里再导入会接着编号。
+ * @param {string} text
+ * @param {string} groupID
+ * @param {string} newGroupName
+ * @param {boolean} autoUpdate
+ * @param {number} updateInterval
+ * @param {string} updateMode
+ * @param {string} updateProxyID
+ * @returns {$CancellablePromise<models$0.ImportSubscriptionsResult | null>}
+ */
+export function ImportSubscriptions(text, groupID, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyID) {
+    return $Call.ByID(2279914564, text, groupID, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType28($result);
+    }));
+}
+
+/**
  * InspectNodePort 查看某个节点的本地端口被谁占用。
  * 
  * 启动失败时界面调用它来判断能否给出「结束占用进程」的选项：
@@ -521,7 +540,7 @@ export function ImportShareLinks(text, groupID, newGroupName) {
  */
 export function InspectNodePort(id) {
     return $Call.ByID(2514630342, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -532,7 +551,7 @@ export function InspectNodePort(id) {
  */
 export function InspectPort(port) {
     return $Call.ByID(1062223054, port).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -952,4 +971,6 @@ const $$createType23 = models$0.ImportResult.createFrom;
 const $$createType24 = $Create.Nullable($$createType23);
 const $$createType25 = models$0.ImportShareResult.createFrom;
 const $$createType26 = $Create.Nullable($$createType25);
-const $$createType27 = $models.PortOccupantInfo.createFrom;
+const $$createType27 = models$0.ImportSubscriptionsResult.createFrom;
+const $$createType28 = $Create.Nullable($$createType27);
+const $$createType29 = $models.PortOccupantInfo.createFrom;

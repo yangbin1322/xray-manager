@@ -192,6 +192,25 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  // 批量导入订阅：汇总走 toast，逐条失败原因走日志面板，
+  // 与 doImportShareLinks 保持同一套报告方式
+  async function doImportSubscriptions(text, groupId, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyId) {
+    try {
+      const result = await api.importSubscriptions(text, groupId, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyId)
+      let msg = `成功导入 ${result.successCount} 条订阅，共 ${result.nodeCount} 个节点`
+      if (result.groupName) msg += `（分组：${result.groupName}）`
+      if (result.failCount > 0) msg += `，失败 ${result.failCount} 条`
+      showToast(msg, result.failCount > 0 ? 'warning' : 'success')
+      addLog(`[订阅导入] ${msg}`)
+      if (result.errors) result.errors.forEach(e => addLog(`[订阅导入错误] ${e}`))
+      return result
+    } catch (e) {
+      showToast(`批量导入订阅失败: ${e}`, 'error')
+      addLog(`[错误] 批量导入订阅失败: ${e}`)
+      return null
+    }
+  }
+
   return {
     // State
     logs, theme, autoStart, sysProxyEnabled, toasts, confirmState,
@@ -201,6 +220,6 @@ export const useAppStore = defineStore('app', () => {
     toggleTheme, initTheme,
     loadAutoStart, setAutoStartEnabled,
     loadSysProxyStatus, enableSysProxy, disableSysProxy,
-    doExportConfig, doImportConfig, doImportShareLinks,
+    doExportConfig, doImportConfig, doImportShareLinks, doImportSubscriptions,
   }
 })
