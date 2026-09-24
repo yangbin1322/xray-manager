@@ -205,7 +205,7 @@ async function handleSave() {
   if (!form.value.localPort || form.value.localPort < 1 || form.value.localPort > 65535) {
     appStore.showToast('请输入有效端口', 'warning'); return
   }
-  if (chainNodes.value.length < 2) { appStore.showToast('链式代理至少需要2个节点', 'warning'); return }
+  if (chainNodes.value.length < 1) { appStore.showToast('链式代理至少需要1个节点', 'warning'); return }
 
   saving.value = true
   try {

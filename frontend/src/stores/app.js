@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import * as api from '../api.js'
 
 export const useAppStore = defineStore('app', () => {
@@ -7,7 +7,9 @@ export const useAppStore = defineStore('app', () => {
   const logs = ref([])
   const theme = ref(localStorage.getItem('theme') || 'light')
   const autoStart = ref(false)
-  const sysProxyEnabled = ref(false)
+  const proxyMode = ref('off') // off / system / tun
+  const tunTarget = ref('')
+  const sysProxyEnabled = computed(() => proxyMode.value === 'system')
   const toasts = ref([])
   let toastId = 0
   // 自增序号，Date.now() 在同一毫秒内会重复，导致 v-for key 冲突和 DOM 复用错乱
@@ -110,33 +112,61 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // === 系统代理 ===
+  // === 代理模式（系统代理 / TUN 二选一） ===
   async function loadSysProxyStatus() {
     try {
-      sysProxyEnabled.value = await api.getSystemProxyStatus()
+      const status = await api.getProxyStatus()
+      proxyMode.value = status?.mode || 'off'
+      tunTarget.value = status?.target || ''
     } catch (e) {
-      console.error('加载系统代理状态失败:', e)
+      console.error('加载代理模式失败:', e)
     }
   }
 
   async function enableSysProxy(ruleID) {
     try {
       await api.enableSystemProxy(ruleID)
-      sysProxyEnabled.value = true
       showToast('已设为系统代理', 'success')
     } catch (e) {
       showToast(`设置系统代理失败: ${e}`, 'error')
     }
+    await loadSysProxyStatus()
   }
 
+  async function enableTun(ruleID) {
+    try {
+      // 创建虚拟网卡需要管理员权限：没有时经确认后以管理员身份重启，重启后自动开启
+      if (await api.tunNeedsElevation()) {
+        const ok = await confirmDialog(
+          'TUN 模式需要管理员权限。\n是否以管理员身份重启程序？重启后会自动恢复节点并开启 TUN。',
+          { title: '需要管理员权限', confirmText: '以管理员身份重启', danger: false },
+        )
+        if (!ok) return
+        await api.restartAsAdminForTun(ruleID)
+        return
+      }
+      await api.enableTunMode(ruleID)
+      showToast('已开启 TUN 模式', 'success')
+    } catch (e) {
+      showToast(`开启 TUN 失败: ${e}`, 'error')
+    }
+    await loadSysProxyStatus()
+  }
+
+  // 关闭当前代理模式（系统代理或 TUN）
   async function disableSysProxy() {
     try {
-      await api.disableSystemProxy()
-      sysProxyEnabled.value = false
-      showToast('已取消系统代理', 'success')
+      if (proxyMode.value === 'tun') {
+        await api.disableTunMode()
+        showToast('已关闭 TUN 模式', 'success')
+      } else {
+        await api.disableSystemProxy()
+        showToast('已取消系统代理', 'success')
+      }
     } catch (e) {
-      showToast(`取消系统代理失败: ${e}`, 'error')
+      showToast(`关闭代理失败: ${e}`, 'error')
     }
+    await loadSysProxyStatus()
   }
 
   // === 导入导出 ===
@@ -213,13 +243,13 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     // State
-    logs, theme, autoStart, sysProxyEnabled, toasts, confirmState,
+    logs, theme, autoStart, sysProxyEnabled, proxyMode, tunTarget, toasts, confirmState,
     // Actions
     addLog, clearLogsList, showToast,
     confirmDialog, resolveConfirm,
     toggleTheme, initTheme,
     loadAutoStart, setAutoStartEnabled,
-    loadSysProxyStatus, enableSysProxy, disableSysProxy,
+    loadSysProxyStatus, enableSysProxy, enableTun, disableSysProxy,
     doExportConfig, doImportConfig, doImportShareLinks, doImportSubscriptions,
   }
 })

@@ -74,17 +74,29 @@
     </div>
 
     <div class="toolbar-right">
-      <!-- 系统代理 -->
-      <button
-        v-if="!appStore.sysProxyEnabled"
-        class="btn-action btn-small"
-        @click="handleEnableSysProxy"
-      >设为系统代理</button>
-      <button
-        v-else
-        class="btn-action btn-small btn-active"
-        @click="appStore.disableSysProxy()"
-      >取消系统代理</button>
+      <!-- 代理模式：系统代理 / TUN 二选一，开启任一个都作用于选中的节点 -->
+      <div class="sysproxy-group">
+        <button
+          class="btn-action btn-small"
+          :class="{ 'btn-active': appStore.proxyMode === 'system' }"
+          title="把选中的节点设为系统代理（仅遵循系统代理的程序生效）"
+          @click="handleEnableSysProxy"
+        >系统代理</button>
+        <button
+          class="btn-action btn-small"
+          :class="{ 'btn-active': appStore.proxyMode === 'tun' }"
+          :title="appStore.proxyMode === 'tun'
+            ? `TUN 已开启：全局流量经 ${appStore.tunTarget}`
+            : '通过虚拟网卡接管所有程序的流量，转发到选中的节点（需要管理员权限）'"
+          @click="handleEnableTun"
+        >TUN</button>
+        <button
+          v-if="appStore.proxyMode !== 'off'"
+          class="btn-action btn-small"
+          title="关闭系统代理 / TUN"
+          @click="appStore.disableSysProxy()"
+        >关闭代理</button>
+      </div>
 
       <!-- 健康检查设置 -->
       <button class="btn-icon" @click="openHealthSettings" title="健康检查设置">⚙</button>
@@ -860,6 +872,15 @@ function handleEnableSysProxy() {
   }
   appStore.enableSysProxy(selected[0])
 }
+
+function handleEnableTun() {
+  const selected = rulesStore.selectedRuleIds
+  if (selected.length !== 1) {
+    appStore.showToast('请选择一个节点开启 TUN', 'warning')
+    return
+  }
+  appStore.enableTun(selected[0])
+}
 </script>
 
 <style scoped>
@@ -1015,6 +1036,7 @@ function handleEnableSysProxy() {
 .btn-danger:hover { background: #e74c3c; color: #fff; }
 
 .btn-active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+.sysproxy-group { display: flex; gap: 4px; }
 
 .btn-small { padding: 4px 10px; font-size: 11px; }
 

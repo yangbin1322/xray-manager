@@ -8,5 +8,6 @@ export {
 };
 
 export {
-    PortOccupantInfo
+    PortOccupantInfo,
+    ProxyStatus
 } from "./models.js";

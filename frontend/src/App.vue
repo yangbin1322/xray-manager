@@ -187,6 +187,14 @@ function listenToBackendEvents() {
     appStore.addLog(event.data)
   })
 
+  // 后端改变了代理模式或目标状态：以管理员身份重启后自动开启 TUN、
+  // 手动停止目标后自动关闭代理、目标意外失效（断网保护）等
+  Events.On('proxyModeChanged', (event) => {
+    appStore.loadSysProxyStatus()
+    const { message, level } = event?.data || {}
+    if (message) appStore.showToast(message, level || 'warning', level === 'error' ? 10000 : 5000)
+  })
+
   Events.On('ruleUpdated', (event) => {
     rulesStore.updateRuleInList(event.data)
   })

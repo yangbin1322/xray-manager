@@ -256,7 +256,7 @@ func TestHTTPAPIRejectsInvalidCompositeProxyRequests(t *testing.T) {
 	}{
 		{name: "load balancer without nodes", path: "/api/v1/load-balancers", body: `{"alias":"LB","localPort":2080,"nodeIds":[]}`},
 		{name: "load balancer invalid port", path: "/api/v1/load-balancers", body: `{"alias":"LB","localPort":70000,"nodeIds":["rule_1"]}`},
-		{name: "chain with one node", path: "/api/v1/chain-proxies", body: `{"alias":"Chain","localPort":3080,"chainNodes":["rule_1"]}`},
+		{name: "chain without nodes", path: "/api/v1/chain-proxies", body: `{"alias":"Chain","localPort":3080,"chainNodes":[]}`},
 		{name: "chain without alias", path: "/api/v1/chain-proxies", body: `{"localPort":3080,"chainNodes":["rule_1","rule_2"]}`},
 	}
 	for _, test := range tests {

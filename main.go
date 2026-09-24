@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -17,6 +18,9 @@ var assets embed.FS
 var appIcon []byte
 
 func main() {
+	// 以管理员身份重启（开 TUN）时带有参数，需先等旧实例退出
+	parseStartupArgs(os.Args[1:])
+
 	// 从嵌入的 frontend/dist 中提取子文件系统
 	distFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {

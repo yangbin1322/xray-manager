@@ -379,6 +379,29 @@ export async function getSystemProxyStatus() {
   return await MyService.GetSystemProxyStatus()
 }
 
+// ==================== TUN 模式 ====================
+
+// 当前代理模式 { mode: 'off' | 'system' | 'tun', target }
+export async function getProxyStatus() {
+  return await MyService.GetProxyStatus()
+}
+
+export async function tunNeedsElevation() {
+  return await MyService.TunNeedsElevation()
+}
+
+export async function enableTunMode(ruleID) {
+  return await MyService.EnableTunMode(ruleID)
+}
+
+export async function disableTunMode() {
+  return await MyService.DisableTunMode()
+}
+
+export async function restartAsAdminForTun(ruleID) {
+  return await MyService.RestartAsAdminForTun(ruleID)
+}
+
 // ==================== 日志 ====================
 
 export async function getLogs() {

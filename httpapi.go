@@ -913,8 +913,8 @@ func validateChainProxy(w http.ResponseWriter, item *models.ChainProxy) bool {
 		writeAPI(w, http.StatusBadRequest, nil, "本地端口必须在 1 到 65535 之间")
 		return false
 	}
-	if len(item.ChainNodes) < 2 {
-		writeAPI(w, http.StatusBadRequest, nil, "链式代理需要至少两个节点")
+	if len(item.ChainNodes) < 1 {
+		writeAPI(w, http.StatusBadRequest, nil, "链式代理需要至少一个节点")
 		return false
 	}
 	if item.LocalType == "" {

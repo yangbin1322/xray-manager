@@ -62,6 +62,46 @@ export class PortOccupantInfo {
     }
 }
 
+/**
+ * ProxyStatus 当前代理模式
+ */
+export class ProxyStatus {
+    /**
+     * Creates a new ProxyStatus instance.
+     * @param {Partial<ProxyStatus>} [$$source = {}] - The source object to create the ProxyStatus.
+     */
+    constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * off / system / tun
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("target" in $$source)) {
+            /**
+             * TUN 转发目标名称
+             * @member
+             * @type {string}
+             */
+            this["target"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ProxyStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ProxyStatus}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ProxyStatus(/** @type {Partial<ProxyStatus>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = utils$0.PortOccupant.createFrom;
 const $$createType1 = $Create.Array($$createType0);

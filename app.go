@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"xray-manager/internal/config"
 	"xray-manager/internal/group"
@@ -43,6 +44,9 @@ type MyService struct {
 	healthCheckManager  *healthcheck.Manager
 	logFilter           *logger.Filter
 	sysProxyManager     *config.SysProxyManager
+	tunManager          *process.TunManager
+	proxyWatch          proxyWatchState // 系统代理 / TUN 跟随的目标
+	manualStops         atomic.Int32    // 进行中的手动停止 / 删除操作数，见 beginManualStop
 	config              *models.Config
 	mu                  sync.RWMutex
 
@@ -155,6 +159,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 
 	// 初始化系统代理管理器
 	a.sysProxyManager = config.NewSysProxyManager()
+	if a.processManager != nil {
+		a.tunManager = a.processManager.NewTunManager()
+	}
 
 	// 初始化开机自启管理器
 	autostartManager, err := config.NewAutoStartManager("XrayManager")
@@ -275,11 +282,18 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		// （每个都要写配置、fork 进程、探测端口）。节点一多，窗口就要等上几分钟甚至
 		// 更久才出现，用户只能看到进程看不到界面。放后台后窗口立即可用，
 		// 节点在界面上逐个变为已启动。
-		go a.autoStartEnabledNodes()
+		go func() {
+			a.autoStartEnabledNodes()
+			// 为开 TUN 以管理员身份重启时，节点恢复后接着开启
+			a.applyStartupTun()
+		}()
 	}
 
 	// 定期保存流量统计（避免每次流量更新都写盘）
 	go a.trafficSaveLoop(ctx)
+
+	// 系统代理 / TUN 的目标停了就自动关闭代理，避免整机断网
+	go a.proxyWatchLoop(ctx)
 
 	// 会话代理不经内核进程，统计需自行定期推送给前端
 	go a.relayStatsLoop(ctx)
@@ -328,14 +342,19 @@ func (a *MyService) ServiceShutdown() error {
 		a.logError("保存配置失败", err)
 	}
 
-	a.log("正在停止所有进程...")
-	stopAllSessionRelays()
-	a.processManager.StopAll()
-
-	// 关闭系统代理
+	// 先关系统代理与 TUN 再停节点：反过来的话停节点期间网络是断的，
+	// 后台跟随检查也会把正常退出误报为目标失效
+	a.proxyWatch.clear()
 	if a.sysProxyManager != nil && a.sysProxyManager.IsEnabled() {
 		_ = a.sysProxyManager.DisableSystemProxy()
 	}
+	if a.tunManager != nil {
+		a.tunManager.Stop()
+	}
+
+	a.log("正在停止所有进程...")
+	stopAllSessionRelays()
+	a.processManager.StopAll()
 
 	// 停止所有订阅更新任务
 	if a.subscriptionManager != nil {
@@ -1067,10 +1086,9 @@ func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 	for i := range a.config.Rules {
 		if a.config.Rules[i].ID == id {
 			oldPort := a.config.Rules[i].LocalPort
+			// 运行中的节点改了连接参数就自动重启，否则进程还在用旧配置，改了等于没改
+			needRestart := a.config.Rules[i].Enabled && ruleConnChanged(&a.config.Rules[i], &updatedRule)
 			if updatedRule.LocalPort != oldPort {
-				if a.config.Rules[i].Enabled {
-					return fmt.Errorf("请先停止规则再修改本地端口")
-				}
 				if updatedRule.LocalPort <= 0 {
 					return fmt.Errorf("本地端口 %d 无效", updatedRule.LocalPort)
 				}
@@ -1090,6 +1108,9 @@ func (a *MyService) UpdateRule(id string, updatedRule models.ProxyRule) error {
 			}
 
 			a.log(fmt.Sprintf("更新规则: %s", a.config.Rules[i].Alias))
+			if needRestart {
+				return a.restartRuleLocked(&a.config.Rules[i], oldPort)
+			}
 			return nil
 		}
 	}
@@ -1133,6 +1154,9 @@ func (a *MyService) UpdateNodes(updatedRules []models.ProxyRule) (int, error) {
 // 并各保存一次配置。这里先并发把进程停掉（复用 StopNodes 的并发逻辑），
 // 再一次性从配置里摘除并只保存一次。
 func (a *MyService) DeleteNodes(ids []string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1223,6 +1247,9 @@ func (a *MyService) DeleteNodes(ids []string) error {
 }
 
 func (a *MyService) DeleteRule(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1589,6 +1616,9 @@ func stopConcurrency(n int) int {
 }
 
 func (a *MyService) StopNodes(ids []string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1722,6 +1752,9 @@ func (a *MyService) StartRule(id string) error {
 
 // StopRule 停止规则
 func (a *MyService) StopRule(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -2494,7 +2527,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 			}
 		}
 		// 链式代理成员顺序敏感，缺失任一成员都会改变链路语义，直接跳过
-		if missing || len(newChainNodes) < 2 {
+		if missing || len(newChainNodes) < 1 {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("链式代理 %s 的成员节点不完整，跳过导入", chain.Alias))
 			continue
 		}
@@ -3354,6 +3387,9 @@ func (a *MyService) GetSubscriptions() []models.Subscription {
 
 // DeleteSubscription 删除订阅
 func (a *MyService) DeleteSubscription(subID string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -3797,6 +3833,9 @@ func (a *MyService) UpdateGroup(groupID, name, description string) error {
 // DeleteGroup 删除分组（级联）：停止并删除分组内所有节点，再删除分组本身。
 // 调用方（前端）应先向用户确认。
 func (a *MyService) DeleteGroup(groupID string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -3967,6 +4006,9 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 
 // StopAllRulesInGroup 停止分组中的所有节点（普通节点 + 故障转移 + 链式代理）
 func (a *MyService) StopAllRulesInGroup(groupID string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -4238,61 +4280,69 @@ func (a *MyService) ImportShareLinks(text, groupID, newGroupName string) (*model
 
 // ==================== 系统代理 API (Feature 5) ====================
 
-// EnableSystemProxy 设置系统代理（支持普通节点、链式代理、故障转移）
+// EnableSystemProxy 设置系统代理（支持普通节点、链式代理、故障转移）。
+// 系统代理与 TUN 二选一，开启前先关闭 TUN。
 func (a *MyService) EnableSystemProxy(ruleID string) error {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
+	target, err := a.resolveProxyTargetLocked(ruleID)
+	a.mu.RUnlock()
+	if err != nil {
+		return err
+	}
 
-	// 先查找普通规则
+	// 切换期间摘除跟随目标，切换失败时不会被误报为代理意外退出
+	a.proxyWatch.clear()
+	if a.tunManager != nil && a.tunManager.IsRunning() {
+		a.tunManager.Stop()
+	}
+	if err := a.sysProxyManager.EnableSystemProxy(target.port); err != nil {
+		return fmt.Errorf("设置系统代理失败: %v", err)
+	}
+	a.proxyWatch.set(ruleID, target)
+	a.log(fmt.Sprintf("[系统代理] 已设置%s %s (端口:%d) 为系统代理", target.kind, target.alias, target.port))
+	return nil
+}
+
+// proxyTarget 系统代理 / TUN 的转发目标
+type proxyTarget struct {
+	port  int
+	alias string
+	kind  string // 类型描述，普通节点为空
+}
+
+// resolveProxyTargetLocked 查找可作为系统代理 / TUN 目标的项目（普通节点、链式代理、故障转移）。
+// 目标必须已启动。调用方需持有 a.mu。
+func (a *MyService) resolveProxyTargetLocked(ruleID string) (proxyTarget, error) {
 	for i := range a.config.Rules {
-		if a.config.Rules[i].ID == ruleID {
-			rule := &a.config.Rules[i]
+		if rule := &a.config.Rules[i]; rule.ID == ruleID {
 			if !rule.Enabled {
-				return fmt.Errorf("请先启动节点再设置为系统代理")
+				return proxyTarget{}, fmt.Errorf("请先启动节点")
 			}
-			if err := a.sysProxyManager.EnableSystemProxy(rule.LocalPort); err != nil {
-				return fmt.Errorf("设置系统代理失败: %v", err)
-			}
-			a.log(fmt.Sprintf("[系统代理] 已设置 %s (端口:%d) 为系统代理", rule.Alias, rule.LocalPort))
-			return nil
+			return proxyTarget{rule.LocalPort, rule.Alias, ""}, nil
 		}
 	}
-
-	// 查找链式代理
 	for i := range a.config.ChainProxies {
-		if a.config.ChainProxies[i].ID == ruleID {
-			chain := &a.config.ChainProxies[i]
+		if chain := &a.config.ChainProxies[i]; chain.ID == ruleID {
 			if !chain.Enabled {
-				return fmt.Errorf("请先启动链式代理再设置为系统代理")
+				return proxyTarget{}, fmt.Errorf("请先启动链式代理")
 			}
-			if err := a.sysProxyManager.EnableSystemProxy(chain.LocalPort); err != nil {
-				return fmt.Errorf("设置系统代理失败: %v", err)
-			}
-			a.log(fmt.Sprintf("[系统代理] 已设置链式代理 %s (端口:%d) 为系统代理", chain.Alias, chain.LocalPort))
-			return nil
+			return proxyTarget{chain.LocalPort, chain.Alias, "链式代理"}, nil
 		}
 	}
-
-	// 查找故障转移
 	for i := range a.config.LoadBalancers {
-		if a.config.LoadBalancers[i].ID == ruleID {
-			lb := &a.config.LoadBalancers[i]
+		if lb := &a.config.LoadBalancers[i]; lb.ID == ruleID {
 			if !lb.Enabled {
-				return fmt.Errorf("请先启动故障转移再设置为系统代理")
+				return proxyTarget{}, fmt.Errorf("请先启动故障转移")
 			}
-			if err := a.sysProxyManager.EnableSystemProxy(lb.LocalPort); err != nil {
-				return fmt.Errorf("设置系统代理失败: %v", err)
-			}
-			a.log(fmt.Sprintf("[系统代理] 已设置故障转移 %s (端口:%d) 为系统代理", lb.Alias, lb.LocalPort))
-			return nil
+			return proxyTarget{lb.LocalPort, lb.Alias, "故障转移"}, nil
 		}
 	}
-
-	return fmt.Errorf("节点 %s 不存在", ruleID)
+	return proxyTarget{}, fmt.Errorf("节点 %s 不存在", ruleID)
 }
 
 // DisableSystemProxy 取消系统代理
 func (a *MyService) DisableSystemProxy() error {
+	a.proxyWatch.clear()
 	if err := a.sysProxyManager.DisableSystemProxy(); err != nil {
 		return fmt.Errorf("取消系统代理失败: %v", err)
 	}
@@ -4499,6 +4549,9 @@ func (a *MyService) AddLoadBalancer(lb models.LoadBalanceNode) error {
 
 // DeleteLoadBalancer 删除故障转移节点
 func (a *MyService) DeleteLoadBalancer(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -4543,7 +4596,7 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 				a.releasePortReservationLocked(oldPort)
 			}
 
-			// 如果正在运行且端口或节点变了，需要先停止
+			// 正在运行则先停止，保存后按新配置自动重启
 			if wasEnabled {
 				_ = a.processManager.Stop(a.config.LoadBalancers[i].LocalPort)
 				lb.Enabled = false
@@ -4574,6 +4627,10 @@ func (a *MyService) UpdateLoadBalancer(lb models.LoadBalanceNode) error {
 			}
 
 			a.log(fmt.Sprintf("更新故障转移节点: %s", lb.Alias))
+			// 编辑前正在运行：按新配置自动重启，让修改立即生效
+			if wasEnabled {
+				return a.restartLoadBalancerLocked(&a.config.LoadBalancers[i])
+			}
 			return nil
 		}
 	}
@@ -4656,6 +4713,9 @@ func (a *MyService) StartLoadBalancer(id string) error {
 
 // StopLoadBalancer 停止故障转移节点
 func (a *MyService) StopLoadBalancer(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -4700,8 +4760,8 @@ func (a *MyService) AddChainProxy(chain models.ChainProxy) error {
 	chain.Enabled = false
 	chain.ProcessID = 0
 
-	if len(chain.ChainNodes) < 2 {
-		return fmt.Errorf("链式代理需要至少2个节点")
+	if len(chain.ChainNodes) < 1 {
+		return fmt.Errorf("链式代理需要至少1个节点")
 	}
 	if chain.LocalPort > 0 {
 		if err := a.claimPortLocked("chainProxy", chain.ID, chain.Alias, chain.LocalPort); err != nil {
@@ -4740,6 +4800,9 @@ func (a *MyService) AddChainProxy(chain models.ChainProxy) error {
 
 // DeleteChainProxy 删除链式代理
 func (a *MyService) DeleteChainProxy(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -4762,8 +4825,8 @@ func (a *MyService) DeleteChainProxy(id string) error {
 func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(chain.ChainNodes) < 2 {
-		return fmt.Errorf("链式代理需要至少2个节点")
+	if len(chain.ChainNodes) < 1 {
+		return fmt.Errorf("链式代理需要至少1个节点")
 	}
 
 	for i := range a.config.ChainProxies {
@@ -4784,7 +4847,7 @@ func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 				a.releasePortReservationLocked(oldPort)
 			}
 
-			// 如果正在运行，需要先停止
+			// 正在运行则先停止，保存后按新配置自动重启
 			if wasEnabled {
 				_ = a.processManager.Stop(a.config.ChainProxies[i].LocalPort)
 				chain.Enabled = false
@@ -4804,8 +4867,8 @@ func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 				}
 			}
 
-			if len(chain.ChainNodes) < 2 {
-				return fmt.Errorf("链式代理需要至少2个节点")
+			if len(chain.ChainNodes) < 1 {
+				return fmt.Errorf("链式代理需要至少1个节点")
 			}
 
 			a.config.ChainProxies[i] = chain
@@ -4815,6 +4878,10 @@ func (a *MyService) UpdateChainProxy(chain models.ChainProxy) error {
 			}
 
 			a.log(fmt.Sprintf("更新链式代理: %s", chain.Alias))
+			// 编辑前正在运行：按新配置自动重启，让修改立即生效
+			if wasEnabled {
+				return a.restartChainProxyLocked(&a.config.ChainProxies[i])
+			}
 			return nil
 		}
 	}
@@ -4898,6 +4965,9 @@ func (a *MyService) StartChainProxy(id string) error {
 
 // StopChainProxy 停止链式代理
 func (a *MyService) StopChainProxy(id string) error {
+	// 手动停止 / 删除了系统代理或 TUN 的目标时自动关闭代理
+	defer a.beginManualStop()()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

@@ -1089,7 +1089,7 @@ window.saveChain = async function() {
 
     if (!alias) { alert('请输入别名'); return; }
     if (!localPort || localPort < 1 || localPort > 65535) { alert('请输入有效端口'); return; }
-    if (chainSelectedNodeIDs.length < 2) { alert('链式代理至少需要2个节点'); return; }
+    if (chainSelectedNodeIDs.length < 1) { alert('链式代理至少需要1个节点'); return; }
 
     const groupId = document.getElementById('chainGroupId').value;
     const editId = document.getElementById('chainProxyDialog').dataset.editId;

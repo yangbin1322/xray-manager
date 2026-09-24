@@ -45,6 +45,7 @@ type Config struct {
 	Log          map[string]interface{}   `json:"log,omitempty"`
 	Inbounds     []map[string]interface{} `json:"inbounds"`
 	Outbounds    []map[string]interface{} `json:"outbounds"`
+	DNS          map[string]interface{}   `json:"dns,omitempty"`
 	Route        map[string]interface{}   `json:"route,omitempty"`
 	Experimental map[string]interface{}   `json:"experimental,omitempty"`
 }
@@ -366,9 +367,10 @@ func BuildConfig(rule *models.ProxyRule) (*Config, error) {
 // BuildChainConfig 构建链式代理配置
 // chainRules 按顺序排列：第一个是入口节点，最后一个是落地节点。
 // sing-box 通过 outbound 的 detour 字段实现链式转发。
+// 只有 1 个节点时没有 detour，等同普通代理。
 func BuildChainConfig(localPort int, chainRules []*models.ProxyRule) (*Config, error) {
-	if len(chainRules) < 2 {
-		return nil, fmt.Errorf("链式代理需要至少2个节点")
+	if len(chainRules) < 1 {
+		return nil, fmt.Errorf("链式代理需要至少1个节点（1个节点时等同普通代理）")
 	}
 
 	config := newBaseConfig(localPort)
