@@ -6001,8 +6001,10 @@ func (a *MyService) handleRealIP(localPort int, ip string) {
 // 停止该节点的进程、标记为未启用、记录失败原因，并通知前端刷新。
 // localPort 定位节点（可能是普通节点/故障转移/链式代理）。
 func (a *MyService) handleNodeFailed(localPort int, reason string) {
-	// 先停止进程（不持 a.mu，避免与 processManager 内部锁交叉）
-	_ = a.processManager.Stop(localPort)
+	// 先停止进程（不持 a.mu，避免与 processManager 内部锁交叉）。
+	// 用 StopFailedNode 而非 Stop：批量验证期间逐个重建分片会切断同片其他
+	// 节点的验证，连锁把好节点也判成不通
+	_ = a.processManager.StopFailedNode(localPort)
 
 	a.mu.Lock()
 	var alias string

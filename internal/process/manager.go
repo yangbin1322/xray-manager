@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"xray-manager/internal/assets"
@@ -50,6 +51,62 @@ type Manager struct {
 	// shards 非空时，普通节点由分片管理器承载（多节点共享进程）。
 	// 链式代理/故障转移有各自定制的配置，始终是独立进程。
 	shards *ShardManager
+
+	// verifyInFlight 进行中的连通性验证数（批量验证整批计为一个）。
+	// 验证期间停用不通的分片节点只从期望集合摘除、不立即重建分片，
+	// 由 pendingReconcile 记下，等验证全部结束后统一重建一次，见 StopFailedNode。
+	verifyInFlight   atomic.Int32
+	pendingReconcile atomic.Bool
+}
+
+// beginVerify 标记一次验证开始，返回的函数在验证结束时调用。
+// 最后一个验证结束时，若有被推迟的分片重建则在此执行。
+func (m *Manager) beginVerify() func() {
+	m.verifyInFlight.Add(1)
+	return func() {
+		if m.verifyInFlight.Add(-1) == 0 {
+			m.flushPendingReconcile()
+		}
+	}
+}
+
+// flushPendingReconcile 执行被推迟的分片重建（没有待办时什么也不做）。
+func (m *Manager) flushPendingReconcile() {
+	if !m.pendingReconcile.Swap(false) {
+		return
+	}
+	shards := m.Shards()
+	if shards == nil {
+		return
+	}
+	if _, err := shards.Reconcile(); err != nil {
+		m.log(fmt.Sprintf("[分片] 移除不通节点后重建失败: %v", err))
+	}
+}
+
+// StopFailedNode 停用验证不通的节点。
+//
+// 分片节点不能像手动停止那样立即重建分片：重建要重启进程，会切断同片其他
+// 节点正在进行的验证连接，让它们也被判为不通、再触发重建……批量启动一个
+// 含坏节点的订阅时会连锁把整片好节点全部停掉。因此验证期间只从期望集合摘除，
+// 等整批验证结束后统一重建一次。摘除后到重建前，该节点的入站仍在监听，
+// 但上层已将其标记为停用，不影响使用。
+func (m *Manager) StopFailedNode(localPort int) error {
+	shards := m.Shards()
+	if shards == nil || m.verifyInFlight.Load() == 0 {
+		return m.Stop(localPort)
+	}
+	nodeID, ok := shards.NodeIDAt(localPort)
+	if !ok {
+		return m.Stop(localPort)
+	}
+	shards.RemoveDesired(nodeID)
+	m.pendingReconcile.Store(true)
+	// 标记与验证结束可能交错：验证恰好在此之前全部结束时，没人会再来重建
+	if m.verifyInFlight.Load() == 0 {
+		m.flushPendingReconcile()
+	}
+	return nil
 }
 
 // EnableSharding 启用分片模式，普通节点将共享 sing-box 进程。
@@ -282,7 +339,11 @@ func (m *Manager) verifyStartedNodes(rules []*models.ProxyRule) {
 	}
 	m.notifyLoadRules()
 
+	// 整批计为一次验证：并发受限时批内会有空档，逐个计数可能中途归零，
+	// 提前触发被推迟的分片重建、切断还在排队的节点
+	done := m.beginVerify()
 	go func() {
+		defer done()
 		sem := make(chan struct{}, realIPConcurrency)
 		var wg sync.WaitGroup
 		for _, rule := range rules {
@@ -1017,6 +1078,7 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	// 用 defer 清除：这个函数有多个提前返回的分支，逐个清容易漏。
 	rule.Verifying = true
 	defer func() { rule.Verifying = false }()
+	defer m.beginVerify()()
 
 	// 等待入站真正开始监听。
 	//
@@ -1061,43 +1123,21 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 
 	var lastErr string
 	var fallbackIP string // 只探到 IPv6 时的兜底值，见循环内的说明
-	for attempt, service := range ipServices {
-		// 可用节点第一次就能成功；试满 realIPMaxAttempts 仍失败的基本是真不通，
-		// 继续把剩余服务试完只会拖慢整批
-		if attempt >= realIPMaxAttempts {
+
+	// 探测期间所在分片若被重启（其他节点启停、停用不通节点等），进行中的
+	// 连接会被切断，这时的失败不能算在节点头上——换新进程重新探测一轮。
+	gen := m.portGeneration(rule.LocalPort)
+	for round := 0; ; round++ {
+		lastErr = m.probeRealIPRound(rule, client, ipServices, &fallbackIP)
+		if lastErr == "" {
+			return // 已拿到 IPv4，或进程已停止
+		}
+		newGen := m.portGeneration(rule.LocalPort)
+		if newGen == gen || newGen == 0 || round >= maxShardRestartRetries || fallbackIP != "" {
 			break
 		}
-		// 再次检查进程是否还在运行
-		if !m.IsRunning(rule.LocalPort) {
-			m.log(fmt.Sprintf("[警告] %s 进程已停止，停止IP获取", rule.Alias))
-			m.notifyLoadRules()
-			return
-		}
-
-		// 单次尝试失败不记日志：批量启动上千节点时，每个坏节点都写几条
-		// 会瞬间刷出几千行、把日志面板和前端事件通道压满。
-		// 最终判定不通时会有一条汇总日志，足够定位问题。
-		realIP, err := probeExitIP(client, service)
-		if err != nil {
-			lastErr = err.Error()
-			continue
-		}
-		if realIP == "" {
-			lastErr = "响应中没有 IP"
-			continue
-		}
-		// 拿到 IPv6 时先记下、继续试下一个服务：多数双栈节点换个探测点
-		// 就能给出 IPv4，而绑定出口 IP、对端加白名单这类用途只认 IPv4。
-		// 全部试完仍只有 IPv6，说明这是纯 IPv6 出口，见循环之后的兜底。
-		if !isIPv4(realIP) {
-			if fallbackIP == "" {
-				fallbackIP = realIP
-			}
-			continue
-		}
-
-		m.acceptExitIP(rule, realIP, "")
-		return
+		gen = newGen
+		waitLocalPortReady(rule.LocalPort, 2*time.Second)
 	}
 
 	// 只探到 IPv6：接受它而不是把节点判成不通——能用的节点不该因为
@@ -1129,6 +1169,63 @@ func (m *Manager) getRealIP(rule *models.ProxyRule) {
 	} else {
 		m.notifyLoadRules()
 	}
+}
+
+// maxShardRestartRetries 探测期间分片被重启时最多重新探测的轮数。
+const maxShardRestartRetries = 2
+
+// portGeneration 端口所在分片进程的启动代次，非分片节点返回 0。
+func (m *Manager) portGeneration(localPort int) uint64 {
+	if shards := m.Shards(); shards != nil {
+		return shards.PortGeneration(localPort)
+	}
+	return 0
+}
+
+// probeRealIPRound 依次尝试 IP 查询服务，拿到 IPv4 即接受并返回空字符串；
+// 进程已停止时同样返回空字符串（无需再判定）；全部失败时返回最后的错误。
+// 只拿到 IPv6 时记入 fallbackIP 并返回非空错误，交给调用方兜底。
+func (m *Manager) probeRealIPRound(rule *models.ProxyRule, client *http.Client, ipServices []string, fallbackIP *string) string {
+	lastErr := "无法获取真实IP"
+	for attempt, service := range ipServices {
+		// 可用节点第一次就能成功；试满 realIPMaxAttempts 仍失败的基本是真不通，
+		// 继续把剩余服务试完只会拖慢整批
+		if attempt >= realIPMaxAttempts {
+			break
+		}
+		// 再次检查进程是否还在运行
+		if !m.IsRunning(rule.LocalPort) {
+			m.log(fmt.Sprintf("[警告] %s 进程已停止，停止IP获取", rule.Alias))
+			m.notifyLoadRules()
+			return ""
+		}
+
+		// 单次尝试失败不记日志：批量启动上千节点时，每个坏节点都写几条
+		// 会瞬间刷出几千行、把日志面板和前端事件通道压满。
+		// 最终判定不通时会有一条汇总日志，足够定位问题。
+		realIP, err := probeExitIP(client, service)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		if realIP == "" {
+			lastErr = "响应中没有 IP"
+			continue
+		}
+		// 拿到 IPv6 时先记下、继续试下一个服务：多数双栈节点换个探测点
+		// 就能给出 IPv4，而绑定出口 IP、对端加白名单这类用途只认 IPv4。
+		// 全部试完仍只有 IPv6，说明这是纯 IPv6 出口，见循环之后的兜底。
+		if !isIPv4(realIP) {
+			if *fallbackIP == "" {
+				*fallbackIP = realIP
+			}
+			continue
+		}
+
+		m.acceptExitIP(rule, realIP, "")
+		return ""
+	}
+	return lastErr
 }
 
 // simplifyProxyError 把冗长的网络错误简化为可读原因

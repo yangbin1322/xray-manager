@@ -38,6 +38,11 @@ type Shard struct {
 	configSeq  int
 	nodes      []*models.ProxyRule // 当前进程实际承载的节点（已剔除构建/绑定失败的）
 
+	// gen 该进程的启动代次，每次（重）启动分片都取新值。
+	// 验证节点时用它判断探测期间分片是否被重启过——重启会切断探测连接，
+	// 此时的失败不代表节点不通。
+	gen uint64
+
 	// stale 标记配置已作废（如前置代理变更），下次调谐必须重建，
 	// 即便节点集合本身没有变化。
 	stale bool
@@ -188,6 +193,7 @@ type ShardManager struct {
 	desired map[string]*models.ProxyRule
 
 	shards    map[string]*Shard
+	genSeq    uint64            // 分片启动代次计数，见 Shard.gen
 	nodeShard map[string]string // nodeID -> shardID
 	portNode  map[int]string    // 本地端口 -> nodeID，保留端口视角的查询
 
@@ -452,6 +458,8 @@ func (m *ShardManager) applyShardLocked(shardID string, nodes []*models.ProxyRul
 		return nil, rejected, err
 	}
 
+	m.genSeq++
+	shard.gen = m.genSeq
 	m.shards[shardID] = shard
 	if old != nil && old.configPath != "" && old.configPath != configPath {
 		_ = os.Remove(old.configPath)
@@ -675,4 +683,19 @@ func portDialable(port int) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// PortGeneration 返回承载该端口的分片进程的启动代次，端口不在分片内时返回 0。
+// 代次变化说明分片在两次查询之间被重启过。
+func (m *ShardManager) PortGeneration(localPort int) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nodeID, ok := m.portNode[localPort]
+	if !ok {
+		return 0
+	}
+	if shard := m.shards[m.nodeShard[nodeID]]; shard.Running() {
+		return shard.gen
+	}
+	return 0
 }
