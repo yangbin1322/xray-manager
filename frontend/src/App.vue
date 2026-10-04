@@ -6,6 +6,7 @@
       @showLBDialog="editingLB = null; showLBDialog = true"
       @showChainDialog="editingChain = null; showChainDialog = true"
       @showRelayDialog="editingRelay = null; showRelayDialog = true"
+      @showExitDialog="editingExit = null; showExitDialog = true"
     />
 
     <!-- 主内容区 -->
@@ -19,6 +20,7 @@
         @editLB="handleEditLB"
         @editChain="handleEditChain"
         @editRelay="handleEditRelay"
+        @editExit="handleEditExit"
       />
 
       <!-- 日志面板 -->
@@ -60,6 +62,13 @@
       :visible="showRelayDialog"
       :editingRelay="editingRelay"
       @close="showRelayDialog = false; editingRelay = null"
+    />
+
+    <!-- 出口端口对话框 -->
+    <ExitPortDialog
+      :visible="showExitDialog"
+      :editingExit="editingExit"
+      @close="showExitDialog = false; editingExit = null"
     />
 
     <!-- 批量编辑对话框 -->
@@ -105,6 +114,7 @@ import SubscriptionDialog from './components/SubscriptionDialog.vue'
 import LoadBalancerDialog from './components/LoadBalancerDialog.vue'
 import ChainProxyDialog from './components/ChainProxyDialog.vue'
 import SessionRelayDialog from './components/SessionRelayDialog.vue'
+import ExitPortDialog from './components/ExitPortDialog.vue'
 import BatchNodeEditor from './components/BatchNodeEditor.vue'
 import PortConflictDialog from './components/PortConflictDialog.vue'
 import * as api from './api.js'
@@ -123,6 +133,8 @@ const showRelayDialog = ref(false)
 const editingLB = ref(null)
 const editingChain = ref(null)
 const editingRelay = ref(null)
+const showExitDialog = ref(false)
+const editingExit = ref(null)
 const showBatchEditor = ref(false)
 const batchNodes = ref([])
 const batchSkipped = ref(0)
@@ -179,6 +191,11 @@ function handleEditChain(chain) {
 function handleEditRelay(relay) {
   editingRelay.value = relay
   showRelayDialog.value = true
+}
+
+function handleEditExit(exit) {
+  editingExit.value = exit
+  showExitDialog.value = true
 }
 
 // 监听后端事件
@@ -238,6 +255,11 @@ function listenToBackendEvents() {
   // 会话代理统计（连接数/会话数/速度）
   Events.On('relayStatsUpdate', (event) => {
     rulesStore.applyRelayStats(event.data)
+  })
+
+  // 出口端口统计（候选节点数/当前节点/连接数/速度）
+  Events.On('exitPortStatsUpdate', (event) => {
+    rulesStore.applyExitStats(event.data)
   })
 
   // 健康检查结果（单个节点，保留兼容）

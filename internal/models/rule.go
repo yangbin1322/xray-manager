@@ -384,6 +384,7 @@ type Config struct {
 	LoadBalancers  []LoadBalanceNode  `json:"loadBalancers"`  // 故障转移节点列表
 	ChainProxies   []ChainProxy       `json:"chainProxies"`   // 链式代理列表
 	SessionRelays  []SessionRelay     `json:"sessionRelays"`  // 动态会话代理列表
+	ExitPorts      []ExitPort         `json:"exitPorts"`      // 出口端口列表
 	HealthCheck    HealthCheckConfig  `json:"healthCheck"`    // 健康检查配置
 	SpeedTest      SpeedTestConfig    `json:"speedTest"`      // 测速配置
 	Subscription   SubscriptionConfig `json:"subscription"`   // 订阅拉取配置
@@ -496,6 +497,7 @@ type ExportData struct {
 	LoadBalancers []LoadBalanceNode `json:"loadBalancers"` // 故障转移节点列表
 	ChainProxies  []ChainProxy      `json:"chainProxies"`  // 链式代理列表
 	SessionRelays []SessionRelay    `json:"sessionRelays"` // 动态会话代理列表
+	ExitPorts     []ExitPort        `json:"exitPorts"`     // 出口端口列表
 }
 
 // ImportResult 导入结果
@@ -508,6 +510,7 @@ type ImportResult struct {
 	ChainImported  int      `json:"chainImported"`
 	LBImported     int      `json:"lbImported"`
 	RelayImported  int      `json:"relayImported"`
+	ExitImported   int      `json:"exitImported"`
 	Errors         []string `json:"errors"`   // 错误信息列表
 	Warnings       []string `json:"warnings"` // 警告信息列表
 }
@@ -704,6 +707,100 @@ func (s *SessionRelay) ResetRuntimeState() {
 	s.Traffic = TrafficStats{}
 	s.LastStartTime = ""
 	s.LastStopTime = ""
+}
+
+// ExitPort 出口端口：一个固定本地端口始终对应某个出口 IP，与具体节点解耦。
+//
+// 节点级的「绑定出口 IP」只能在 IP 变了时停掉节点，外部程序得自己换端口；
+// 而机场常有多个节点（不同线路/中转）落地同一个 IP。出口端口把这些节点
+// 自动归为候选：已启动且探测到的真实出口 IP 等于 ExitIP 的节点都会加入，
+// IP 变了自动退出。每条新连接优先走延迟最低的候选，挂了就换下一个；
+// 没有任何候选时拒绝连接，绝不让流量从别的 IP 出去。
+//
+// 运行在本进程内（透明 TCP 转发），不经内核进程。
+type ExitPort struct {
+	ID        string `json:"id"`        // 唯一标识
+	Alias     string `json:"alias"`     // 别名
+	ExitIP    string `json:"exitIp"`    // 对应的出口 IP（IPv4）
+	LocalPort int    `json:"localPort"` // 本地监听端口（混合端口，透传给成员节点）
+	Enabled   bool   `json:"enabled"`   // 启动状态
+	LastError string `json:"lastError"` // 最近一次启动失败原因（成功后清空）
+	GroupID   string `json:"groupId"`   // 所属分组ID
+	GroupName string `json:"groupName"` // 所属分组名称
+
+	// Remark 用户备注，用途说明之类（如「某平台白名单 IP」），只由用户填写
+	Remark string `json:"remark,omitempty"`
+
+	// 运行时回显，不落盘（导出时清零）
+	ActiveNodeID    string   `json:"activeNodeId,omitempty"`    // 当前优先使用的节点
+	ActiveNodeAlias string   `json:"activeNodeAlias,omitempty"` // 当前优先使用的节点别名
+	MemberCount     int      `json:"memberCount"`               // 当前候选节点数
+	MemberAliases   []string `json:"memberAliases,omitempty"`   // 前几个候选节点的别名（按优先级）
+	ActiveConns     int64    `json:"activeConns"`               // 当前活跃连接数
+	RejectedConns   int64    `json:"rejectedConns"`             // 因无可用节点而拒绝的连接数
+
+	Traffic       TrafficStats `json:"traffic"`
+	LastStartTime string       `json:"lastStartTime"`
+	LastStopTime  string       `json:"lastStopTime"`
+}
+
+// ExitPortStats 出口端口运行时统计快照（通过事件推送给前端，不持久化）。
+type ExitPortStats struct {
+	ExitPortID      string   `json:"exitPortId"`
+	ActiveNodeID    string   `json:"activeNodeId"`
+	ActiveNodeAlias string   `json:"activeNodeAlias"`
+	MemberCount     int      `json:"memberCount"`
+	MemberAliases   []string `json:"memberAliases"`
+	ActiveConns     int64    `json:"activeConns"`
+	TotalConns      int64    `json:"totalConns"`
+	RejectedConns   int64    `json:"rejectedConns"`
+	BytesUp         int64    `json:"bytesUp"`
+	BytesDown       int64    `json:"bytesDown"`
+	UpSpeed         float64  `json:"upSpeed"`   // 字节/秒
+	DownSpeed       float64  `json:"downSpeed"` // 字节/秒
+}
+
+// maxExitPortRemarkLen 出口端口备注的最大字符数
+const maxExitPortRemarkLen = 200
+
+// Validate 校验出口端口配置，并把出口 IP 规范化。
+func (e *ExitPort) Validate() error {
+	raw := strings.TrimSpace(e.ExitIP)
+	if raw == "" {
+		return fmt.Errorf("出口 IP 不能为空")
+	}
+	// 只认 IPv4：节点探测出口 IP 时优先取 IPv4，绑定 IPv6 永远匹配不到
+	ip := net.ParseIP(raw)
+	if ip == nil || ip.To4() == nil {
+		return fmt.Errorf("出口 IP「%s」不是合法的 IPv4 地址", e.ExitIP)
+	}
+	e.ExitIP = ip.To4().String()
+	e.Remark = strings.TrimSpace(e.Remark)
+	if n := len([]rune(e.Remark)); n > maxExitPortRemarkLen {
+		return fmt.Errorf("备注不能超过 %d 个字符（当前 %d 个）", maxExitPortRemarkLen, n)
+	}
+	if e.LocalPort < 0 || e.LocalPort > 65535 {
+		return fmt.Errorf("本地端口无效: %d", e.LocalPort)
+	}
+	if e.Alias == "" {
+		e.Alias = fmt.Sprintf("出口-%s", e.ExitIP)
+	}
+	return nil
+}
+
+// ResetRuntimeState 清除运行时状态，用于导出和导入。
+func (e *ExitPort) ResetRuntimeState() {
+	e.Enabled = false
+	e.LastError = ""
+	e.ActiveNodeID = ""
+	e.ActiveNodeAlias = ""
+	e.MemberCount = 0
+	e.MemberAliases = nil
+	e.ActiveConns = 0
+	e.RejectedConns = 0
+	e.Traffic = TrafficStats{}
+	e.LastStartTime = ""
+	e.LastStopTime = ""
 }
 
 // ChainProxy 链式代理配置

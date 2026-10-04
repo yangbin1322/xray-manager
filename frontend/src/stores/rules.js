@@ -39,6 +39,7 @@ export const useRulesStore = defineStore('rules', () => {
   const loadBalancers = ref([])
   const chainProxies = ref([])
   const sessionRelays = ref([])
+  const exitPorts = ref([])
   const selectedIds = ref(new Set())
   const lastSelectedId = ref(null) // Shift 范围选的锚点（上次点击的行）
   const statusFilter = ref('all') // all | running | stopped
@@ -51,7 +52,7 @@ export const useRulesStore = defineStore('rules', () => {
   const clipboard = ref([]) // 最近写入系统剪贴板的普通节点 ID
   const traffic = ref({}) // 实时流量快照 { ruleId: { upSpeed, downSpeed, todayUp, todayDown, totalUp, totalDown } }
 
-  // === 合并所有节点（规则 + 故障转移 + 链式代理 + 动态会话代理） ===
+  // === 合并所有节点（规则 + 故障转移 + 链式代理 + 动态会话代理 + 出口端口） ===
   const allNodes = computed(() => {
     const ruleNodes = rules.value.map(r => ({ ...r, _nodeType: 'rule' }))
     const lbNodes = loadBalancers.value.map(lb => ({ ...lb, _nodeType: 'lb', protocol: 'loadbalance' }))
@@ -60,7 +61,11 @@ export const useRulesStore = defineStore('rules', () => {
     const relayNodes = sessionRelays.value.map(r => ({
       ...r, _nodeType: 'relay', protocol: 'relay', serverAddr: r.upstreamAddr,
     }))
-    return [...ruleNodes, ...lbNodes, ...chainNodes, ...relayNodes]
+    // 出口端口把出口 IP 填入 serverAddr，便于按 IP 搜索
+    const exitNodes = exitPorts.value.map(e => ({
+      ...e, _nodeType: 'exit', protocol: 'exit', serverAddr: e.exitIp,
+    }))
+    return [...ruleNodes, ...lbNodes, ...chainNodes, ...relayNodes, ...exitNodes]
   })
 
   // === 计算属性 ===
@@ -164,6 +169,7 @@ export const useRulesStore = defineStore('rules', () => {
       try { loadBalancers.value = await api.getLoadBalancers() || [] } catch { loadBalancers.value = [] }
       try { chainProxies.value = await api.getChainProxies() || [] } catch { chainProxies.value = [] }
       try { sessionRelays.value = await api.getSessionRelays() || [] } catch { sessionRelays.value = [] }
+      try { exitPorts.value = await api.getExitPorts() || [] } catch { exitPorts.value = [] }
     } catch (e) {
       console.error('加载规则失败:', e)
     } finally {
@@ -293,6 +299,36 @@ export const useRulesStore = defineStore('rules', () => {
       ...traffic.value,
       [snap.relayId]: {
         ruleId: snap.relayId,
+        upSpeed: snap.upSpeed,
+        downSpeed: snap.downSpeed,
+        totalUp: snap.bytesUp,
+        totalDown: snap.bytesDown,
+        todayUp: snap.bytesUp,
+        todayDown: snap.bytesDown,
+      },
+    }
+  }
+
+  // 应用出口端口统计（exitPortStatsUpdate 事件）。
+  // 候选节点随成员出口 IP 实时变化，由后端定时推送。
+  function applyExitStats(snap) {
+    if (!snap || !snap.exitPortId) return
+    const idx = exitPorts.value.findIndex(e => e.id === snap.exitPortId)
+    if (idx >= 0) {
+      exitPorts.value[idx] = {
+        ...exitPorts.value[idx],
+        memberCount: snap.memberCount,
+        memberAliases: snap.memberAliases,
+        activeNodeId: snap.activeNodeId,
+        activeNodeAlias: snap.activeNodeAlias,
+        activeConns: snap.activeConns,
+        rejectedConns: snap.rejectedConns,
+      }
+    }
+    traffic.value = {
+      ...traffic.value,
+      [snap.exitPortId]: {
+        ruleId: snap.exitPortId,
         upSpeed: snap.upSpeed,
         downSpeed: snap.downSpeed,
         totalUp: snap.bytesUp,
@@ -573,7 +609,7 @@ export const useRulesStore = defineStore('rules', () => {
 
   return {
     // State
-    rules, loadBalancers, chainProxies, sessionRelays,
+    rules, loadBalancers, chainProxies, sessionRelays, exitPorts,
     selectedIds, statusFilter, healthFilter, searchKeyword,
     groupFilter, sortColumn, sortDirection, loading, clipboard, traffic,
     // Computed
@@ -585,7 +621,7 @@ export const useRulesStore = defineStore('rules', () => {
     startSelectedRules, stopSelectedRules, testSelectedSpeed,
     updateRuleInList, toggleSelect, selectAll, selectByHealth, selectDuplicateNodes, selectDuplicateExitIPs, deselect, handleRowSelect, setSort,
     copySelected, copyLocalProxies, pasteNodes,
-    applyTrafficUpdate, applyRelayStats, applyHealthCheckResult, applyHealthCheckResults,
+    applyTrafficUpdate, applyRelayStats, applyExitStats, applyHealthCheckResult, applyHealthCheckResults,
     checkSelectedHealth, checkAllHealth, resetTraffic,
   }
 })

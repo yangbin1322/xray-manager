@@ -4,6 +4,7 @@
 
 export {
     ChainProxy,
+    ExitPort,
     GRPCSettings,
     Group,
     H2Settings,

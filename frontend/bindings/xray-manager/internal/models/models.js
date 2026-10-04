@@ -210,6 +210,188 @@ export class ChainProxy {
 }
 
 /**
+ * ExitPort 出口端口：一个固定本地端口始终对应某个出口 IP，与具体节点解耦。
+ * 
+ * 节点级的「绑定出口 IP」只能在 IP 变了时停掉节点，外部程序得自己换端口；
+ * 而机场常有多个节点（不同线路/中转）落地同一个 IP。出口端口把这些节点
+ * 自动归为候选：已启动且探测到的真实出口 IP 等于 ExitIP 的节点都会加入，
+ * IP 变了自动退出。每条新连接优先走延迟最低的候选，挂了就换下一个；
+ * 没有任何候选时拒绝连接，绝不让流量从别的 IP 出去。
+ * 
+ * 运行在本进程内（透明 TCP 转发），不经内核进程。
+ */
+export class ExitPort {
+    /**
+     * Creates a new ExitPort instance.
+     * @param {Partial<ExitPort>} [$$source = {}] - The source object to create the ExitPort.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * 唯一标识
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("alias" in $$source)) {
+            /**
+             * 别名
+             * @member
+             * @type {string}
+             */
+            this["alias"] = "";
+        }
+        if (!("exitIp" in $$source)) {
+            /**
+             * 对应的出口 IP（IPv4）
+             * @member
+             * @type {string}
+             */
+            this["exitIp"] = "";
+        }
+        if (!("localPort" in $$source)) {
+            /**
+             * 本地监听端口（混合端口，透传给成员节点）
+             * @member
+             * @type {number}
+             */
+            this["localPort"] = 0;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * 启动状态
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("lastError" in $$source)) {
+            /**
+             * 最近一次启动失败原因（成功后清空）
+             * @member
+             * @type {string}
+             */
+            this["lastError"] = "";
+        }
+        if (!("groupId" in $$source)) {
+            /**
+             * 所属分组ID
+             * @member
+             * @type {string}
+             */
+            this["groupId"] = "";
+        }
+        if (!("groupName" in $$source)) {
+            /**
+             * 所属分组名称
+             * @member
+             * @type {string}
+             */
+            this["groupName"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Remark 用户备注，用途说明之类（如「某平台白名单 IP」），只由用户填写
+             * @member
+             * @type {string | undefined}
+             */
+            this["remark"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 运行时回显，不落盘（导出时清零）
+             * 当前优先使用的节点
+             * @member
+             * @type {string | undefined}
+             */
+            this["activeNodeId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 当前优先使用的节点别名
+             * @member
+             * @type {string | undefined}
+             */
+            this["activeNodeAlias"] = undefined;
+        }
+        if (!("memberCount" in $$source)) {
+            /**
+             * 当前候选节点数
+             * @member
+             * @type {number}
+             */
+            this["memberCount"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * 前几个候选节点的别名（按优先级）
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["memberAliases"] = undefined;
+        }
+        if (!("activeConns" in $$source)) {
+            /**
+             * 当前活跃连接数
+             * @member
+             * @type {number}
+             */
+            this["activeConns"] = 0;
+        }
+        if (!("rejectedConns" in $$source)) {
+            /**
+             * 因无可用节点而拒绝的连接数
+             * @member
+             * @type {number}
+             */
+            this["rejectedConns"] = 0;
+        }
+        if (!("traffic" in $$source)) {
+            /**
+             * @member
+             * @type {TrafficStats}
+             */
+            this["traffic"] = (new TrafficStats());
+        }
+        if (!("lastStartTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["lastStartTime"] = "";
+        }
+        if (!("lastStopTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["lastStopTime"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ExitPort instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ExitPort}
+     */
+    static createFrom($$source = {}) {
+        const $$createField12_0 = $$createType0;
+        const $$createField15_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("memberAliases" in $$parsedSource) {
+            $$parsedSource["memberAliases"] = $$createField12_0($$parsedSource["memberAliases"]);
+        }
+        if ("traffic" in $$parsedSource) {
+            $$parsedSource["traffic"] = $$createField15_0($$parsedSource["traffic"]);
+        }
+        return new ExitPort(/** @type {Partial<ExitPort>} */($$parsedSource));
+    }
+}
+
+/**
  * GRPCSettings gRPC配置
  */
 export class GRPCSettings {
@@ -541,6 +723,13 @@ export class ImportResult {
              */
             this["relayImported"] = 0;
         }
+        if (!("exitImported" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["exitImported"] = 0;
+        }
         if (!("errors" in $$source)) {
             /**
              * 错误信息列表
@@ -567,14 +756,14 @@ export class ImportResult {
      * @returns {ImportResult}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType0;
         const $$createField9_0 = $$createType0;
+        const $$createField10_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("errors" in $$parsedSource) {
-            $$parsedSource["errors"] = $$createField8_0($$parsedSource["errors"]);
+            $$parsedSource["errors"] = $$createField9_0($$parsedSource["errors"]);
         }
         if ("warnings" in $$parsedSource) {
-            $$parsedSource["warnings"] = $$createField9_0($$parsedSource["warnings"]);
+            $$parsedSource["warnings"] = $$createField10_0($$parsedSource["warnings"]);
         }
         return new ImportResult(/** @type {Partial<ImportResult>} */($$parsedSource));
     }

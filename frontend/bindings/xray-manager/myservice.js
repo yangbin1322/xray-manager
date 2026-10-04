@@ -32,6 +32,19 @@ export function AddChainProxy(chain) {
 }
 
 /**
+ * AddExitPort 添加出口端口并立即开始监听。
+ * 
+ * 用户只定义「出口 IP + 端口」，之后出口为该 IP 的节点启动后自动加入；
+ * 若还要再手动启动一次，没启动的出口端口不会接纳任何节点，用户会以为功能没生效。
+ * 启动失败（如端口被占）不算添加失败：配置已保存，原因记在 LastError，处理后可手动启动。
+ * @param {models$0.ExitPort} ep
+ * @returns {$CancellablePromise<void>}
+ */
+export function AddExitPort(ep) {
+    return $Call.ByID(861942681, ep);
+}
+
+/**
  * AddLoadBalancer 添加故障转移节点
  * @param {models$0.LoadBalanceNode} lb
  * @returns {$CancellablePromise<void>}
@@ -154,6 +167,15 @@ export function CreateGroup(name, description) {
  */
 export function DeleteChainProxy(id) {
     return $Call.ByID(1334481423, id);
+}
+
+/**
+ * DeleteExitPort 删除出口端口。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteExitPort(id) {
+    return $Call.ByID(1771505499, id);
 }
 
 /**
@@ -361,6 +383,16 @@ export function GetDefaultSubscriptionConfig() {
 }
 
 /**
+ * GetExitPorts 获取所有出口端口（附带实时统计与当前候选）。
+ * @returns {$CancellablePromise<models$0.ExitPort[]>}
+ */
+export function GetExitPorts() {
+    return $Call.ByID(2897006471).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
+}
+
+/**
  * GetGroups 返回所有分组。
  * 
  * 直接读 a.config.Groups 而不是 groupManager 的缓存：config 是唯一的真相来源，
@@ -369,7 +401,7 @@ export function GetDefaultSubscriptionConfig() {
  */
 export function GetGroups() {
     return $Call.ByID(3885822517).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType10($result);
     }));
 }
 
@@ -379,7 +411,7 @@ export function GetGroups() {
  */
 export function GetHTTPAPIConfig() {
     return $Call.ByID(3207998301).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType11($result);
     }));
 }
 
@@ -389,7 +421,7 @@ export function GetHTTPAPIConfig() {
  */
 export function GetHealthCheckConfig() {
     return $Call.ByID(1768486251).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType12($result);
     }));
 }
 
@@ -399,7 +431,7 @@ export function GetHealthCheckConfig() {
  */
 export function GetLoadBalancers() {
     return $Call.ByID(2240243908).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType14($result);
     }));
 }
 
@@ -419,7 +451,7 @@ export function GetLogs() {
  */
 export function GetPendingPortConflicts() {
     return $Call.ByID(3766029546).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType16($result);
     }));
 }
 
@@ -429,7 +461,7 @@ export function GetPendingPortConflicts() {
  */
 export function GetPreProxy() {
     return $Call.ByID(2036931690).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType17($result);
     }));
 }
 
@@ -439,7 +471,7 @@ export function GetPreProxy() {
  */
 export function GetProxyStatus() {
     return $Call.ByID(1852514117).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType18($result);
     }));
 }
 
@@ -449,7 +481,7 @@ export function GetProxyStatus() {
  */
 export function GetRules() {
     return $Call.ByID(4270822776).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType20($result);
     }));
 }
 
@@ -459,7 +491,7 @@ export function GetRules() {
  */
 export function GetSessionRelays() {
     return $Call.ByID(442224189).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType22($result);
     }));
 }
 
@@ -489,7 +521,7 @@ export function GetSubscriptionConfig() {
  */
 export function GetSubscriptions() {
     return $Call.ByID(3343587565).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType22($result);
+        return $$createType24($result);
     }));
 }
 
@@ -507,7 +539,7 @@ export function GetSystemProxyStatus() {
  */
 export function GetUpdateConfig() {
     return $Call.ByID(1766264858).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType25($result);
     }));
 }
 
@@ -517,7 +549,7 @@ export function GetUpdateConfig() {
  */
 export function ImportConfig() {
     return $Call.ByID(3036105508).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType27($result);
     }));
 }
 
@@ -532,7 +564,7 @@ export function ImportConfig() {
  */
 export function ImportShareLinks(text, groupID, newGroupName) {
     return $Call.ByID(4153373042, text, groupID, newGroupName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -555,7 +587,7 @@ export function ImportShareLinks(text, groupID, newGroupName) {
  */
 export function ImportSubscriptions(text, groupID, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyID) {
     return $Call.ByID(2279914564, text, groupID, newGroupName, autoUpdate, updateInterval, updateMode, updateProxyID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType29($result);
+        return $$createType31($result);
     }));
 }
 
@@ -569,7 +601,7 @@ export function ImportSubscriptions(text, groupID, newGroupName, autoUpdate, upd
  */
 export function InspectNodePort(id) {
     return $Call.ByID(2514630342, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType30($result);
+        return $$createType32($result);
     }));
 }
 
@@ -580,7 +612,7 @@ export function InspectNodePort(id) {
  */
 export function InspectPort(port) {
     return $Call.ByID(1062223054, port).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType30($result);
+        return $$createType32($result);
     }));
 }
 
@@ -630,7 +662,7 @@ export function ResetRuleTraffic(ruleID) {
  */
 export function ResolvePortConflicts(resourceIDs) {
     return $Call.ByID(27652581, resourceIDs).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType16($result);
     }));
 }
 
@@ -773,6 +805,15 @@ export function StartChainProxy(id) {
 }
 
 /**
+ * StartExitPort 启动出口端口。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartExitPort(id) {
+    return $Call.ByID(942725858, id);
+}
+
+/**
  * StartLoadBalancer 启动故障转移节点
  * @param {string} id
  * @returns {$CancellablePromise<void>}
@@ -825,6 +866,15 @@ export function StopAllRulesInGroup(groupID) {
  */
 export function StopChainProxy(id) {
     return $Call.ByID(3219092048, id);
+}
+
+/**
+ * StopExitPort 停止出口端口。
+ * @param {string} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopExitPort(id) {
+    return $Call.ByID(2428879220, id);
 }
 
 /**
@@ -933,6 +983,15 @@ export function UpdateChainProxy(chain) {
 }
 
 /**
+ * UpdateExitPort 更新出口端口。运行中的实例会按新配置自动重启。
+ * @param {models$0.ExitPort} ep
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateExitPort(ep) {
+    return $Call.ByID(2616785221, ep);
+}
+
+/**
  * UpdateGroup 更新分组名称和描述，并同步组内节点显示的分组名。
  * @param {string} groupID
  * @param {string} name
@@ -998,27 +1057,29 @@ const $$createType3 = models$0.ChainProxy.createFrom;
 const $$createType4 = $Create.Array($$createType3);
 const $$createType5 = models$0.SpeedTestConfig.createFrom;
 const $$createType6 = models$0.SubscriptionConfig.createFrom;
-const $$createType7 = models$0.Group.createFrom;
+const $$createType7 = models$0.ExitPort.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = models$0.HTTPAPIConfig.createFrom;
-const $$createType10 = models$0.HealthCheckConfig.createFrom;
-const $$createType11 = models$0.LoadBalanceNode.createFrom;
-const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = models$0.PortConflict.createFrom;
+const $$createType9 = models$0.Group.createFrom;
+const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = models$0.HTTPAPIConfig.createFrom;
+const $$createType12 = models$0.HealthCheckConfig.createFrom;
+const $$createType13 = models$0.LoadBalanceNode.createFrom;
 const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = models$0.PreProxyConfig.createFrom;
-const $$createType16 = $models.ProxyStatus.createFrom;
-const $$createType17 = models$0.ProxyRule.createFrom;
-const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = models$0.SessionRelay.createFrom;
+const $$createType15 = models$0.PortConflict.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = models$0.PreProxyConfig.createFrom;
+const $$createType18 = $models.ProxyStatus.createFrom;
+const $$createType19 = models$0.ProxyRule.createFrom;
 const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = models$0.Subscription.createFrom;
+const $$createType21 = models$0.SessionRelay.createFrom;
 const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = models$0.UpdateConfig.createFrom;
-const $$createType24 = models$0.ImportResult.createFrom;
-const $$createType25 = $Create.Nullable($$createType24);
-const $$createType26 = models$0.ImportShareResult.createFrom;
+const $$createType23 = models$0.Subscription.createFrom;
+const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = models$0.UpdateConfig.createFrom;
+const $$createType26 = models$0.ImportResult.createFrom;
 const $$createType27 = $Create.Nullable($$createType26);
-const $$createType28 = models$0.ImportSubscriptionsResult.createFrom;
+const $$createType28 = models$0.ImportShareResult.createFrom;
 const $$createType29 = $Create.Nullable($$createType28);
-const $$createType30 = $models.PortOccupantInfo.createFrom;
+const $$createType30 = models$0.ImportSubscriptionsResult.createFrom;
+const $$createType31 = $Create.Nullable($$createType30);
+const $$createType32 = $models.PortOccupantInfo.createFrom;

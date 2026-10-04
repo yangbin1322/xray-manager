@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -82,6 +83,12 @@ type httpAPIService interface {
 	DeleteSessionRelay(string) error
 	StartSessionRelay(string) error
 	StopSessionRelay(string) error
+	GetExitPorts() []models.ExitPort
+	AddExitPort(models.ExitPort) error
+	UpdateExitPort(models.ExitPort) error
+	DeleteExitPort(string) error
+	StartExitPort(string) error
+	StopExitPort(string) error
 	GetPreProxy() models.PreProxyConfig
 	SetPreProxy(string) error
 	SetPreProxyConfig(models.PreProxyConfig) error
@@ -297,6 +304,14 @@ func newHTTPAPIHandler(service httpAPIService, token string) http.Handler {
 	apiMux.HandleFunc("DELETE /api/v1/session-relays/{id}", api.deleteSessionRelay)
 	apiMux.HandleFunc("POST /api/v1/session-relays/{id}/start", api.startSessionRelay)
 	apiMux.HandleFunc("POST /api/v1/session-relays/{id}/stop", api.stopSessionRelay)
+	apiMux.HandleFunc("GET /api/v1/exit-ports", api.listExitPorts)
+	apiMux.HandleFunc("GET /api/v1/exit-ports/local-proxy", api.getExitPortLocalProxy)
+	apiMux.HandleFunc("POST /api/v1/exit-ports", api.createExitPort)
+	apiMux.HandleFunc("GET /api/v1/exit-ports/{id}", api.getExitPort)
+	apiMux.HandleFunc("PUT /api/v1/exit-ports/{id}", api.updateExitPort)
+	apiMux.HandleFunc("DELETE /api/v1/exit-ports/{id}", api.deleteExitPort)
+	apiMux.HandleFunc("POST /api/v1/exit-ports/{id}/start", api.startExitPort)
+	apiMux.HandleFunc("POST /api/v1/exit-ports/{id}/stop", api.stopExitPort)
 	apiMux.HandleFunc("GET /api/v1/groups", api.listGroups)
 	apiMux.HandleFunc("POST /api/v1/groups", api.createGroup)
 	apiMux.HandleFunc("GET /api/v1/groups/{id}", api.getGroup)
@@ -364,6 +379,10 @@ func (a *httpAPI) listChainProxies(w http.ResponseWriter, _ *http.Request) {
 }
 func (a *httpAPI) listSessionRelays(w http.ResponseWriter, _ *http.Request) {
 	writeAPI(w, http.StatusOK, a.service.GetSessionRelays(), "")
+}
+
+func (a *httpAPI) listExitPorts(w http.ResponseWriter, _ *http.Request) {
+	writeAPI(w, http.StatusOK, a.service.GetExitPorts(), "")
 }
 
 func (a *httpAPI) listLocalProxies(w http.ResponseWriter, _ *http.Request) {
@@ -538,6 +557,123 @@ func (a *httpAPI) getSessionRelay(w http.ResponseWriter, r *http.Request) {
 	writeAPI(w, http.StatusNotFound, nil, "动态会话代理不存在")
 }
 
+func (a *httpAPI) getExitPort(w http.ResponseWriter, r *http.Request) {
+	for _, item := range a.service.GetExitPorts() {
+		if item.ID == r.PathValue("id") {
+			writeAPI(w, http.StatusOK, item, "")
+			return
+		}
+	}
+	writeAPI(w, http.StatusNotFound, nil, "出口端口不存在")
+}
+
+// exitLocalProxy 出口端口的本地代理：在通用字段之外带上当前能否承载流量。
+type exitLocalProxy struct {
+	localProxy
+	ExitIP          string `json:"exitIp"`
+	Remark          string `json:"remark,omitempty"`
+	MemberCount     int    `json:"memberCount"`
+	ActiveNodeAlias string `json:"activeNodeAlias,omitempty"`
+	// Available 已启动且至少有一个节点承载该出口；为 false 时连接会被拒绝
+	Available bool `json:"available"`
+}
+
+// getExitPortLocalProxy 按出口 IP 查出口端口的本地代理（GET /exit-ports/local-proxy?ip=1.2.3.4）。
+//
+// 同一个 IP 建了多个出口端口时，优先返回可用的，其次已启动的，最后按列表顺序。
+//
+// format 决定返回格式：json（默认）返回完整信息；http / socks5 直接返回一行代理地址文本，
+// 方便脚本拿来就用。文本格式下出错也返回纯文本（不能让脚本把错误 JSON 当成代理地址），
+// 且出口端口不可用时返回 503——此时那个地址的连接会被拒绝，给出去只会让脚本白白失败。
+func (a *httpAPI) getExitPortLocalProxy(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	format := strings.ToLower(strings.TrimSpace(query.Get("format")))
+	switch format {
+	case "", "json":
+		format = "json"
+	case "http", "socks5":
+	default:
+		writeAPI(w, http.StatusBadRequest, nil, fmt.Sprintf("不支持的 format「%s」，可选 json / http / socks5", format))
+		return
+	}
+	fail := func(status int, message string) {
+		if format == "json" {
+			writeAPI(w, status, nil, message)
+			return
+		}
+		writeText(w, status, message)
+	}
+
+	ip := strings.TrimSpace(query.Get("ip"))
+	if ip == "" {
+		fail(http.StatusBadRequest, "缺少查询参数 ip")
+		return
+	}
+	if !isIPv4Addr(ip) {
+		fail(http.StatusBadRequest, fmt.Sprintf("出口 IP「%s」不是合法的 IPv4 地址", ip))
+		return
+	}
+
+	var best *models.ExitPort
+	score := func(ep *models.ExitPort) int {
+		switch {
+		case ep.Enabled && ep.MemberCount > 0:
+			return 2
+		case ep.Enabled:
+			return 1
+		default:
+			return 0
+		}
+	}
+	items := a.service.GetExitPorts()
+	for i := range items {
+		if !sameExitIP(items[i].ExitIP, ip) {
+			continue
+		}
+		if best == nil || score(&items[i]) > score(best) {
+			best = &items[i]
+		}
+	}
+	if best == nil {
+		fail(http.StatusNotFound, fmt.Sprintf("出口 %s 没有对应的出口端口", ip))
+		return
+	}
+
+	result := exitLocalProxy{
+		localProxy:      newLocalProxy(best.ID, "exitPort", best.Alias, best.LocalPort, best.Enabled, best.GroupID, best.GroupName, "manual"),
+		ExitIP:          best.ExitIP,
+		Remark:          best.Remark,
+		MemberCount:     best.MemberCount,
+		ActiveNodeAlias: best.ActiveNodeAlias,
+		Available:       best.Enabled && best.MemberCount > 0,
+	}
+	switch format {
+	case "json":
+		writeAPI(w, http.StatusOK, result, "")
+	default:
+		if !result.Available {
+			reason := "出口端口未启动"
+			if best.Enabled {
+				reason = "当前没有节点承载该出口"
+			}
+			fail(http.StatusServiceUnavailable, fmt.Sprintf("出口 %s 暂不可用：%s", ip, reason))
+			return
+		}
+		if format == "http" {
+			writeText(w, http.StatusOK, result.HTTPURL)
+		} else {
+			writeText(w, http.StatusOK, result.SOCKS5URL)
+		}
+	}
+}
+
+// writeText 返回一行纯文本（不带换行，脚本可直接当作值使用）。
+func writeText(w http.ResponseWriter, status int, text string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, text)
+}
+
 func (a *httpAPI) getLoadBalancerLocalProxy(w http.ResponseWriter, r *http.Request) {
 	for _, item := range buildLoadBalancerLocalProxies(a.service.GetLoadBalancers(), "", false) {
 		if item.ID == r.PathValue("id") {
@@ -675,6 +811,40 @@ func (a *httpAPI) updateSessionRelay(w http.ResponseWriter, r *http.Request) {
 	a.getSessionRelay(w, r)
 }
 
+func (a *httpAPI) createExitPort(w http.ResponseWriter, r *http.Request) {
+	before := exitPortIDs(a.service.GetExitPorts())
+	var item models.ExitPort
+	if !decodeAPI(w, r, &item) {
+		return
+	}
+	if err := item.Validate(); err != nil {
+		writeAPI(w, http.StatusBadRequest, nil, err.Error())
+		return
+	}
+	if err := a.service.AddExitPort(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeAPI(w, http.StatusCreated, findNewExitPort(a.service.GetExitPorts(), before), "")
+}
+
+func (a *httpAPI) updateExitPort(w http.ResponseWriter, r *http.Request) {
+	var item models.ExitPort
+	if !decodeAPI(w, r, &item) {
+		return
+	}
+	item.ID = r.PathValue("id")
+	if err := item.Validate(); err != nil {
+		writeAPI(w, http.StatusBadRequest, nil, err.Error())
+		return
+	}
+	if err := a.service.UpdateExitPort(item); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	a.getExitPort(w, r)
+}
+
 func (a *httpAPI) createGroup(w http.ResponseWriter, r *http.Request) {
 	before := groupIDs(a.service.GetGroups())
 	var request struct {
@@ -787,6 +957,16 @@ func (a *httpAPI) startSessionRelay(w http.ResponseWriter, r *http.Request) {
 }
 func (a *httpAPI) stopSessionRelay(w http.ResponseWriter, r *http.Request) {
 	a.run(w, func() error { return a.service.StopSessionRelay(r.PathValue("id")) })
+}
+
+func (a *httpAPI) deleteExitPort(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.DeleteExitPort(r.PathValue("id")) })
+}
+func (a *httpAPI) startExitPort(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StartExitPort(r.PathValue("id")) })
+}
+func (a *httpAPI) stopExitPort(w http.ResponseWriter, r *http.Request) {
+	a.run(w, func() error { return a.service.StopExitPort(r.PathValue("id")) })
 }
 
 func (a *httpAPI) startNodes(w http.ResponseWriter, r *http.Request) {
@@ -1006,6 +1186,21 @@ func findNewChainProxy(items []models.ChainProxy, before map[string]bool) any {
 	return map[string]string{"status": "created"}
 }
 func findNewSessionRelay(items []models.SessionRelay, before map[string]bool) any {
+	for _, item := range items {
+		if !before[item.ID] {
+			return item
+		}
+	}
+	return map[string]string{"status": "created"}
+}
+func exitPortIDs(items []models.ExitPort) map[string]bool {
+	result := make(map[string]bool, len(items))
+	for _, item := range items {
+		result[item.ID] = true
+	}
+	return result
+}
+func findNewExitPort(items []models.ExitPort, before map[string]bool) any {
 	for _, item := range items {
 		if !before[item.ID] {
 			return item

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -18,6 +19,7 @@ type fakeHTTPAPIService struct {
 	lbs            []models.LoadBalanceNode
 	chains         []models.ChainProxy
 	relays         []models.SessionRelay
+	exits          []models.ExitPort
 	startedID      string
 	preProxyID     string
 	deletedNodeIDs []string
@@ -110,6 +112,14 @@ func (f *fakeHTTPAPIService) UpdateSessionRelay(item models.SessionRelay) error 
 func (f *fakeHTTPAPIService) DeleteSessionRelay(string) error { return nil }
 func (f *fakeHTTPAPIService) StartSessionRelay(string) error  { return nil }
 func (f *fakeHTTPAPIService) StopSessionRelay(string) error   { return nil }
+func (f *fakeHTTPAPIService) GetExitPorts() []models.ExitPort { return f.exits }
+func (f *fakeHTTPAPIService) AddExitPort(models.ExitPort) error {
+	return nil
+}
+func (f *fakeHTTPAPIService) UpdateExitPort(models.ExitPort) error { return nil }
+func (f *fakeHTTPAPIService) DeleteExitPort(string) error          { return nil }
+func (f *fakeHTTPAPIService) StartExitPort(string) error           { return nil }
+func (f *fakeHTTPAPIService) StopExitPort(string) error            { return nil }
 func (f *fakeHTTPAPIService) GetPreProxy() models.PreProxyConfig {
 	cfg := models.PreProxyConfig{NodeID: f.preProxyID}
 	for _, r := range f.rules {
@@ -195,6 +205,8 @@ func TestOpenAPISpecDocumentsAllBusinessRoutes(t *testing.T) {
 		"/chain-proxies/local-proxies", "/chain-proxies/local-proxies/enabled",
 		"/session-relays", "/session-relays/{id}", "/session-relays/{id}/start",
 		"/session-relays/{id}/stop",
+		"/exit-ports", "/exit-ports/{id}", "/exit-ports/{id}/start", "/exit-ports/{id}/stop",
+		"/exit-ports/local-proxy",
 	}
 	for _, path := range wantPaths {
 		if _, exists := document.Paths[path]; !exists {
@@ -342,6 +354,94 @@ func TestHTTPAPILocalProxyFilters(t *testing.T) {
 			}
 			if test.wantText != "" && !bytes.Contains(response.Body.Bytes(), []byte(test.wantText)) {
 				t.Fatalf("response does not contain %q: %s", test.wantText, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHTTPAPIExitPortLocalProxyByIP(t *testing.T) {
+	service := &fakeHTTPAPIService{
+		exits: []models.ExitPort{
+			{ID: "exit_stopped", Alias: "停用", ExitIP: "1.2.3.4", LocalPort: 4001},
+			{ID: "exit_live", Alias: "在用", ExitIP: "1.2.3.4", LocalPort: 4002, Enabled: true, MemberCount: 2, ActiveNodeAlias: "香港 01", Remark: "白名单"},
+			{ID: "exit_idle", Alias: "无节点", ExitIP: "5.6.7.8", LocalPort: 4003, Enabled: true},
+		},
+	}
+	handler := newHTTPAPIHandler(service, "")
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantTexts  []string
+	}{
+		{"同 IP 多个时优先返回可用的", "ip=1.2.3.4", http.StatusOK, []string{`"id":"exit_live"`, `"httpUrl":"http://127.0.0.1:4002"`, `"socks5Url":"socks5://127.0.0.1:4002"`, `"type":"exitPort"`, `"available":true`, `"memberCount":2`, `"remark":"白名单"`}},
+		{"IPv4-mapped 写法也能匹配", "ip=::ffff:1.2.3.4", http.StatusOK, []string{`"id":"exit_live"`}},
+		{"已启动但无节点承载时标记不可用", "ip=5.6.7.8", http.StatusOK, []string{`"id":"exit_idle"`, `"available":false`}},
+		{"没有对应出口端口", "ip=9.9.9.9", http.StatusNotFound, nil},
+		{"缺少参数", "", http.StatusBadRequest, nil},
+		{"非法 IP", "ip=not-ip", http.StatusBadRequest, nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/exit-ports/local-proxy?"+test.query, nil))
+			if response.Code != test.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", test.wantStatus, response.Code, response.Body.String())
+			}
+			for _, text := range test.wantTexts {
+				if !bytes.Contains(response.Body.Bytes(), []byte(text)) {
+					t.Fatalf("response does not contain %s: %s", text, response.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestHTTPAPIExitPortLocalProxyTextFormat(t *testing.T) {
+	service := &fakeHTTPAPIService{
+		exits: []models.ExitPort{
+			{ID: "exit_live", ExitIP: "1.2.3.4", LocalPort: 20001, Enabled: true, MemberCount: 1},
+			{ID: "exit_idle", ExitIP: "5.6.7.8", LocalPort: 20002, Enabled: true},
+			{ID: "exit_off", ExitIP: "6.6.6.6", LocalPort: 20003, MemberCount: 1},
+		},
+	}
+	handler := newHTTPAPIHandler(service, "")
+
+	tests := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantBody   string // 文本格式要求完全相等；为空时只校验不是 JSON
+		wantJSON   bool
+	}{
+		{"http 文本", "ip=1.2.3.4&format=http", http.StatusOK, "http://127.0.0.1:20001", false},
+		{"socks5 文本", "ip=1.2.3.4&format=socks5", http.StatusOK, "socks5://127.0.0.1:20001", false},
+		{"大小写不敏感", "ip=1.2.3.4&format=HTTP", http.StatusOK, "http://127.0.0.1:20001", false},
+		{"无节点承载时文本返回 503", "ip=5.6.7.8&format=http", http.StatusServiceUnavailable, "", false},
+		{"未启动时文本返回 503", "ip=6.6.6.6&format=socks5", http.StatusServiceUnavailable, "", false},
+		{"文本格式下 404 也是纯文本", "ip=9.9.9.9&format=http", http.StatusNotFound, "", false},
+		{"文本格式下参数错误也是纯文本", "format=http", http.StatusBadRequest, "", false},
+		{"json 显式指定", "ip=1.2.3.4&format=json", http.StatusOK, "", true},
+		{"不可用时 json 仍返回 200", "ip=5.6.7.8", http.StatusOK, "", true},
+		{"未知 format", "ip=1.2.3.4&format=xml", http.StatusBadRequest, "", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/exit-ports/local-proxy?"+test.query, nil))
+			if response.Code != test.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", test.wantStatus, response.Code, response.Body.String())
+			}
+			contentType := response.Header().Get("Content-Type")
+			if test.wantJSON != strings.HasPrefix(contentType, "application/json") {
+				t.Fatalf("unexpected content type %q: %s", contentType, response.Body.String())
+			}
+			if !test.wantJSON && !strings.HasPrefix(contentType, "text/plain") {
+				t.Fatalf("text format should be text/plain, got %q", contentType)
+			}
+			if test.wantBody != "" && response.Body.String() != test.wantBody {
+				t.Fatalf("expected body %q, got %q", test.wantBody, response.Body.String())
 			}
 		})
 	}

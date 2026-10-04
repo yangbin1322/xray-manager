@@ -233,6 +233,32 @@ export async function stopSessionRelay(id) {
   return await MyService.StopSessionRelay(id)
 }
 
+// ==================== 出口端口 ====================
+
+export async function getExitPorts() {
+  return await MyService.GetExitPorts()
+}
+
+export async function addExitPort(ep) {
+  return await MyService.AddExitPort(ep)
+}
+
+export async function updateExitPort(ep) {
+  return await MyService.UpdateExitPort(ep)
+}
+
+export async function deleteExitPort(id) {
+  return await MyService.DeleteExitPort(id)
+}
+
+export async function startExitPort(id) {
+  return await MyService.StartExitPort(id)
+}
+
+export async function stopExitPort(id) {
+  return await MyService.StopExitPort(id)
+}
+
 // ==================== 测速 ====================
 
 export async function testRuleSpeed(ruleID) {

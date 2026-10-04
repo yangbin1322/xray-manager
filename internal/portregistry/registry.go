@@ -374,6 +374,10 @@ func typeLabel(resourceType string) string {
 		return "故障转移"
 	case "chainProxy":
 		return "链式代理"
+	case "sessionRelay":
+		return "动态会话代理"
+	case "exitPort":
+		return "出口端口"
 	default:
 		return "资源"
 	}

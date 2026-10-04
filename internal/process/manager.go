@@ -992,6 +992,54 @@ func (m *Manager) acceptExitIP(rule *models.ProxyRule, realIP, note string) {
 	}
 }
 
+// ProbeExitIP 经节点本地端口探测一次当前出口 IP，不改动任何节点状态。
+//
+// 与启动时的 getRealIP 不同：不标记「验证中」、失败也不停用节点。
+// 用于对运行中的节点做周期复查（出口端口依赖成员的出口 IP 始终准确），
+// 一次偶发的探测失败不该把正在承载流量的节点停掉。
+// 优先返回 IPv4；只探到 IPv6 时返回 IPv6；全部失败返回错误。
+func ProbeExitIP(localPort int) (string, error) {
+	proxyURL, err := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", localPort))
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{
+		Timeout: realIPProbeTimeout,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyURL(proxyURL),
+			DisableKeepAlives:   true,
+			DialContext:         (&net.Dialer{Timeout: realIPDialTimeout}).DialContext,
+			TLSHandshakeTimeout: realIPDialTimeout,
+		},
+	}
+
+	lastErr := errors.New("无法获取真实IP")
+	var fallback string
+	for attempt, service := range rotatedIPServices(localPort) {
+		if attempt >= realIPMaxAttempts {
+			break
+		}
+		ip, err := probeExitIP(client, service)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if ip == "" {
+			continue
+		}
+		if isIPv4(ip) {
+			return ip, nil
+		}
+		if fallback == "" {
+			fallback = ip
+		}
+	}
+	if fallback != "" {
+		return fallback, nil
+	}
+	return "", lastErr
+}
+
 // probeExitIP 经代理请求探测点，返回出口 IP。
 //
 // 支持两种响应形式：从响应头取（HEAD 请求即可，无需传输响应体），

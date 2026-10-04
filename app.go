@@ -203,6 +203,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 		if a.config.SessionRelays == nil {
 			a.config.SessionRelays = []models.SessionRelay{}
 		}
+		if a.config.ExitPorts == nil {
+			a.config.ExitPorts = []models.ExitPort{}
+		}
 		if !a.config.Update.Configured {
 			a.config.Update.Configured = true
 			a.config.Update.AutoCheck = true
@@ -298,6 +301,9 @@ func (a *MyService) ServiceStartup(ctx context.Context, options application.Serv
 	// 会话代理不经内核进程，统计需自行定期推送给前端
 	go a.relayStatsLoop(ctx)
 
+	// 出口端口：维护候选节点快照、推送统计、定期复查成员出口 IP
+	go a.exitPortLoop(ctx)
+
 	a.log("Xray 管理器已启动")
 
 	a.startHTTPAPI()
@@ -354,6 +360,7 @@ func (a *MyService) ServiceShutdown() error {
 
 	a.log("正在停止所有进程...")
 	stopAllSessionRelays()
+	stopAllExitPorts()
 	a.processManager.StopAll()
 
 	// 停止所有订阅更新任务
@@ -575,6 +582,11 @@ func (a *MyService) usedLocalPorts() map[int]bool {
 			used[p] = true
 		}
 	}
+	for i := range a.config.ExitPorts {
+		if p := a.config.ExitPorts[i].LocalPort; p > 0 {
+			used[p] = true
+		}
+	}
 	return used
 }
 
@@ -743,6 +755,26 @@ func (a *MyService) autoStartEnabledNodes() {
 		}
 	}
 
+	// 出口端口同样在本进程内运行、不计入 budget。放在节点之后启动：
+	// 成员节点此时多半还在验证中，暂无候选时连接会被拒绝，
+	// 等节点探测到出口 IP 后 exitPortLoop 会自动纳入。
+	for i := range a.config.ExitPorts {
+		ep := &a.config.ExitPorts[i]
+		if ep.Enabled && a.hasPortConflictLocked(ep.ID) {
+			a.log(fmt.Sprintf("[端口冲突] 出口端口 %s 暂不自动启动，等待用户处理", ep.Alias))
+			ep.Enabled = false
+			continue
+		}
+		if ep.Enabled {
+			a.log(fmt.Sprintf("自动启动出口端口: %s", ep.Alias))
+			ep.Enabled = false // startExitPortInternal 成功后置回 true
+			if err := a.startExitPortInternal(ep); err != nil {
+				a.logError(fmt.Sprintf("启动出口端口 %s 失败", ep.Alias), err)
+				ep.LastError = err.Error()
+			}
+		}
+	}
+
 	_ = a.saveConfig()
 	a.emitEvent("loadRules", nil)
 }
@@ -831,6 +863,11 @@ func (a *MyService) reserveStoppedPorts() {
 		}
 	}
 	for _, item := range a.config.SessionRelays {
+		if !item.Enabled {
+			record(item.LocalPort)
+		}
+	}
+	for _, item := range a.config.ExitPorts {
 		if !item.Enabled {
 			record(item.LocalPort)
 		}
@@ -1235,6 +1272,19 @@ func (a *MyService) DeleteNodes(ids []string) error {
 	}
 	a.config.SessionRelays = keptRelays
 
+	keptExits := a.config.ExitPorts[:0]
+	for i := range a.config.ExitPorts {
+		ep := &a.config.ExitPorts[i]
+		if !idSet[ep.ID] {
+			keptExits = append(keptExits, *ep)
+			continue
+		}
+		a.releasePortReservationLocked(ep.LocalPort)
+		a.releaseRegisteredPortLocked(ep.ID)
+		removed++
+	}
+	a.config.ExitPorts = keptExits
+
 	if removed == 0 {
 		return nil
 	}
@@ -1289,7 +1339,7 @@ func (a *MyService) DeleteRule(id string) error {
 // nodeRef 批量操作时对一个节点的引用（普通节点/故障转移/链式代理/动态会话代理）
 type nodeRef struct {
 	id        string
-	nodeType  string // rule / lb / chain / relay
+	nodeType  string // rule / lb / chain / relay / exit
 	localPort int
 	alias     string
 }
@@ -1320,6 +1370,12 @@ func (a *MyService) collectNodeRefs(ids []string) []nodeRef {
 	for i := range a.config.SessionRelays {
 		if idSet[a.config.SessionRelays[i].ID] {
 			refs = append(refs, nodeRef{a.config.SessionRelays[i].ID, "relay", a.config.SessionRelays[i].LocalPort, a.config.SessionRelays[i].Alias})
+		}
+	}
+	// 出口端口的成员是同批启动的普通节点，同样排在后面
+	for i := range a.config.ExitPorts {
+		if idSet[a.config.ExitPorts[i].ID] {
+			refs = append(refs, nodeRef{a.config.ExitPorts[i].ID, "exit", a.config.ExitPorts[i].LocalPort, a.config.ExitPorts[i].Alias})
 		}
 	}
 	return refs
@@ -1396,6 +1452,17 @@ func (a *MyService) StartNodes(ids []string) error {
 					if err := a.runWithReleasedPortLocked(sr.LocalPort, func() error { return a.startSessionRelayInternal(sr) }); err != nil {
 						a.logError(fmt.Sprintf("启动动态会话代理 %s 失败", sr.Alias), err)
 						sr.LastError = err.Error()
+					}
+					break
+				}
+			}
+		case "exit":
+			for i := range a.config.ExitPorts {
+				ep := &a.config.ExitPorts[i]
+				if ep.ID == ref.id && !ep.Enabled {
+					if err := a.runWithReleasedPortLocked(ep.LocalPort, func() error { return a.startExitPortInternal(ep) }); err != nil {
+						a.logError(fmt.Sprintf("启动出口端口 %s 失败", ep.Alias), err)
+						ep.LastError = err.Error()
 					}
 					break
 				}
@@ -1647,6 +1714,10 @@ func (a *MyService) StopNodes(ids []string) error {
 				stopRelayInstance(ref.id)
 				return
 			}
+			if ref.nodeType == "exit" {
+				stopExitInstance(ref.id)
+				return
+			}
 			// 进程管理器初始化失败时（如内核目录不可写）为 nil，
 			// 此时没有进程需要停，直接跳过而不是崩溃
 			if a.processManager != nil {
@@ -1693,6 +1764,13 @@ func (a *MyService) StopNodes(ids []string) error {
 			a.config.SessionRelays[i].Enabled = false
 			a.config.SessionRelays[i].LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 			a.reservePortLocked(a.config.SessionRelays[i].LocalPort)
+		}
+	}
+	for i := range a.config.ExitPorts {
+		if refSet[a.config.ExitPorts[i].ID] {
+			a.config.ExitPorts[i].Enabled = false
+			a.config.ExitPorts[i].LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(a.config.ExitPorts[i].LocalPort)
 		}
 	}
 	err := a.saveConfig()
@@ -1863,7 +1941,7 @@ func (a *MyService) portEntriesLocked() []portregistry.Entry {
 	if a.config == nil || a.portRegistry == nil {
 		return nil
 	}
-	entries := make([]portregistry.Entry, 0, len(a.config.Rules)+len(a.config.LoadBalancers)+len(a.config.ChainProxies)+len(a.config.SessionRelays))
+	entries := make([]portregistry.Entry, 0, len(a.config.Rules)+len(a.config.LoadBalancers)+len(a.config.ChainProxies)+len(a.config.SessionRelays)+len(a.config.ExitPorts))
 	for _, rule := range a.config.Rules {
 		entries = append(entries, a.portEntry("rule", rule.ID, rule.Alias, rule.LocalPort))
 	}
@@ -1875,6 +1953,9 @@ func (a *MyService) portEntriesLocked() []portregistry.Entry {
 	}
 	for _, sr := range a.config.SessionRelays {
 		entries = append(entries, a.portEntry("sessionRelay", sr.ID, sr.Alias, sr.LocalPort))
+	}
+	for _, ep := range a.config.ExitPorts {
+		entries = append(entries, a.portEntry("exitPort", ep.ID, ep.Alias, ep.LocalPort))
 	}
 	return entries
 }
@@ -2052,6 +2133,12 @@ func (a *MyService) setResourcePortLocked(resourceID string, port int) bool {
 			return true
 		}
 	}
+	for i := range a.config.ExitPorts {
+		if a.config.ExitPorts[i].ID == resourceID {
+			a.config.ExitPorts[i].LocalPort = port
+			return true
+		}
+	}
 	return false
 }
 
@@ -2168,6 +2255,14 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		exportRelays = append(exportRelays, sr)
 	}
 
+	// 出口端口不引用具体节点：全量导出，或被选中时导出
+	var exportExits []models.ExitPort
+	for _, ep := range a.config.ExitPorts {
+		if exportAll || selectedIDs[ep.ID] {
+			exportExits = append(exportExits, ep)
+		}
+	}
+
 	// 收集被引用的分组
 	referencedGroupIDs := make(map[string]bool)
 	for _, r := range exportRules {
@@ -2274,6 +2369,16 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		}
 	}
 
+	cleanExits := make([]models.ExitPort, len(exportExits))
+	copy(cleanExits, exportExits)
+	for i := range cleanExits {
+		cleanExits[i].ResetRuntimeState()
+		if !exportedGroupIDs[cleanExits[i].GroupID] {
+			cleanExits[i].GroupID = ""
+			cleanExits[i].GroupName = ""
+		}
+	}
+
 	exportData := models.ExportData{
 		Version:       "1.0",
 		ExportTime:    time.Now().Format("2006-01-02 15:04:05"),
@@ -2283,6 +2388,7 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		LoadBalancers: cleanLBs,
 		ChainProxies:  cleanChains,
 		SessionRelays: cleanRelays,
+		ExitPorts:     cleanExits,
 	}
 
 	data, err := json.MarshalIndent(exportData, "", "  ")
@@ -2294,8 +2400,8 @@ func (a *MyService) ExportConfig(ruleIds []string, includeSubscriptions bool) (s
 		return "", fmt.Errorf("写入导出文件失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个，订阅 %d 个）",
-		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(cleanRelays), len(exportSubs)))
+	a.log(fmt.Sprintf("配置已导出到: %s（规则 %d 条，分组 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个，出口端口 %d 个，订阅 %d 个）",
+		filePath, len(cleanRules), len(exportGroups), len(cleanLBs), len(cleanChains), len(cleanRelays), len(cleanExits), len(exportSubs)))
 	return filePath, nil
 }
 
@@ -2326,6 +2432,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 	var importedLBs []models.LoadBalanceNode
 	var importedChains []models.ChainProxy
 	var importedRelays []models.SessionRelay
+	var importedExits []models.ExitPort
 
 	if err := json.Unmarshal(data, &exportData); err == nil && exportData.Version != "" {
 		// 新版格式
@@ -2335,6 +2442,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		importedLBs = exportData.LoadBalancers
 		importedChains = exportData.ChainProxies
 		importedRelays = exportData.SessionRelays
+		importedExits = exportData.ExitPorts
 	} else {
 		// 尝试解析为旧版 Config 格式（向后兼容）
 		var oldConfig models.Config
@@ -2347,6 +2455,7 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		importedLBs = oldConfig.LoadBalancers
 		importedChains = oldConfig.ChainProxies
 		importedRelays = oldConfig.SessionRelays
+		importedExits = oldConfig.ExitPorts
 		result.Warnings = append(result.Warnings, "检测到旧版格式，已自动兼容")
 	}
 
@@ -2576,6 +2685,32 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		time.Sleep(time.Nanosecond)
 	}
 
+	// === 导入出口端口 ===
+	for _, ep := range importedExits {
+		if err := ep.Validate(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("出口端口校验失败 [%s]: %v", ep.Alias, err))
+			continue
+		}
+
+		ep.ID = fmt.Sprintf("exit_%d", time.Now().UnixNano())
+		ep.ResetRuntimeState()
+		if newGID, ok := groupIDMap[ep.GroupID]; ok {
+			ep.GroupID = newGID
+			ep.GroupName = a.groupNameLocked(newGID)
+		} else if ep.GroupID != "" {
+			ep.GroupID = ""
+			ep.GroupName = ""
+		}
+
+		if ep.LocalPort <= 0 || a.usedLocalPorts()[ep.LocalPort] || !utils.CheckPortAvailable(ep.LocalPort) {
+			ep.LocalPort = a.allocateLocalPort()
+		}
+
+		a.config.ExitPorts = append(a.config.ExitPorts, ep)
+		result.ExitImported++
+		time.Sleep(time.Nanosecond)
+	}
+
 	// 同步分组管理器缓存
 	a.groupManager.LoadGroups(a.config.Groups)
 
@@ -2591,8 +2726,8 @@ func (a *MyService) ImportConfig() (*models.ImportResult, error) {
 		return nil, fmt.Errorf("保存配置失败: %v", err)
 	}
 
-	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个",
-		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported, result.RelayImported))
+	a.log(fmt.Sprintf("导入完成: 规则 %d 条（跳过重复 %d），分组 %d 个，订阅 %d 个，故障转移 %d 个，链式代理 %d 个，会话代理 %d 个，出口端口 %d 个",
+		result.RulesImported, result.RulesSkipped, result.GroupsImported, result.SubsImported, result.LBImported, result.ChainImported, result.RelayImported, result.ExitImported))
 
 	return result, nil
 }
@@ -3898,6 +4033,23 @@ func (a *MyService) DeleteGroup(groupID string) error {
 	}
 	a.config.SessionRelays = remainingRelays
 
+	remainingExits := make([]models.ExitPort, 0, len(a.config.ExitPorts))
+	for i := range a.config.ExitPorts {
+		ep := &a.config.ExitPorts[i]
+		if ep.GroupID == groupID {
+			if ep.Enabled {
+				stopExitInstance(ep.ID)
+				stopped++
+			}
+			a.releasePortReservationLocked(ep.LocalPort)
+			a.releaseRegisteredPortLocked(ep.ID)
+			removed++
+			continue
+		}
+		remainingExits = append(remainingExits, *ep)
+	}
+	a.config.ExitPorts = remainingExits
+
 	// 再停止并删除该分组下的普通节点
 	remaining := make([]models.ProxyRule, 0, len(a.config.Rules))
 	for i := range a.config.Rules {
@@ -3995,6 +4147,18 @@ func (a *MyService) StartAllRulesInGroup(groupID string) error {
 			count++
 		}
 	}
+	// 出口端口
+	for i := range a.config.ExitPorts {
+		ep := &a.config.ExitPorts[i]
+		if ep.GroupID == groupID && !ep.Enabled {
+			if err := a.runWithReleasedPortLocked(ep.LocalPort, func() error { return a.startExitPortInternal(ep) }); err != nil {
+				a.logError(fmt.Sprintf("启动出口端口 %s 失败", ep.Alias), err)
+				ep.LastError = err.Error()
+				continue
+			}
+			count++
+		}
+	}
 
 	if err := a.saveConfig(); err != nil {
 		return err
@@ -4060,6 +4224,17 @@ func (a *MyService) StopAllRulesInGroup(groupID string) error {
 			sr.Enabled = false
 			sr.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
 			a.reservePortLocked(sr.LocalPort)
+			count++
+		}
+	}
+	// 出口端口
+	for i := range a.config.ExitPorts {
+		ep := &a.config.ExitPorts[i]
+		if ep.GroupID == groupID && ep.Enabled {
+			stopExitInstance(ep.ID)
+			ep.Enabled = false
+			ep.LastStopTime = time.Now().Format("2006-01-02 15:04:05")
+			a.reservePortLocked(ep.LocalPort)
 			count++
 		}
 	}
@@ -5931,6 +6106,9 @@ func sameExitIP(a, b string) bool {
 // handleRealIP 处理成功获取真实IP的回调：按 localPort 回填到对应节点
 // （普通节点/故障转移/链式代理），并清除失败原因。
 func (a *MyService) handleRealIP(localPort int, ip string) {
+	// 出口 IP 变化会改变出口端口的候选集合；放锁后由 exitPortLoop 重算
+	defer markExitPortsDirty()
+
 	a.mu.Lock()
 	for i := range a.config.Rules {
 		if a.config.Rules[i].LocalPort == localPort {
@@ -6001,6 +6179,8 @@ func (a *MyService) handleRealIP(localPort int, ip string) {
 // 停止该节点的进程、标记为未启用、记录失败原因，并通知前端刷新。
 // localPort 定位节点（可能是普通节点/故障转移/链式代理）。
 func (a *MyService) handleNodeFailed(localPort int, reason string) {
+	defer markExitPortsDirty()
+
 	// 先停止进程（不持 a.mu，避免与 processManager 内部锁交叉）。
 	// 用 StopFailedNode 而非 Stop：批量验证期间逐个重建分片会切断同片其他
 	// 节点的验证，连锁把好节点也判成不通

@@ -58,6 +58,8 @@
       <button class="btn-small btn-block" @click="$emit('showLBDialog')">添加故障转移</button>
       <button class="btn-small btn-block" @click="$emit('showChainDialog')">添加链式代理</button>
       <button class="btn-small btn-block" @click="$emit('showRelayDialog')">添加会话代理</button>
+      <button class="btn-small btn-block" @click="$emit('showExitDialog')"
+              title="固定端口对应固定出口 IP，背后由哪个节点承载自动选择">添加出口端口</button>
       <button class="btn-small btn-block" @click="$emit('showSubDialog')">订阅管理</button>
     </div>
 
@@ -94,7 +96,7 @@ import { useGroupsStore } from '../stores/groups.js'
 import { useAppStore } from '../stores/app.js'
 import * as api from '../api.js'
 
-defineEmits(['showLBDialog', 'showChainDialog', 'showRelayDialog', 'showSubDialog'])
+defineEmits(['showLBDialog', 'showChainDialog', 'showRelayDialog', 'showExitDialog', 'showSubDialog'])
 
 const rulesStore = useRulesStore()
 const groupsStore = useGroupsStore()

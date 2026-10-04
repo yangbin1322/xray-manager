@@ -15,6 +15,8 @@ tags:
   - name: Load Balancers
   - name: Chain Proxies
   - name: Session Relays
+  - name: Exit Ports
+    description: 出口端口：固定本地端口对应固定出口 IP，由出口一致的运行中节点自动承载
 paths:
   /health:
     get:
@@ -283,6 +285,68 @@ paths:
       summary: 停止动态会话代理
       parameters: [ { $ref: '#/components/parameters/ID' } ]
       responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /exit-ports:
+    get:
+      tags: [Exit Ports]
+      summary: 获取全部出口端口（含当前候选节点与实时统计）
+      responses:
+        '200': { description: 出口端口列表, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortListResponse' } } } }
+    post:
+      tags: [Exit Ports]
+      summary: 创建出口端口（创建后立即开始监听，出口为该 IP 的已启动节点自动加入）
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortInput' } } } }
+      responses:
+        '201': { description: 创建成功, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /exit-ports/local-proxy:
+    get:
+      tags: [Exit Ports]
+      summary: 按出口 IP 获取对应的本地代理
+      description: |
+        同一 IP 有多个出口端口时，优先返回可用的（已启动且有节点承载），其次已启动的。
+
+        format=json（默认）返回完整信息，available 为 false 时连接会被拒绝，仍返回 200。
+        format=http / socks5 直接返回一行代理地址文本（text/plain，无换行），如 `http://127.0.0.1:20001`；
+        此时出错也返回纯文本错误信息，出口端口不可用（未启动或无节点承载）返回 503。
+      parameters:
+        - { name: ip, in: query, required: true, schema: { type: string, example: '203.0.113.10' }, description: 出口 IP（IPv4） }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [json, http, socks5], default: json }, description: 返回格式，不区分大小写 }
+      responses:
+        '200':
+          description: 本地代理
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ExitLocalProxyResponse' } }
+            text/plain: { schema: { type: string, example: 'http://127.0.0.1:20001' } }
+        '400': { description: 缺少或非法的 ip / format（文本格式下为纯文本错误信息） }
+        '404': { description: 该出口 IP 没有对应的出口端口（文本格式下为纯文本错误信息） }
+        '503': { description: 仅文本格式：出口端口未启动或当前无节点承载, content: { text/plain: { schema: { type: string } } } }
+  /exit-ports/{id}:
+    parameters: [ { $ref: '#/components/parameters/ID' } ]
+    get:
+      tags: [Exit Ports]
+      summary: 获取出口端口
+      responses: { '200': { description: 出口端口, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortResponse' } } } }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      tags: [Exit Ports]
+      summary: 修改出口端口（运行中会按新配置自动重启）
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortInput' } } } }
+      responses: { '200': { description: 修改成功, content: { application/json: { schema: { $ref: '#/components/schemas/ExitPortResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      tags: [Exit Ports]
+      summary: 删除出口端口
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /exit-ports/{id}/start:
+    post:
+      tags: [Exit Ports]
+      summary: 启动出口端口
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /exit-ports/{id}/stop:
+    post:
+      tags: [Exit Ports]
+      summary: 停止出口端口
+      parameters: [ { $ref: '#/components/parameters/ID' } ]
+      responses: { '200': { $ref: '#/components/responses/Success' }, '404': { $ref: '#/components/responses/NotFound' } }
   /groups:
     get:
       tags: [Groups]
@@ -520,7 +584,7 @@ components:
       required: [id, type, alias, localPort, httpUrl, socks5Url, enabled, source]
       properties:
         id: { type: string }
-        type: { type: string, enum: [rule, loadBalancer, chainProxy] }
+        type: { type: string, enum: [rule, loadBalancer, chainProxy, exitPort] }
         alias: { type: string }
         localPort: { type: integer }
         httpUrl: { type: string, example: 'http://127.0.0.1:1080' }
@@ -698,6 +762,58 @@ components:
         - $ref: '#/components/schemas/Response'
         - type: object
           properties: { data: { type: array, items: { $ref: '#/components/schemas/SessionRelay' } } }
+    ExitPortInput:
+      type: object
+      additionalProperties: false
+      required: [exitIp]
+      properties:
+        alias: { type: string, description: 留空时按出口 IP 命名 }
+        exitIp: { type: string, example: '203.0.113.10', description: 出口 IP（仅 IPv4） }
+        remark: { type: string, maxLength: 200, description: 备注（可选，首尾空白会被去掉） }
+        localPort: { type: integer, minimum: 0, maximum: 65535, description: 混合端口，HTTP 与 SOCKS5 客户端均可接入；0 表示自动分配 }
+        groupId: { type: string }
+    ExitPort:
+      allOf:
+        - $ref: '#/components/schemas/ExitPortInput'
+        - type: object
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+            lastError: { type: string }
+            groupName: { type: string }
+            memberCount: { type: integer, description: 当前候选节点数（已启动且出口 IP 一致）；为 0 时连接会被拒绝 }
+            activeNodeId: { type: string, description: 当前优先使用的节点 }
+            activeNodeAlias: { type: string }
+            activeConns: { type: integer }
+            rejectedConns: { type: integer, description: 因无可用节点而拒绝的连接数 }
+            lastStartTime: { type: string }
+            lastStopTime: { type: string }
+    ExitLocalProxy:
+      allOf:
+        - $ref: '#/components/schemas/LocalProxy'
+        - type: object
+          required: [exitIp, memberCount, available]
+          properties:
+            exitIp: { type: string }
+            remark: { type: string }
+            memberCount: { type: integer, description: 当前承载该出口的节点数 }
+            activeNodeAlias: { type: string, description: 当前优先使用的节点 }
+            available: { type: boolean, description: 已启动且至少有一个节点承载该出口；false 时连接会被拒绝 }
+    ExitLocalProxyResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ExitLocalProxy' } }
+    ExitPortResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { $ref: '#/components/schemas/ExitPort' } }
+    ExitPortListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Response'
+        - type: object
+          properties: { data: { type: array, items: { $ref: '#/components/schemas/ExitPort' } } }
     ProxySettings:
       type: object
       additionalProperties: false
